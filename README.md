@@ -1,260 +1,578 @@
-# CRM Entity Resolution / Deduplication — Splink + DuckDB
+# System Dedupe with Splink
 
-Sistem pendeteksi dan penggabung duplikat record customer (Entity Resolution /
-Deduplication) berbasis probabilistic linkage. Dibangun dengan **Python +
-Splink + DuckDB**, antarmuka **Streamlit**.
+### Probabilistic Record Linkage menggunakan Splink, DuckDB, dan Streamlit
 
-Record A: `John Smith / john.smith@gmail.com / 08123456789`
-Record B: `Jhon Smith / john.smith@gmail.com / +628123456789`
+Sistem **CRM Entity Resolution & Deduplication** dirancang untuk mendeteksi, mengevaluasi, dan mengelola duplikasi data pelanggan menggunakan pendekatan *probabilistic record linkage*. Sistem menggabungkan standardisasi data, blocking, pemodelan probabilistik Splink, clustering, dan human review untuk mengidentifikasi record yang kemungkinan berasal dari pelanggan yang sama.
 
-Keduanya mungkin orang yang sama walau nilainya tidak identik. Sistem ini
-memutuskan secara probabilitas — bukan hanya kecocokan persis — lalu
-menggabungkannya menjadi satu `entity_id`.
+Dibangun menggunakan **Python, Splink, DuckDB, Pandas, dan Streamlit**, sistem ini menyediakan pipeline pemrosesan data serta antarmuka untuk mengelola hasil pencocokan, meninjau kandidat duplikat, mengevaluasi model, dan membentuk master record.
 
-> Dataset development: `crm_50000_customers_dirty_v3.csv` (Kaggle Customer 360).
-> 50k adalah dataset **development/evaluasi**, bukan klaim kapasitas produksi.
+**Dataset pengembangan:** `crm_50000_customers_dirty_v3.csv` dari Kaggle Customer 360. Dataset ini digunakan untuk pengembangan dan evaluasi awal, bukan sebagai bukti kapasitas produksi.
 
 ---
 
-## 1. Arsitektur Ringkas
+## 1. Latar Belakang
 
-```
-CSV masuk
-  → validasi skema (kolom wajib + kolom blocking)
-  → record_id generation (per batch, dari registry)
-  → standardisasi (kolom *_std; nilai asli TIDAK pernah ditimpa)
-  → blocking (12 aturan → pasangan kandidat; tanpa ini semua-pasangan = O(n²))
-  → Splink (Fellegi-Sunter, EM training → skor per pasangan)
-  → keputusan: MATCH / REVIEW / NON_MATCH
-  → clustering (union-find atas MATCH → entity_id)
-  → master record (satu baris per entity + lineage)
-  → evaluasi 4 lapis + feedback manusia (gold label)
-```
+Data pelanggan dari berbagai sumber sering kali memiliki informasi yang tidak konsisten. Satu pelanggan dapat tercatat lebih dari sekali akibat kesalahan penulisan nama, perbedaan format nomor telepon, alamat yang tidak seragam, atau informasi identitas yang tidak lengkap.
 
-Tiga konsep yang tidak boleh disamakan:
+Sebagai contoh:
 
-| Istilah | Arti |
-|---|---|
-| `record_id` | identifier satu baris fisik (dibuat sistem) |
-| `customer_id` | identifier dari source system (bukan kebenaran) |
-| `entity_id` | hasil resolusi — orang nyata di dunia |
+| Field         | Record A                                            | Record B                                            |
+| ------------- | --------------------------------------------------- | --------------------------------------------------- |
+| Nama          | John Smith                                          | Jhon Smith                                          |
+| Email         | [john.smith@gmail.com](mailto:john.smith@gmail.com) | [john.smith@gmail.com](mailto:john.smith@gmail.com) |
+| Nomor telepon | 08123456789                                         | +628123456789                                       |
+
+Kedua record tersebut memiliki perbedaan pada nama dan format nomor telepon, tetapi kemungkinan merujuk pada pelanggan yang sama.
+
+Pendekatan pencocokan persis (*exact matching*) tidak cukup untuk menangani kondisi tersebut. Oleh karena itu, sistem menggunakan pendekatan probabilistik untuk menilai tingkat kemiripan antardata, menentukan keputusan pencocokan, dan mengelompokkan record yang teridentifikasi sebagai entitas yang sama.
+
+### Tujuan sistem
+
+* Mengidentifikasi kandidat duplikat dari data pelanggan yang tidak konsisten.
+* Mengurangi jumlah perbandingan melalui blocking.
+* Menghasilkan skor probabilitas dan keputusan pencocokan.
+* Menyediakan mekanisme human review untuk memvalidasi hasil yang belum meyakinkan.
+* Membentuk entity dan master record dari hasil pencocokan.
+* Mengevaluasi kualitas model dan stabilitas hasil ketika data bertambah.
 
 ---
 
-## 2. Prasyarat
+## 2. Arsitektur Sistem
 
-- Python 3.10+ (dikembangkan di 3.14)
-- Windows / Linux / macOS (perintah contoh memakai PowerShell)
-- Tidak perlu Spark, tidak perlu server database — DuckDB berjalan di dalam proses
+Sistem menggunakan pipeline bertahap untuk mengubah data pelanggan mentah menjadi entitas yang telah diidentifikasi.
 
-Instalasi:
+```text
+                 DATA INPUT
+                     |
+                     v
+             Schema Validation
+                     |
+                     v
+              Record ID Generation
+                     |
+                     v
+              Data Standardization
+                     |
+                     v
+             Blocking / Candidate
+                 Generation
+                     |
+                     v
+             Splink Probabilistic
+                 Record Linkage
+                     |
+                     v
+             Decision Classification
+             /         |          \
+          MATCH      REVIEW     NON_MATCH
+             |         |             |
+             |    Human Review       |
+             |         |             |
+             +---------+-------------+
+                       |
+                       v
+                 Clustering
+                       |
+                       v
+                 Entity ID
+                       |
+                       v
+                 Master Record
+                       |
+                       v
+             Evaluation & Feedback
+```
+
+### Komponen utama
+
+| Komponen                    | Fungsi                                                                                                                 |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Data validation**         | Memeriksa kesesuaian skema dan kelengkapan kolom yang diperlukan.                                                      |
+| **Record ID generation**    | Menghasilkan identifier internal untuk setiap record dan menjaga keterlacakan lintas batch.                            |
+| **Standardization**         | Menormalisasi nilai tanpa menimpa data asli.                                                                           |
+| **Blocking**                | Menghasilkan pasangan kandidat menggunakan 12 aturan blocking untuk mengurangi ruang pencarian.                        |
+| **Splink**                  | Melakukan probabilistic record linkage menggunakan pendekatan Fellegi-Sunter dan parameter yang dipelajari melalui EM. |
+| **Decision classification** | Mengelompokkan pasangan menjadi MATCH, REVIEW, atau NON_MATCH berdasarkan kebijakan keputusan.                         |
+| **Human review**            | Memvalidasi kandidat yang memerlukan pemeriksaan manual dan menyimpan label hasil review.                              |
+| **Clustering**              | Mengelompokkan record yang dinyatakan cocok menjadi entity menggunakan union-find.                                     |
+| **Master record**           | Menghasilkan satu representasi utama untuk setiap entity beserta keterkaitan ke record sumber.                         |
+| **Evaluation & feedback**   | Mengukur kualitas proses dan memanfaatkan label manusia untuk evaluasi serta pengembangan model.                       |
+
+### Perbedaan identifier
+
+Sistem membedakan tiga jenis identifier yang memiliki fungsi berbeda.
+
+| Identifier    | Fungsi                                                                                                               |
+| ------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `record_id`   | Identitas internal untuk setiap baris data yang diproses oleh sistem.                                                |
+| `customer_id` | Identifier yang berasal dari sistem sumber. Nilainya tidak dianggap sebagai kebenaran identitas pelanggan.           |
+| `entity_id`   | Identifier hasil resolusi yang merepresentasikan kelompok record yang diperkirakan berasal dari pelanggan yang sama. |
+
+---
+
+## 3. Teknologi yang Digunakan
+
+| Teknologi        | Peran                                                                |
+| ---------------- | -------------------------------------------------------------------- |
+| Python           | Bahasa pemrograman utama dan orkestrasi pipeline.                    |
+| Splink 4.0.17    | Probabilistic record linkage dan pemodelan pencocokan.               |
+| DuckDB           | Mesin pemrosesan data lokal untuk mendukung proses record linkage.   |
+| Pandas           | Manipulasi, standardisasi, dan analisis data.                        |
+| PyArrow          | Penyimpanan dan pertukaran data dalam format Parquet.                |
+| Streamlit        | Antarmuka interaktif untuk demonstrasi dan pengelolaan hasil dedupe. |
+| Jupyter Notebook | Eksperimen, demonstrasi, dan profiling.                              |
+
+Sistem menggunakan DuckDB yang berjalan di dalam proses sehingga tidak memerlukan server database terpisah untuk menjalankan demonstrasi.
+
+---
+
+## 4. Persyaratan dan Instalasi
+
+### Persyaratan
+
+* Python 3.10 atau lebih baru.
+* Windows, Linux, atau macOS.
+* Git.
+* Dataset pengembangan dalam format CSV.
+* RAM dan kapasitas penyimpanan yang memadai sesuai ukuran data yang diproses.
+
+Pengembangan dilakukan menggunakan Python 3.14. Kompatibilitas dengan versi Python dan sistem operasi lain tetap perlu diverifikasi.
+
+### Instalasi
+
+Clone repository:
+
+```powershell
+git clone https://github.com/Boekanadip/dedupe-system-splink.git
+cd dedupe-system-splink
+```
+
+Buat virtual environment:
 
 ```powershell
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt
 ```
 
-Dependensi utama: `pandas`, `pyarrow`, `splink==4.0.17`, `streamlit`.
+Aktifkan environment:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Instal dependensi:
+
+```powershell
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Tempatkan dataset sesuai konfigurasi input pada project. Pastikan skema dataset memenuhi kolom yang diwajibkan oleh pipeline sebelum menjalankan proses.
 
 ---
 
-## 3. Quick Start
+## 5. Menjalankan Sistem
+
+### Quick Start
+
+Jalankan pipeline lengkap dengan pelatihan model baru:
 
 ```powershell
-# 1. Jalankan seluruh pipeline (train model baru + evaluasi), ±205 detik
 python -m src.run_all
+```
 
-# 2. Pakai model tersimpan (tanpa retrain), ±90 detik
+Gunakan model yang sudah tersimpan tanpa melakukan pelatihan ulang:
+
+```powershell
 python -m src.run_all --reuse-model latest
+```
 
-# 3. Cek invarian (20 pemeriksaan)
+Jalankan smoke test:
+
+```powershell
 python tests/test_smoke.py
-
-# 4. Buka aplikasi web
-.venv/Scripts/streamlit run app.py --server.address 0.0.0.0
 ```
 
-> Retrain tidak dijalankan otomatis hanya karena file baru masuk
-> (MASTER_CONTEXT §15). `--reuse-model latest` adalah jalur default untuk
-> data baru; retrain adalah aksi eksplisit di halaman Retrain.
-
----
-
-## 4. Struktur Direktori
-
-```
-src/                 modul pipeline (satu file satu tanggung jawab)
-  config.py          path, COLUMN_MAP, 12 blocking rules, threshold
-  standardize.py     normalisasi *_std, blocking key, deteksi urutan tanggal
-  splink_model.py    training Splink + scoring + keputusan 3 arah
-  clustering.py      union-find MATCH → entity_id
-  labels.py          silver label, antrean review, promote gold
-  apply_gold.py      terapkan label manusia ke keputusan (dengan guard)
-  close_gold_loop.py satu perintah: promote → feedback → apply → evaluate
-  entity_correction.py  split/merge entity manual + audit log
-  evaluate.py        evaluasi 4 lapis (blocking/linkage/decision/entity)
-  scenario_eval.py   skenario kasus nyata (typo, email sama, blocking miss)
-  incremental.py     hubungkan batch baru tanpa re-run penuh
-  run_all.py         orkestrasi seluruh langkah
-app.py               halaman upload Streamlit
-pages/               9 halaman Streamlit (review, master, dashboard, dst.)
-data/raw/            CSV mentah per batch (di-gitignore, tidak ikut push)
-data/processed/      hasil standardisasi parquet (di-gitignore)
-data/labels/         antrean review + gold label (di-gitignore)
-outputs/             prediksi, entity map, laporan evaluasi (di-gitignore)
-models/              versi model JSON (config/parameter saja — ikut push)
-tests/test_smoke.py  20 invariant check
-notebooks/           skrip demo & profiling
-docs/, *.md          PRD, DESIGN, AGENTS, MASTER_CONTEXT
-```
-
-Aturan data: **file `*.csv` / `*.parquet` tidak pernah ikut ke git**
-(diatur `.gitignore` termasuk jaring pengaman global). Yang di-push hanya kode,
-dokumentasi, dan parameter model.
-
----
-
-## 5. Perintah Lengkap
-
-Pipeline (urutan `run_all`):
-
-| Langkah | Perintah | Output |
-|---|---|---|
-| 1. Profiling | `python -m src.profiling` | `outputs/profiling_summary.json` |
-| 2. Standardisasi | `python -m src.standardize` | `data/processed/crm_standardized.parquet` |
-| 3. Silver label | `python -m src.labels --silver-only` | `data/labels/silver_pairs.csv` |
-| 4. Blocking benchmark | `python -m src.blocking_benchmark --full` | `outputs/blocking_benchmark.csv` |
-| 5. Splink model | `python -m src.splink_model --full` | `outputs/splink_predictions.parquet` |
-| 6. Antrean review | `python -m src.labels --full` | `data/labels/review_queue.csv` |
-| 7. Clustering | `python -m src.clustering --full` | `outputs/entity_map.parquet` |
-| 8. Master record | `python -m src.master_record` | `outputs/master_customers.parquet` |
-| 9. Evaluasi | `python -m src.evaluate` | `outputs/evaluation_report.json` |
-
-Perintah pendukung:
+Jalankan aplikasi Streamlit:
 
 ```powershell
-python -m src.threshold_eval --full        # precision/recall/F1 per threshold
-python -m src.scenario_eval                # skenario kasus nyata
-python -m src.labels --promote             # antrean review → gold (backup otomatis)
-python -m src.close_gold_loop --all        # promote + apply + evaluasi sekali jalan
-python -m src.apply_gold                   # terapkan gold ke keputusan (dry-run)
-python -m src.model_lifecycle              # daftar versi model
-python -m src.review_sample --band match   # sampel pasangan untuk review
-python -m src.stress_test --pairs 200      # pemulihan pada duplikat rusak (typo)
-python -m src.batch_eval                   # stabilitas entity antar batch
-python -m src.registry                     # daftar batch & kepemilikan record_id
-python -m src.validate_upload file.csv     # cek skema sebelum registrasi
-python -m src.incremental                  # link batch baru (tanpa re-run penuh)
-python -m src.entity_correction --history  # riwayat split/merge entity
+streamlit run app.py
 ```
+
+Secara default, sistem menggunakan model tersimpan ketika memproses data baru. Pelatihan ulang dilakukan secara eksplisit melalui proses retraining, bukan otomatis setiap kali ada data yang masuk.
+
+**Catatan:** waktu eksekusi yang tercantum dalam hasil eksperimen merupakan pengukuran pada lingkungan pengembangan dan dapat berbeda bergantung pada perangkat keras, ukuran data, serta konfigurasi yang digunakan.
 
 ---
 
-## 6. Demo Streamlit (9 halaman)
+## 6. Struktur Direktori
+
+Berikut gambaran struktur modul dan penyimpanan sistem.
+
+```text
+.
+├── app.py
+├── pages/
+│   ├── 1_review.py
+│   ├── 2_master.py
+│   ├── 3_dashboard.py
+│   ├── 4_retrain.py
+│   ├── 5_queue.py
+│   ├── 6_batch.py
+│   ├── 7_gaps.py
+│   ├── 8_explain.py
+│   └── 9_history.py
+│
+├── src/
+│   ├── config.py
+│   ├── standardize.py
+│   ├── splink_model.py
+│   ├── clustering.py
+│   ├── labels.py
+│   ├── apply_gold.py
+│   ├── close_gold_loop.py
+│   ├── entity_correction.py
+│   ├── evaluate.py
+│   ├── scenario_eval.py
+│   ├── incremental.py
+│   └── run_all.py
+│
+├── data/
+│   ├── raw/
+│   ├── processed/
+│   └── labels/
+│
+├── models/
+├── outputs/
+├── tests/
+│   └── test_smoke.py
+├── notebooks/
+├── docs/
+├── requirements.txt
+├── .gitignore
+├── PRD.md
+├── DESIGN.md
+├── MASTER_CONTEXT.md.txt
+└── README.md
+```
+
+### Modul utama
+
+| Modul                  | Tanggung jawab                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `config.py`            | Konfigurasi path, pemetaan kolom, aturan blocking, dan threshold.                       |
+| `standardize.py`       | Standardisasi data, pembuatan kolom standar, blocking key, dan deteksi format tanggal.  |
+| `splink_model.py`      | Pelatihan model Splink, pencocokan, scoring, dan klasifikasi keputusan.                 |
+| `clustering.py`        | Pengelompokan record MATCH menjadi entity menggunakan union-find.                       |
+| `labels.py`            | Pembuatan silver label, pengelolaan review queue, dan promosi label menjadi gold label. |
+| `apply_gold.py`        | Penerapan keputusan berdasarkan gold label dengan pemeriksaan aturan pengaman.          |
+| `close_gold_loop.py`   | Menggabungkan proses promosi label, feedback, penerapan keputusan, dan evaluasi.        |
+| `entity_correction.py` | Koreksi entity melalui operasi split dan merge beserta pencatatan riwayat.              |
+| `evaluate.py`          | Evaluasi pada tingkat blocking, linkage, decision, dan entity.                          |
+| `scenario_eval.py`     | Pengujian skenario pencocokan seperti typo, email sama, dan kegagalan blocking.         |
+| `incremental.py`       | Pemrosesan batch baru tanpa menjalankan ulang seluruh pipeline.                         |
+| `run_all.py`           | Orkestrasi tahapan pipeline secara berurutan.                                           |
+
+### Pengelolaan file
+
+Data mentah, hasil pemrosesan, label, dan output eksperimen disimpan secara lokal dan tidak disertakan dalam repository.
+
+* `data/raw/`: dataset mentah per batch.
+* `data/processed/`: data hasil standardisasi dalam format Parquet.
+* `data/labels/`: review queue dan gold label.
+* `outputs/`: hasil prediksi, entity map, dan laporan evaluasi.
+* `models/`: konfigurasi dan parameter model beserta metadata versi.
+
+File data berukuran besar dan data pelanggan tidak seharusnya diunggah ke repository tanpa pemeriksaan keamanan dan kebutuhan yang jelas.
+
+---
+
+## 7. Pipeline dan Perintah Pendukung
+
+Pipeline utama menjalankan tahapan berikut secara berurutan.
+
+| Tahap              | Perintah                                  | Output utama                              |
+| ------------------ | ----------------------------------------- | ----------------------------------------- |
+| Profiling          | `python -m src.profiling`                 | `outputs/profiling_summary.json`          |
+| Standardisasi      | `python -m src.standardize`               | `data/processed/crm_standardized.parquet` |
+| Silver labeling    | `python -m src.labels --silver-only`      | `data/labels/silver_pairs.csv`            |
+| Blocking benchmark | `python -m src.blocking_benchmark --full` | `outputs/blocking_benchmark.csv`          |
+| Splink model       | `python -m src.splink_model --full`       | `outputs/splink_predictions.parquet`      |
+| Review queue       | `python -m src.labels --full`             | `data/labels/review_queue.csv`            |
+| Clustering         | `python -m src.clustering --full`         | `outputs/entity_map.parquet`              |
+| Master record      | `python -m src.master_record`             | `outputs/master_customers.parquet`        |
+| Evaluasi           | `python -m src.evaluate`                  | `outputs/evaluation_report.json`          |
+
+### Perintah tambahan
 
 ```powershell
-.venv/Scripts/streamlit run app.py --server.address 0.0.0.0
+# Evaluasi threshold
+python -m src.threshold_eval --full
+
+# Evaluasi skenario
+python -m src.scenario_eval
+
+# Promosi label review menjadi gold label
+python -m src.labels --promote
+
+# Menjalankan feedback loop
+python -m src.close_gold_loop --all
+
+# Menerapkan gold label dalam mode dry-run
+python -m src.apply_gold
+
+# Melihat daftar versi model
+python -m src.model_lifecycle
+
+# Mengambil sampel pasangan untuk review
+python -m src.review_sample --band match
+
+# Menguji recovery terhadap duplikat sintetis
+python -m src.stress_test --pairs 200
+
+# Evaluasi stabilitas entity antarbatch
+python -m src.batch_eval
+
+# Melihat registry batch dan record ID
+python -m src.registry
+
+# Memvalidasi dataset sebelum registrasi
+python -m src.validate_upload file.csv
+
+# Memproses batch baru
+python -m src.incremental
+
+# Melihat riwayat koreksi entity
+python -m src.entity_correction --history
 ```
-
-| Halaman | Fungsi |
-|---|---|
-| `app.py` (Upload) | upload CSV → validasi → registrasi batch → pipeline |
-| `1_review` | antrean review: label `match` / `no_match` → promote gold |
-| `2_master` | telusuri master record, koreksi nilai, tandai salah gabung |
-| `3_dashboard` | metrik: auto-match/review rate, distribusi skor, batch per minggu |
-| `4_retrain` | status model, perbandingan A/B, rollback, threshold exploration |
-| `5_queue` | cakupan band REVIEW vs antrean yang sudah disampel |
-| `6_batch` | review proposal batch baru sebelum digabung (apply / reject) |
-| `7_gaps` | singleton entity & REVIEW yang belum masuk antrean |
-| `8_explain` | bukti field-level per pasangan (bobot m/u, gamma) |
-| `9_history` | riwayat keputusan per pasangan/record + audit koreksi entity |
-
-Alur upload: CSV divalidasi (kolom wajib + kolom blocking, delimiter/encoding
-dideteksi, format tanggal ditanya jika ambigu) → hanya disimpan saat tombol
-registrasi ditekan (sha256 menolak file ganda) → batch baru di-stage lalu
-diverifikasi manusia di halaman Batch review sebelum digabung.
 
 ---
 
-## 7. Hasil Terukur
+## 8. Antarmuka Streamlit
 
-Dari run terakhir (`51.555` baris = 9 batch, model `v20261001_141528`):
+Sistem menyediakan antarmuka Streamlit untuk menjalankan proses dedupe, meninjau hasil pencocokan, mengelola entity, dan memantau evaluasi.
 
-```
-pasangan kandidat (union 12 aturan blocking)   311.294
-keputusan   MATCH 3.401 | REVIEW 45.963 | NON_MATCH 261.930
-auto-match rate 1,09% | review rate 14,77% | non-match rate 84,14%
-entity hasil clustering                         48.380
-device-truth dalam satu entity        3.366 / 3.366 = 100%
-entity mencampur 2 device id                     0
-salah gabung lintas batch                         0
-entity_id lama berubah saat batch baru masuk      0
-recovery pada 200 duplikat ber-typo (sintetis)  200/200
-smoke test                                  20/20 PASS
+Jalankan aplikasi:
+
+```powershell
+streamlit run app.py
 ```
 
-Evaluasi dilaporkan dalam **4 lapis terpisah** (DESIGN §17) — tidak pernah
-dijadikan satu angka:
+### Fitur aplikasi
 
-| Lapis | Pertanyaan | Terukur |
-|---|---|---|
-| blocking | apakah pasangan benar sempat jadi kandidat? | 3.366/3.366 (ceiling 1.0) |
-| linkage | apakah model menilainya benar? | 3.366 di atas threshold · 0 false merge |
-| decision | apakah threshold menghasilkan split wajar? | 1,09% auto-match · 14,77% review |
-| entity | apakah record satu orang berakhir di satu entity? | 3.366 bersama · 0 terpecah |
+| Halaman                   | Fungsi                                                                                         |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| Upload (`app.py`)         | Mengunggah CSV, memvalidasi skema, mendaftarkan batch, dan memulai pemrosesan.                 |
+| Review (`1_review`)       | Meninjau pasangan kandidat dan memberikan label `match` atau `no_match`.                       |
+| Master (`2_master`)       | Menelusuri master record, memperbaiki nilai, dan menandai kesalahan penggabungan.              |
+| Dashboard (`3_dashboard`) | Menampilkan metrik seperti auto-match rate, review rate, distribusi skor, dan aktivitas batch. |
+| Retrain (`4_retrain`)     | Mengelola status model, membandingkan versi, melakukan rollback, dan mengeksplorasi threshold. |
+| Queue (`5_queue`)         | Memantau cakupan band REVIEW dan pasangan yang telah disampel.                                 |
+| Batch (`6_batch`)         | Meninjau proposal batch baru sebelum digabungkan atau ditolak.                                 |
+| Gaps (`7_gaps`)           | Menampilkan singleton entity dan pasangan REVIEW yang belum masuk antrean.                     |
+| Explain (`8_explain`)     | Menampilkan bukti pencocokan per field, termasuk bobot m/u dan gamma.                          |
+| History (`9_history`)     | Menelusuri riwayat keputusan pasangan, record, serta koreksi entity.                           |
+
+### Alur upload data
+
+1. Pengguna mengunggah file CSV.
+2. Sistem memvalidasi kolom wajib dan kolom yang diperlukan untuk blocking.
+3. Sistem mendeteksi delimiter dan encoding serta meminta konfirmasi format tanggal apabila ambigu.
+4. File baru disimpan setelah pengguna menekan tombol registrasi.
+5. Sistem menggunakan SHA-256 untuk menolak file yang identik dengan file yang sudah terdaftar.
+6. Batch baru diproses dalam tahap staging.
+7. Hasil batch ditinjau melalui halaman Batch sebelum digabungkan ke data yang telah dikelola sistem.
 
 ---
 
-## 8. Model Lifecycle
+## 9. Evaluasi dan Hasil Eksperimen
 
-```
-models/v20261001_141528/
-    model.json        parameter Splink terlatih (m/u per level)
-    metadata.json     data latih, seed, versi library, runtime
-    thresholds.json   policy keputusan yang dipakai menilainya
-    evaluation.json   jumlah/rate keputusan dari run itu
-models/latest.json    pointer versi aktif (dipakai rollback)
-```
+Evaluasi dilakukan untuk mengukur performa pencocokan dan konsistensi hasil pengelompokan, bukan hanya berdasarkan satu metrik keseluruhan.
 
-Threshold disimpan **bersama** model: skor yang direview di bawah threshold
-berbeda diam-diam mengubah arti MATCH. Rollback = ganti `latest.json`
-(halaman Retrain). Feedback manusia `feedback.csv` append-only, terkunci
-`(pair_id, model_version)` — bahan keputusan kapan retrain dibutuhkan.
+### Hasil run terakhir
 
----
+Berdasarkan run terakhir yang didokumentasikan, sistem memproses **51.555 baris dari 9 batch**, menggunakan model `v20261001_141528`.
 
-## 9. Batasan yang Diketahui (baca sebelum mempercayai angka)
+| Metrik                                           |                Hasil |
+| ------------------------------------------------ | -------------------: |
+| Total record                                     |               51.555 |
+| Jumlah batch                                     |                    9 |
+| Pasangan kandidat dari 12 aturan blocking        |              311.294 |
+| Keputusan MATCH                                  |                3.401 |
+| Keputusan REVIEW                                 |               45.963 |
+| Keputusan NON_MATCH                              |              261.930 |
+| Auto-match rate                                  |                1,09% |
+| Review rate                                      |               14,77% |
+| Non-match rate                                   |               84,14% |
+| Entity hasil clustering                          |               48.380 |
+| Device-truth yang berada dalam satu entity       | 3.366 / 3.366 (100%) |
+| Entity yang mencampur dua device ID              |                    0 |
+| Salah penggabungan lintas batch yang teramati    |                    0 |
+| Perubahan entity ID lama ketika batch baru masuk |                    0 |
+| Recovery pada 200 duplikat sintetis ber-typo     |            200 / 200 |
+| Smoke test                                       |         20 / 20 PASS |
 
-1. **`device_id` adalah kunci jawaban, bukan bukti independen.** Data 50k ini
-   degeneratif: 48.200 device id = 48.200 grup `customer_id`, tidak ada grup
-   membawa 2 device. Kesepakatan dengannya hanya membuktikan pipeline
-   mereproduksi pengelompokan sumber — bukan apa pun tentang fuzzy duplicate
-   atau dataset lain.
-2. **`MATCH_THRESHOLD = 0.9` / `REVIEW_THRESHOLD = 1e-10` belum divalidasi
-   gold set dua kelas.** Reukur ulang saat data/comparison/floor berubah.
-   Gold saat ini: 242 pasangan (14 match / 228 no_match) — precision terukur
-   1.0, recall 0,43; 8 pasangan positif sengaja **tidak** dipaksa merge karena
-   konflik device id (guard di `apply_gold.py`).
-3. **`F1 = 1.0` pada silver itu artefak**, bukan capaian — silver dibuat dari
-   heuristik yang sama dengan yang dievaluasi.
-4. **`M_ELSE_LEVEL_FLOOR = 0.05` dan `LAMBDA_RECALL_ASSUMPTION = 0.7` adalah
-   asumsi**, bukan hasil ukur di data kotor nyata.
-5. **Recovery typo 100% itu sintetis** (`stress_test` merusak record di memori)
-   — bukan klaim kemampuan typo pada data client.
-6. **Angka berubah saat retrain** — itu sebabnya upload memakai model terakhir
-   secara default; retrain aksi manual.
-7. **Skalabilitas**: blocking sudah dibenchmark (kandidat, coverage, runtime);
-   incremental terukur (±5 dtk per batch 100 baris vs ±90 dtk full run);
-   **belum** diuji di atas ~51,5 ribu baris.
+Angka di atas merupakan hasil dari eksperimen yang didokumentasikan dan tidak boleh langsung dianggap sebagai estimasi performa pada dataset pelanggan lain.
+
+### Evaluasi empat lapis
+
+| Lapisan      | Fokus evaluasi                                                           | Hasil yang dilaporkan                                                                                            |
+| ------------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| **Blocking** | Memeriksa apakah pasangan yang dianggap benar tersedia sebagai kandidat. | 3.366 / 3.366; coverage 100% pada pasangan referensi yang diuji.                                                 |
+| **Linkage**  | Mengukur keputusan model terhadap pasangan kandidat.                     | 3.366 pasangan di atas threshold dan 0 false merge pada evaluasi berbasis device-truth.                          |
+| **Decision** | Memantau distribusi keputusan berdasarkan threshold.                     | 1,09% auto-match dan 14,77% review.                                                                              |
+| **Entity**   | Memeriksa konsistensi hasil pengelompokan.                               | 3.366 pasangan referensi tergabung dan tidak ditemukan pasangan referensi yang terpecah dalam evaluasi tersebut. |
+
+Evaluasi tersebut memiliki cakupan dan keterbatasan yang berbeda. Hasil pada tingkat blocking tidak otomatis membuktikan kualitas model, sedangkan hasil clustering tidak dengan sendirinya membuktikan bahwa seluruh entity mewakili orang yang benar-benar sama.
 
 ---
 
-## 10. Referensi Dokumen Lain
+## 10. Model Lifecycle dan Feedback
 
-| Dokumen | Isi |
-|---|---|
-| `PRD.md` | requirement fungsional FR-01..FR-15, status PoC |
-| `DESIGN.md` | arsitektur berlapis, strategi backend, evaluasi 4 lapis |
-| `MASTER_CONTEXT.md.txt` | konsep identitas, siklus model, aturan scaling |
-| `AGENTS.md` | aturan kontribusi/kerja untuk AI agent & manusia |
-| `docs/AGENT_USAGE.md` | peta modul & disiplin scope |
+Sistem mendukung pengelolaan versi model untuk menjaga keterlacakan konfigurasi dan hasil evaluasi.
+
+Contoh struktur penyimpanan:
+
+```text
+models/
+├── v20261001_141528/
+│   ├── model.json
+│   ├── metadata.json
+│   ├── thresholds.json
+│   └── evaluation.json
+└── latest.json
+```
+
+| File              | Isi                                                                          |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `model.json`      | Parameter model Splink yang telah dilatih, termasuk parameter m/u per level. |
+| `metadata.json`   | Informasi data latih, seed, versi library, dan runtime.                      |
+| `thresholds.json` | Kebijakan threshold yang digunakan dalam evaluasi versi model.               |
+| `evaluation.json` | Ringkasan jumlah dan distribusi keputusan pada run terkait.                  |
+| `latest.json`     | Pointer ke versi model aktif.                                                |
+
+### Kebijakan model
+
+* Data baru secara default menggunakan model yang sudah tersedia.
+* Retraining dilakukan sebagai tindakan eksplisit.
+* Setiap versi model memiliki metadata dan hasil evaluasi.
+* Perubahan threshold perlu dievaluasi karena dapat mengubah distribusi keputusan.
+* Feedback manusia disimpan secara append-only dengan identifikasi pasangan dan versi model.
+* Model dapat dibandingkan dan dipulihkan ke versi sebelumnya melalui mekanisme lifecycle.
+
+Pemisahan antara model dan kebijakan keputusan diperlukan agar perubahan threshold tidak disalahartikan sebagai perubahan parameter hasil pelatihan.
+
+---
+
+## 11. Incremental Deduplication
+
+Sistem menyediakan mekanisme untuk menghubungkan batch baru dengan data yang telah diproses sebelumnya tanpa menjalankan ulang seluruh pipeline.
+
+Tujuannya adalah mengurangi pekerjaan berulang ketika jumlah data terus bertambah, sekaligus menjaga konsistensi entity yang sudah terbentuk.
+
+Hasil pengujian yang didokumentasikan:
+
+* Pemrosesan incremental sekitar 5 detik untuk batch berisi 100 baris.
+* Pemrosesan penuh sekitar 90 detik pada kondisi pengujian yang dilaporkan.
+* Tidak ditemukan perubahan entity ID lama ketika batch baru ditambahkan dalam eksperimen tersebut.
+
+Hasil ini merupakan pengukuran pada lingkungan dan skenario tertentu. Performa dapat berubah berdasarkan jumlah record, jumlah kandidat yang dihasilkan, aturan blocking, serta karakteristik data baru.
+
+---
+
+## 12. Batasan dan Interpretasi Hasil
+
+Hasil eksperimen harus dibaca bersama dengan keterbatasan dataset, label referensi, dan asumsi yang digunakan.
+
+### 12.1 Keterbatasan ground truth
+
+`device_id` digunakan sebagai referensi evaluasi, tetapi bukan bukti independen mengenai identitas pelanggan.
+
+Pada dataset yang digunakan, 48.200 device ID membentuk 48.200 grup `customer_id`, tanpa grup yang memiliki lebih dari satu device ID. Kondisi tersebut membatasi kemampuan dataset untuk menguji kasus duplikasi fuzzy yang lebih kompleks.
+
+Dengan demikian, kesesuaian terhadap device-truth menunjukkan konsistensi terhadap referensi yang tersedia, bukan jaminan bahwa model dapat mengidentifikasi seluruh duplikat pada data pelanggan nyata.
+
+### 12.2 Keterbatasan gold label
+
+Gold set yang tersedia berisi 242 pasangan:
+
+* 14 pasangan `match`.
+* 228 pasangan `no_match`.
+
+Precision yang terukur adalah 1,0, sedangkan recall adalah 0,43 pada evaluasi tersebut.
+
+Sebanyak 8 pasangan positif tidak dipaksa untuk digabungkan karena konflik device ID dan aturan pengaman pada `apply_gold.py`.
+
+Ukuran gold set yang terbatas, khususnya jumlah pasangan positif, membuat hasil evaluasi belum cukup untuk digeneralisasikan ke berbagai kondisi data.
+
+### 12.3 Silver label bukan ground truth independen
+
+Nilai F1 sebesar 1,0 pada evaluasi silver tidak dapat dianggap sebagai bukti bahwa model memiliki performa sempurna.
+
+Silver label dibuat menggunakan heuristik yang berkaitan dengan proses evaluasi. Oleh sebab itu, hasil tersebut berpotensi mencerminkan kesesuaian model terhadap aturan pembentukan label, bukan kemampuan generalisasi terhadap kebenaran identitas pelanggan.
+
+### 12.4 Asumsi dan parameter
+
+Beberapa parameter yang digunakan masih berupa asumsi:
+
+* `M_ELSE_LEVEL_FLOOR = 0.05`.
+* `LAMBDA_RECALL_ASSUMPTION = 0.7`.
+* `MATCH_THRESHOLD = 0.9`.
+* `REVIEW_THRESHOLD = 1e-10`.
+
+Threshold belum divalidasi menggunakan gold set dua kelas yang cukup representatif. Evaluasi ulang diperlukan ketika dataset, aturan comparison, atau kebijakan keputusan berubah.
+
+### 12.5 Pengujian typo bersifat sintetis
+
+Hasil recovery 200 dari 200 pasangan merupakan pengujian terhadap data sintetis yang dimodifikasi di dalam memori.
+
+Hasil tersebut berguna untuk menguji perilaku pipeline dalam skenario yang telah dirancang, tetapi bukan bukti tingkat keberhasilan pada data pelanggan nyata yang memiliki variasi kesalahan penulisan lebih beragam.
+
+### 12.6 Keterbatasan skalabilitas
+
+Sistem telah memiliki benchmark blocking dan pengujian incremental. Namun, pengujian yang didokumentasikan belum melampaui sekitar 51.500 baris.
+
+Kemampuan menangani jutaan record, performa pada distribusi data berbeda, serta kebutuhan infrastruktur untuk skala lebih besar masih perlu diuji secara terpisah.
+
+---
+
+## 13. Pengembangan Selanjutnya
+
+Beberapa area yang dapat dikembangkan untuk meningkatkan kemampuan sistem meliputi:
+
+* Memperluas gold set dengan pasangan positif dan negatif yang lebih beragam.
+* Menguji kualitas model pada dataset yang memiliki ground truth independen.
+* Mengevaluasi threshold berdasarkan trade-off precision, recall, dan kebutuhan review.
+* Menguji skenario konflik informasi, missing value, serta duplikasi lintas sumber.
+* Mengembangkan mekanisme koreksi entity dan validasi ulang hasil clustering.
+* Menguji stabilitas hasil incremental ketika volume dan variasi data meningkat.
+* Memperluas benchmark performa untuk mengukur kemampuan pemrosesan pada ukuran data yang lebih besar.
+
+Prioritas pengembangan perlu ditentukan berdasarkan hasil evaluasi dan karakteristik data yang akan ditangani.
+
+---
+
+## 14. Dokumentasi Tambahan
+
+Dokumen berikut memberikan penjelasan lebih rinci mengenai kebutuhan, arsitektur, dan pengelolaan project.
+
+| Dokumen                 | Keterangan                                                                                         |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
+| `PRD.md`                | Product Requirements Document yang berisi kebutuhan fungsional FR-01 sampai FR-15 dan cakupan PoC. |
+| `DESIGN.md`             | Rancangan arsitektur, strategi backend, dan pendekatan evaluasi empat lapis.                       |
+| `MASTER_CONTEXT.md.txt` | Konteks utama terkait konsep identitas, siklus model, dan strategi pengembangan.                   |
+| `AGENTS.md`             | Panduan kontribusi dan aturan kerja untuk AI agent maupun pengembang.                              |
+| `docs/AGENT_USAGE.md`   | Peta modul dan panduan penggunaan serta batasan scope.                                             |
+
+---
+
+## 15. Status Proyek
+
+**Status: Strong Prototype / Internal Demonstration Tool**
+
+Sistem telah memiliki pipeline record linkage, mekanisme review, pembentukan entity, master record, evaluasi, model versioning, dan pemrosesan incremental.
+
+Hasil eksperimen awal menunjukkan bahwa komponen-komponen tersebut dapat dijalankan secara terintegrasi pada dataset pengembangan yang digunakan.
+
+Namun, kualitas generalisasi model, keandalan pada data pelanggan yang lebih beragam, dan skalabilitas pada volume yang jauh lebih besar masih memerlukan validasi lebih lanjut.
+
+Sistem ini ditujukan untuk pengembangan, eksperimen, evaluasi, dan demonstrasi kemampuan deduplication. Hasilnya belum dapat dianggap sebagai jaminan kesiapan produksi atau akurasi pada seluruh jenis data pelanggan.
