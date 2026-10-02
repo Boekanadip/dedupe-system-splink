@@ -249,9 +249,6 @@ Berikut gambaran struktur modul dan penyimpanan sistem.
 ├── docs/
 ├── requirements.txt
 ├── .gitignore
-├── PRD.md
-├── DESIGN.md
-├── MASTER_CONTEXT.md.txt
 └── README.md
 ```
 
@@ -551,23 +548,10 @@ Prioritas pengembangan perlu ditentukan berdasarkan hasil evaluasi dan karakteri
 
 ---
 
-## 14. Dokumentasi Tambahan
 
-Dokumen berikut memberikan penjelasan lebih rinci mengenai kebutuhan, arsitektur, dan pengelolaan project.
+## 14. Status Proyek
 
-| Dokumen                 | Keterangan                                                                                         |
-| ----------------------- | -------------------------------------------------------------------------------------------------- |
-| `PRD.md`                | Product Requirements Document yang berisi kebutuhan fungsional FR-01 sampai FR-15 dan cakupan PoC. |
-| `DESIGN.md`             | Rancangan arsitektur, strategi backend, dan pendekatan evaluasi empat lapis.                       |
-| `MASTER_CONTEXT.md.txt` | Konteks utama terkait konsep identitas, siklus model, dan strategi pengembangan.                   |
-| `AGENTS.md`             | Panduan kontribusi dan aturan kerja untuk AI agent maupun pengembang.                              |
-| `docs/AGENT_USAGE.md`   | Peta modul dan panduan penggunaan serta batasan scope.                                             |
-
----
-
-## 15. Status Proyek
-
-**Status: Strong Prototype / Internal Demonstration Tool**
+**Status: Prototype Internal Demonstration Tool**
 
 Sistem telah memiliki pipeline record linkage, mekanisme review, pembentukan entity, master record, evaluasi, model versioning, dan pemrosesan incremental.
 
