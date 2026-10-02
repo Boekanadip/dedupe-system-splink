@@ -1,12 +1,9 @@
 [server]
+address = "0.0.0.0"
 # 100 MB per file. The Streamlit default is 200 MB, but this app holds the file
 # and its standardized copy in memory, so the request cap is lowered to what the
 # pipeline can actually carry.
 maxUploadSize = 100
-
-[server.address]
-# 0.0.0.0 so the page is reachable from another device on the LAN.
-address = "0.0.0.0"
 
 [browser]
 gatherUsageStats = false

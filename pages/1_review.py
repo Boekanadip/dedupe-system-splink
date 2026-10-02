@@ -41,6 +41,14 @@ pending = int((queue["review_status"] == "pending").sum())
 reviewed = int((queue["review_status"] != "pending").sum())
 st.caption(f"Total {len(queue):,} pasangan · {pending:,} menunggu · {reviewed:,} sudah direview")
 
+# Empty CSV cells read as NaN (float64); a column that is 100% empty stays
+# float64, which Streamlit's TextColumn refuses to edit (ColumnDataKind.FLOAT).
+# Convert BEFORE filtering: boolean indexing copies the frame, so a conversion
+# applied only to `queue` never reaches the filtered copy passed to the editor.
+editable = ["label", "reviewer", "reviewer_note"]
+for col in editable:
+    queue[col] = queue[col].where(queue[col].notna(), "").astype(str)
+
 # ---- filter
 st.subheader("Filter")
 f1, f2 = st.columns(2)
@@ -57,11 +65,7 @@ st.caption(f"Menampilkan {len(filtered):,} dari {len(queue):,}")
 
 # ---- tabel editable
 st.subheader("Antrian")
-editable = ["label", "reviewer", "reviewer_note"]
 disabled = [c for c in queue.columns if c not in editable]
-# Empty CSV cells read as NaN (float); the editor needs strings to edit them.
-for col in editable:
-    queue[col] = queue[col].where(queue[col].notna(), "").astype(str)
 edited = st.data_editor(
     filtered,
     disabled=disabled,
