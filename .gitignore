@@ -1,0 +1,36 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+.vscode/
+
+# safety net: data files never belong in git, wherever they land
+*.parquet
+*.csv
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/labels/.gitkeep
+!outputs/.gitkeep
+
+# raw and generated customer data
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/labels/*
+!data/labels/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# Model versions are small JSON (config, thresholds, counts) and are the artifact
+# a reviewer's label is attributed to (MASTER_CONTEXT section 16), so they stay
+# tracked. Record-level customer data never lives here — but if a model.json is
+# ever found to contain record ids, this is the line to uncomment:
+# models/*/model.json
+
+# local OpenCode state
+.opencode/MEMORY.md
+
+# secrets
+.env
+*.pem
