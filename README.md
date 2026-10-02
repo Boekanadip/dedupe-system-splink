@@ -246,7 +246,6 @@ Berikut gambaran struktur modul dan penyimpanan sistem.
 ├── tests/
 │   └── test_smoke.py
 ├── notebooks/
-├── docs/
 ├── requirements.txt
 ├── .gitignore
 └── README.md
