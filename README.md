@@ -43,8 +43,7 @@ Sistem menggunakan pipeline bertahap untuk mengubah data pelanggan mentah menjad
 
 ```text
                  DATA INPUT
-                     |
-                     v
+                     ⇓
              Schema Validation
                      |
                      v
