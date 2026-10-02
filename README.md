@@ -43,42 +43,34 @@ Sistem menggunakan pipeline bertahap untuk mengubah data pelanggan mentah menjad
 
 ```text
                  DATA INPUT
-                     ⇓
+                     ⇣
              Schema Validation
-                     |
-                     v
+                     ⇣
               Record ID Generation
-                     |
+                     ⇣
                      v
               Data Standardization
-                     |
-                     v
+                     ⇣
              Blocking / Candidate
                  Generation
-                     |
-                     v
+                     ⇣
              Splink Probabilistic
                  Record Linkage
-                     |
-                     v
+                     ⇣
              Decision Classification
-             /         |          \
+             ↙         |         ↘
           MATCH      REVIEW     NON_MATCH
-             |         |             |
+             |         ⇣             |
              |    Human Review       |
              |         |             |
              +---------+-------------+
-                       |
-                       v
+                       ⇣
                  Clustering
-                       |
-                       v
+                       ⇣
                  Entity ID
-                       |
-                       v
+                       ⇣
                  Master Record
-                       |
-                       v
+                       ⇣
              Evaluation & Feedback
 ```
 
