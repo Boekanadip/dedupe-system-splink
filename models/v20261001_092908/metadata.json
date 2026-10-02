@@ -1,0 +1,41 @@
+{
+  "version": "v20261001_092908",
+  "created_at": "2026-10-01T09:29:08",
+  "scope": "full",
+  "input_rows": 51200,
+  "pairs_scored": 306725,
+  "blocking_rules": [
+    "email_exact",
+    "phone_exact",
+    "name_exact",
+    "city_dob",
+    "dob_exact",
+    "address_city",
+    "phone_prefix",
+    "name_prefix",
+    "name_prefix_state",
+    "email_local_name",
+    "email_domain_name",
+    "city_state_dob_year"
+  ],
+  "lambda_recall_assumption": 0.7,
+  "m_else_level_floor": 0.05,
+  "random_seed": 42,
+  "splink_version": "4.0.17",
+  "runtime_seconds": 122.06,
+  "training_rules": [
+    "email_exact",
+    "phone_exact",
+    "name_exact",
+    "city_dob",
+    "dob_exact",
+    "address_city",
+    "phone_prefix",
+    "name_prefix",
+    "name_prefix_state",
+    "email_local_name",
+    "email_domain_name",
+    "city_state_dob_year"
+  ],
+  "trained": true
+}
