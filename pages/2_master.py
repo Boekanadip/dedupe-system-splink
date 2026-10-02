@@ -49,10 +49,12 @@ if query:
         master["customer_ids"].apply(lambda x: q in str(x).lower())
         | master["master_email_std"].astype(str).str.lower().str.contains(q, na=False)
         | master["entity_id"].astype(str).str.lower().str.contains(q, na=False)
-    ]
+    ].sort_values("record_count", ascending=False)
 else:
-    hits = master.head(500)
-st.caption(f"{len(hits):,} entity cocok")
+    # Entity dengan record terbanyak muncul pertama; 500 teratas saja karena
+    # 48k opsi di selectbox tidak terbaca manusia.
+    hits = master.sort_values("record_count", ascending=False).head(500)
+st.caption(f"{len(hits):,} entity cocok · urut record terbanyak")
 if hits.empty:
     st.stop()
 
