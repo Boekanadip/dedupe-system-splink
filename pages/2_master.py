@@ -1,0 +1,193 @@
+"""Master record review page (PRD FR-09, output side).
+
+The master record is the system's final output: one row per entity, with the
+best value per field. This page lets a person browse entities, see which fields
+conflict, inspect the member records, and correct master values.
+
+Corrections are written straight to master_customers.parquet and appended to an
+audit file (who, when, field, old -> new). Membership changes are NOT done here:
+a wrong merge/split is feedback for retraining, not a manual edit.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.config import LABELS_DIR, MASTER_PATH, PROCESSED_DATA_PATH, PROJECT_ROOT
+
+st.set_page_config(page_title="Master review", page_icon="👤", layout="wide")
+st.title("Master record review")
+st.caption(
+    "Satu baris = satu entity (satu orang). Lihat nilai master, konflik, "
+    "record anggota — dan koreksi nilai kalau salah."
+)
+
+AUDIT_PATH = LABELS_DIR / "master_corrections.csv"
+MASTER_FIELDS = [
+    "master_first_name_std", "master_last_name_std", "master_email_std",
+    "master_phone_std", "master_dob_std", "master_address_std",
+    "master_city_std", "master_state_std", "master_country_std",
+]
+
+master = pd.read_parquet(MASTER_PATH)
+records = pd.read_parquet(PROCESSED_DATA_PATH)
+
+# ---- cari entity
+st.subheader("Cari entity")
+query = st.text_input("Cari by customer_id / email / entity_id", placeholder="misal: rec_000123 atau john@x.com")
+if query:
+    q = query.strip().lower()
+    hits = master[
+        master["customer_ids"].apply(lambda x: q in str(x).lower())
+        | master["master_email_std"].astype(str).str.lower().str.contains(q, na=False)
+        | master["entity_id"].astype(str).str.lower().str.contains(q, na=False)
+    ]
+else:
+    hits = master.head(500)
+st.caption(f"{len(hits):,} entity cocok")
+if hits.empty:
+    st.stop()
+
+entity_id = st.selectbox("Pilih entity", hits["entity_id"].tolist())
+entity = master[master["entity_id"] == entity_id].iloc[0]
+
+# ---- detail entity
+st.subheader(f"Entity {entity_id}")
+c1, c2, c3 = st.columns(3)
+c1.metric("Record", int(entity["record_count"]))
+c2.metric("Customer ID", len(entity["customer_ids"]))
+c3.metric("Konflik", len(entity["conflicted_fields"]))
+
+if len(entity["conflicted_fields"]):
+    st.warning(f"Field konflik (record anggota beda): {', '.join(entity['conflicted_fields'])}")
+
+# Lineage = bukti asal-usul (PRD FR-11): record mana yang membentuk entity ini,
+# nama apa yang dipakai source system, dari kanal mana. Disembunyikan di expander
+# supaya tidak membingungkan, tetap ada untuk audit.
+with st.expander("Lineage (audit) — asal-usul entity ini"):
+    st.caption("record_ids: record fisik pembentuk · customer_ids: id di source "
+               "system · sources: kanal datang")
+    st.write({"record_ids": list(entity["record_ids"]),
+              "customer_ids": list(entity["customer_ids"]),
+              "sources": list(entity["sources"])})
+
+# ---- koreksi nilai master
+st.subheader("Nilai master (bisa dikoreksi)")
+with st.form("correct_master"):
+    cols = st.columns(3)
+    new_values = {}
+    for i, field in enumerate(MASTER_FIELDS):
+        current = entity[field] if field in entity else ""
+        new_values[field] = cols[i % 3].text_input(
+            field.replace("master_", "").replace("_std", ""),
+            value="" if pd.isna(current) else str(current),
+        )
+    reviewer = st.text_input("Reviewer (nama/kode)", value="reviewer")
+    submitted = st.form_submit_button("Simpan koreksi", type="primary")
+
+if submitted:
+    changes = {
+        f: (entity[f] if f in entity else None, v)
+        for f, v in new_values.items()
+        if v != ("" if pd.isna(entity.get(f)) else str(entity.get(f)))
+    }
+    if not changes:
+        st.info("Tidak ada perubahan.")
+    else:
+        # Update master_customers.parquet
+        mask = master["entity_id"] == entity_id
+        for f, (_, v) in changes.items():
+            master.loc[mask, f] = v
+        master.to_parquet(MASTER_PATH, index=False)
+        # Audit trail
+        LABELS_DIR.mkdir(parents=True, exist_ok=True)
+        audit = pd.DataFrame(
+            [
+                {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "entity_id": entity_id,
+                    "field": f,
+                    "old_value": old,
+                    "new_value": new,
+                    "reviewer": reviewer,
+                }
+                for f, (old, new) in changes.items()
+            ]
+        )
+        if AUDIT_PATH.exists():
+            audit = pd.concat([pd.read_csv(AUDIT_PATH), audit], ignore_index=True)
+        audit.to_csv(AUDIT_PATH, index=False)
+        st.success(f"Disimpan {len(changes)} koreksi. Audit: {AUDIT_PATH.name}")
+        st.rerun()
+
+# ---- record anggota
+st.subheader("Record anggota")
+member_ids = entity["record_ids"]
+members = records[records["record_id"].isin(member_ids)]
+st.caption(f"{len(members):,} record:")
+st.dataframe(
+    members[["record_id", "customer_id", "first_name_std", "last_name_std",
+             "email_std", "phone_std", "dob_std", "city_std", "source"]],
+    use_container_width=True,
+    height=300,
+)
+
+# ---- tandai salah gabung / salah pecah
+# def dulu, baru tombol: Streamlit mengeksekusi script atas-ke-bawah, jadi
+# _flag harus sudah terdefinisi pada saat tombol dievaluasi.
+FLAGS_PATH = LABELS_DIR / "membership_flags.csv"
+
+
+def _flag(entity_id: str, kind: str, reviewer: str) -> None:
+    """Catat laporan keanggotaan ke file terpisah.
+
+    feedback.csv sengaja TIDAK dipakai: skemanya per-pasangan dengan label
+    match/no_match, dan menyisipkan 'wrong_merge' di sana merusak validasi
+    feedback dan menumpuk duplikat. File terpisah punya status sendiri
+    (open -> resolved) supaya triage bisa dilakukan di halaman retrain.
+    """
+    LABELS_DIR.mkdir(parents=True, exist_ok=True)
+    row = pd.DataFrame(
+        [
+            {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "entity_id": entity_id,
+                "issue": kind,
+                "reviewer": reviewer or "reviewer",
+                "note": "",
+                "status": "open",
+            }
+        ]
+    )
+    if FLAGS_PATH.exists():
+        existing = pd.read_csv(FLAGS_PATH)
+        if {"entity_id", "issue"}.issubset(existing.columns):
+            already = (existing["entity_id"] == entity_id) & (existing["issue"] == kind)
+            if bool(already.any()):
+                st.info(f"{entity_id} sudah pernah ditandai '{kind}'.")
+                return
+        row = pd.concat([existing, row], ignore_index=True)
+    row.to_csv(FLAGS_PATH, index=False)
+    st.success(f"Ditandai {kind} untuk {entity_id}. Masuk antrean triage di halaman Retrain.")
+
+
+st.subheader("Tandai masalah keanggotaan")
+st.caption(
+    "Koreksi nilai di atas tidak mengubah keanggotaan. Kalau entity ini "
+    "salah gabung (2 orang jadi 1) atau salah pecah (1 orang jadi 2), "
+    "tandai — ini umpan balik untuk retrain, bukan edit manual."
+)
+reviewer_name = st.text_input("Reviewer untuk penandaan", value="reviewer")
+f1, f2 = st.columns(2)
+if f1.button("Tandai salah gabung"):
+    _flag(entity_id, "wrong_merge", reviewer_name)
+if f2.button("Tandai salah pecah"):
+    _flag(entity_id, "wrong_split", reviewer_name)
