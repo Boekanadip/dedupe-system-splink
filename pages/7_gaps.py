@@ -1,15 +1,14 @@
-"""Gap coverage page: what the pipeline never surfaced, with actions.
+"""Halaman celah: data yang tidak pernah muncul di halaman lain.
 
-Two populations are invisible everywhere else:
-  1. Singleton entities — a record that never matched anything. Either it is a
-     genuinely unique customer, or a duplicate nobody caught. 94% of entities
-     are singletons, so this is the biggest unanswered question in the output.
-  2. REVIEW pairs that were never queued — the review queue is a SAMPLE of the
-     review band (hundreds of ~46,000). Everything outside the sample has no
-     path to a human decision.
+Dua kelompok yang biasanya luput dari pandangan:
+  1. Record sendirian — record yang tidak pernah cocok dengan siapa pun. Bisa
+     memang customer unik, bisa juga duplikat yang tidak ketahuan. 94% entitas
+     ada di kelompok ini, jadi ini pertanyaan terbesar di hasil akhir.
+  2. Pasangan yang perlu diperiksa tapi belum masuk antrean — antrean hanya
+     sampel, jadi sisanya tidak punya jalur ke keputusan manusia.
 
-Both are actionable here: pull a record's candidates, or promote uncovered
-REVIEW pairs into the review queue.
+Keduanya bisa ditindak di sini: tarik kandidat satu record, atau masukkan
+pasangan yang belum masuk antrean.
 """
 
 from __future__ import annotations
@@ -24,13 +23,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import ENTITY_MAP_PATH, LABELS_DIR, MASTER_PATH, PROCESSED_DATA_PATH, predictions_path
 from src.labels import REVIEW_FIELDS, QUEUE_PATH, agree_fields, attach_evidence, carry_over_reviewed
-
-st.set_page_config(page_title="Gaps", page_icon="🕳️", layout="wide")
-st.title("Gaps & tindak lanjut")
-st.caption(
-    "Record yang tidak pernah tergabung (singleton) dan pasangan REVIEW yang "
-    "tidak pernah masuk antrean — keduanya tidak terlihat di halaman lain."
+from src.ui import (
+    decision_label,
+    field_label,
+    format_probability,
+    how_to_read,
+    monitoring_sidebar,
+    page_guide,
+    page_header,
+    paginate,
+    probability_verdict,
 )
+
+st.set_page_config(page_title="Celah - Entity Resolution", page_icon="🕳️", layout="wide")
+page_header(
+    "Celah yang Terlewat",
+    "Dua hal yang tidak muncul di halaman lain: record yang tidak pernah tergabung, "
+    "dan pasangan yang perlu diperiksa tapi belum masuk antrean.",
+)
+monitoring_sidebar()
+page_guide(__file__)
+how_to_read()
+
+for _p in (ENTITY_MAP_PATH, PROCESSED_DATA_PATH, predictions_path(full=True)):
+    if not _p.exists():
+        st.info(f"Belum ada `{_p.name}`. Jalankan pipeline dari halaman Upload dulu.")
+        st.stop()
 
 QUEUE_COLUMNS = [
     "record_id_l", "record_id_r", "stratum",
@@ -93,48 +111,67 @@ queued = set(zip(queue["record_id_l"].astype(str), queue["record_id_r"].astype(s
 sizes = entity_map.groupby("entity_id")["record_id"].transform("size")
 singletons = entity_map[sizes == 1]["record_id"]
 review = preds[preds["decision"] == "REVIEW"].copy()
-review["queued"] = [
+review["sudah_di_antrean"] = [
     (str(l), str(r)) in queued
     for l, r in zip(review["record_id_l"], review["record_id_r"])
 ]
-uncovered = review[~review["queued"]]
+uncovered = review[~review["sudah_di_antrean"]]
 
-# ---- ringkasan
 st.subheader("Ringkasan")
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Singleton entity", f"{len(singletons):,}",
-          help="Record yang tidak pernah cocok dengan siapa pun — unik, atau duplikat yang lolos.")
-c2.metric("REVIEW belum di antrean", f"{len(uncovered):,}")
-c3.metric("REVIEW sudah di antrean", f"{int(review['queued'].sum()):,}")
+c1.metric(
+    "Record sendirian",
+    f"{len(singletons):,}",
+    help="Record yang tidak pernah cocok dengan siapa pun. Bisa customer unik, "
+         "bisa duplikat yang tidak ketahuan.",
+)
+c2.metric(
+    "Perlu diperiksa, belum di antrean",
+    f"{len(uncovered):,}",
+    help="Pasangan yang perlu dilihat manusia, tapi belum masuk antrean kerja.",
+)
+c3.metric("Sudah di antrean", f"{int(review['sudah_di_antrean'].sum()):,}")
 conflicted = 0
 if MASTER_PATH.exists():
     conflicted = int(
         pd.read_parquet(MASTER_PATH, columns=["conflicted_fields"])["conflicted_fields"]
         .map(len).gt(0).sum()
     )
-c4.metric("Entity bermasalah", conflicted, help="Entity dengan field yang isinya beda antar record anggota.")
+c4.metric(
+    "Entitas dengan data berbeda",
+    conflicted,
+    help="Satu entitas tapi isinya tidak sama antar record — perlu dipilih mana yang benar.",
+)
 
-tab_s, tab_r = st.tabs(["Singleton", "REVIEW belum di antrean"])
+tab_s, tab_r = st.tabs(["Record sendirian", "Perlu diperiksa, belum di antrean"])
 
-# ================= tab singleton =================
+# ================= record sendirian =================
 with tab_s:
     st.caption(
-        f"{len(singletons):,} record sendirian. 94% entity memang singleton, "
-        "tapi tiap singleton yang seharusnya duplikat adalah kebocoran recall "
-        "yang tidak pernah terlihat."
+        f"{len(singletons):,} record belum pernah bergabung dengan siapa pun. "
+        "Sebagian besar memang customer unik. Tapi kalau ternyata ada yang "
+        "seharusnya bergabung, itu berarti sistem melewatkannya — dan itu "
+        "tidak akan terlihat di halaman mana pun."
     )
     single_records = records[records["record_id"].isin(set(singletons))].copy()
-    # Singleton that can never be blocked: no email AND no phone = recall ceiling.
+    # Record tanpa email DAN tanpa phone tidak akan pernah masuk kandidat:
+    # tidak ada kolom yang bisa dibandingkan. Ini batas kemampuan, bukan
+    # keputusan model.
     unlinkable = single_records["email"].isna() & single_records["phone_number"].isna()
-    show = st.radio("Tampilkan", ["Semua singleton", "Singleton tanpa email & phone (tak terhubung)"], horizontal=True)
-    if show.startswith("Singleton tanpa"):
+    show = st.radio(
+        "Tampilkan",
+        ["Semua record sendirian", "Hanya yang tidak punya email & telepon"],
+        horizontal=True,
+    )
+    if show.startswith("Hanya"):
         single_records = single_records[unlinkable]
         st.warning(
-            f"{int(unlinkable.sum()):,} record tidak punya email DAN phone — "
-            "aturan blocking tidak akan pernah menjadikannya kandidat. "
-            "Ini recall ceiling, bukan keputusan model."
+            f"{int(unlinkable.sum()):,} record tidak punya email maupun telepon. "
+            "Tanpa salah satu dari keduanya, sistem tidak akan pernah "
+            "menjadi kandidat — makanya tidak ada yang bisa dicocokkan. "
+            "Ini batas data, bukan penilaian model."
         )
-    search = st.text_input("Cari nama/email di antara singleton", "")
+    search = st.text_input("Cari nama atau email", "")
     view = single_records
     if search:
         s = search.lower()
@@ -143,55 +180,65 @@ with tab_s:
             | view["last_name_std"].astype(str).str.contains(s, na=False)
             | view["email_std"].astype(str).str.contains(s, na=False)
         ]
-    page_size = 50
-    n_pages = max(1, (len(view) + page_size - 1) // page_size)
-    page = st.number_input("Halaman singleton", min_value=1, max_value=n_pages, value=1, key="sing_page")
-    start = (page - 1) * page_size
-    st.dataframe(
-        view.iloc[start:start + page_size][
-            ["record_id", "customer_id", "first_name_std", "last_name_std",
-             "email_std", "phone_std", "dob_std", "city_std"]
-        ],
-        use_container_width=True, height=350,
-    )
+    page_df, _ = paginate(view, page_size=50, key="sing_page")
+    shown = page_df[[
+        "record_id", "customer_id", "first_name_std", "last_name_std",
+        "email_std", "phone_std", "dob_std", "city_std",
+    ]].copy()
+    shown.columns = [
+        "Kode record", "Kode dari sistem asal", "Nama depan", "Nama belakang",
+        "Email", "Telepon", "Tanggal lahir", "Kota",
+    ]
+    st.dataframe(shown, width="stretch", height=350, hide_index=True)
 
-    st.subheader("Tindak lanjut: telusuri kandidat satu record")
-    st.caption("Pilih record singleton → lihat pasangan kandidatnya → antrekan ke reviewer.")
-    pick = st.selectbox("Record", view["record_id"].tolist() if len(view) else [])
+    st.subheader("Telusuri kandidat satu record")
+    st.caption(
+        "Pilih satu record di bawah, lalu lihat siapa saja yang pernah "
+        "dipertimbangkan sistem untuknya."
+    )
+    pick = st.selectbox("Pilih record", view["record_id"].tolist() if len(view) else [])
     if pick:
         cand = preds[
             (preds["record_id_l"] == pick) | (preds["record_id_r"] == pick)
         ].sort_values("match_probability", ascending=False)
         st.caption(
-            f"{len(cand):,} kandidat pernah di-skor untuk record ini. "
-            "Skor tertinggi ditampilkan — kalau semuanya jauh di bawah 1e-10, "
-            "model memang yakin record ini unik."
+            f"{len(cand):,} record lain pernah dibandingkan dengan `{pick}`. "
+            "Yang paling mirip ditampilkan lebih dulu."
         )
         show_cand = cand.head(50).copy()
-        other = show_cand.apply(
+        show_cand["kandidat"] = show_cand.apply(
             lambda r: r["record_id_r"] if r["record_id_l"] == pick else r["record_id_l"], axis=1
         )
-        show_cand["kandidat"] = other.values
+        top_table = show_cand[["kandidat", "match_probability", "decision"]].copy()
+        top_table["Peluang sama"] = top_table["match_probability"].map(format_probability)
+        top_table["Kandidat"] = top_table["kandidat"]
+        top_table["Status model"] = top_table["decision"].map(decision_label)
         st.dataframe(
-            show_cand[["kandidat", "match_probability", "decision"]],
-            use_container_width=True,
-            column_config={"match_probability": st.column_config.NumberColumn("P", format="%.2e")},
+            top_table[["Kandidat", "Peluang sama", "Status model"]],
+            width="stretch",
+            hide_index=True,
         )
-        if st.button(f"Antrekan 20 kandidat teratas ({pick})"):
+        st.caption(probability_verdict(float(show_cand["match_probability"].iloc[0])))
+        if st.button(f"Masukkan 20 kandidat teratas ({pick}) ke antrean"):
             top = cand.head(20)[["record_id_l", "record_id_r", "match_probability"]]
             n = enqueue(top, "singleton_candidate")
-            st.success(f"{n:,} pasangan masuk antrean review." if n else "Sudah semua di antrean.")
+            st.success(f"{n:,} pasangan masuk antrean pemeriksaan." if n else "Semua sudah ada di antrean.")
             st.rerun()
 
-# ================= tab review tak-antre =================
+# ================= perlu diperiksa tapi belum di antrean =================
 with tab_r:
     st.caption(
-        f"Antrean review berisi {len(queue):,} dari {len(review):,} pasangan REVIEW. "
-        "Sisanya tidak punya jalur ke keputusan manusia — di sini bisa diantrekan."
+        f"Antrean kerja berisi {len(queue):,} dari {len(review):,} pasangan yang "
+        "perlu diperiksa. Sisanya belum pernah dilihat manusia sama sekali. "
+        "Masukkan yang skornya tertinggi supaya yang paling mungkin duplicate "
+        "pertama dicek."
     )
     f1, f2 = st.columns(2)
-    top_n = f1.number_input("Jumlah pasangan diantrekan (skor tertinggi)", 50, 5000, 500, step=100)
-    if f2.button(f"Antrekan {top_n} pasangan REVIEW tertinggi", type="primary"):
+    top_n = f1.number_input(
+        "Berapa pasangan yang mau dimasukkan?", min_value=50, max_value=5000, value=500, step=100,
+        help="Pasangan dengan peluang paling tinggi akan lebih dulu diantre.",
+    )
+    if f2.button(f"Masukkan {top_n} pasangan tertinggi", type="primary"):
         take = uncovered.nlargest(top_n, "match_probability")[
             ["record_id_l", "record_id_r", "match_probability"]
         ]
@@ -199,14 +246,13 @@ with tab_r:
         st.success(f"{n:,} pasangan baru masuk antrean. Sisanya masih {len(uncovered) - n:,}.")
         st.rerun()
 
-    page_size = 50
-    n_pages = max(1, (len(uncovered) + page_size - 1) // page_size)
-    page = st.number_input("Halaman REVIEW", min_value=1, max_value=n_pages, value=1, key="rev_page")
-    start = (page - 1) * page_size
+    page_df, _ = paginate(uncovered, page_size=50, key="rev_page")
+    table = page_df[["record_id_l", "record_id_r", "match_probability"]].copy()
+    table["Record A"] = table["record_id_l"]
+    table["Record B"] = table["record_id_r"]
+    table["Peluang sama"] = table["match_probability"].map(format_probability)
     st.dataframe(
-        uncovered.iloc[start:start + page_size][
-            ["record_id_l", "record_id_r", "match_probability", "queued"]
-        ],
-        use_container_width=True,
-        column_config={"match_probability": st.column_config.NumberColumn("P", format="%.2e")},
+        table[["Record A", "Record B", "Peluang sama"]],
+        width="stretch",
+        hide_index=True,
     )

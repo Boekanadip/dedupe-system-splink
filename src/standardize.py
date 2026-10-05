@@ -46,9 +46,22 @@ def normalize_email(value) -> str | None:
 
 
 def normalize_phone(value) -> str | None:
+    """Digits only, with the extension dropped.
+
+    MEASURED on the 50k development file before this change: 29,966 of 50,000
+    values carry an "xNNN" extension, and `re.sub(r"\D", "")` folded the
+    extension into the key. '(449) 977-1729' and '449.977.1729x282' are the same
+    number written by two systems, but they produced two different keys and so
+    could never match each other.
+
+    The extension is dropped, not the whole number: a shared switchboard with
+    different extensions is still evidence of the same organisation, and the
+    main line is the part a customer would recognise as their number.
+    """
     if pd.isna(value):
         return None
-    digits = re.sub(r"\D", "", str(value))
+    text = re.split(r"[xX]\s*\d+", str(value))[0]
+    digits = re.sub(r"\D", "", text)
     return digits or None
 
 

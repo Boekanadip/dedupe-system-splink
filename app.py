@@ -32,65 +32,35 @@ import streamlit as st
 
 from src import registry
 from src.config import OUTPUT_DIR, PROJECT_ROOT
+from src.ui import monitoring_sidebar, page_guide, page_header
 from src.validate_upload import validate_file
 
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 RUN_SUMMARY = OUTPUT_DIR / "run_summary.json"
 BATCH_REPORT = OUTPUT_DIR / "batch_linkage_report.json"
-LATEST_MODEL = PROJECT_ROOT / "models" / "latest.json"
-REVIEW_QUEUE = PROJECT_ROOT / "data" / "labels" / "review_queue.csv"
 
-st.set_page_config(page_title="CRM Dedup", page_icon="🔗", layout="wide")
-st.title("CRM Dedup - upload batch baru")
-st.caption(
-    "CSV masuk ⇒ divalidasi ⇒ didaftarkan ⇒ seluruh pipeline dijalankan ulang."
-    " Data lama tidak dihapus; batch baru ditambahkan."
+st.set_page_config(page_title="Upload - Entity Resolution", page_icon="📤", layout="wide")
+page_header(
+    "Upload Data",
+    "Tambahkan data customer baru. Data lama tidak akan hilang atau ditimpa.",
 )
 
-with st.expander("Cara kerja sistem"):
+with st.expander("Alur proses", expanded=False):
     st.markdown(
         """
-    1. **Validasi** skema dicek (kolom wajib + kolom blocking), delimiter dan
-       encoding dideteksi, format tanggal ditanya.
-    2. **Standarisasi** nilai dinormalisasi ke kolom `_std` (nama, email,
-       phone, tanggal). Nilai asli tidak pernah ditimpa.
-    3. **Blocking** 12 aturan menghasilkan pasangan kandidat. Tanpa blocking, tidak ada yang bisa
-       dibandingkan.
-    4. **Scoring** model Splink menilai setiap pasangan kandidat.
-    5. **Keputusan** `MATCH` (auto-merge), `REVIEW` (manusia memutuskan),
-       `NON_MATCH` (ditolak).
-    6. **Clustering** pasangan yang MATCH digabung jadi satu `entity_id`.
-    7. **Master record** nilai terbaik dipilih per field per entity.
+Setiap file baru melewati tahap-tahap ini. Data yang sudah ada tidak dihapus.
 
-    Sistem **tidak** 100% otomatis: pasangan di band `REVIEW` menunggu
-    keputusan manusia di `data/labels/review_queue.csv`.
-    """
+1. **Pengecekan file** — dicek kolomnya lengkap, format tanggalnya apa.
+2. **Pembersihan** — nama, email, nomor telepon dibersihkan supaya bisa dibandingkan.
+   Nilai aslinya tetap disimpan, tidak ditimpa.
+    3. **Penyaringan** — sistem membagi data ke ribuan kelompok kecil supaya tidak
+       perlu membandingkan semuanya. 12 aturan dipakai sekaligus.
+4. **Penilaian** — tiap pasangan yang lolos penyaringan diberi angka peluang 0%–100%.
+5. **Keputusan** — 90% ke atas digabung sendiri; yang tidak yakin menunggu Anda.
+6. **Pengelompokan** — semua yang sudah digabung dirangkum jadi satu entitas.
+7. **Rangkuman** — tiap entitas dapat satu baris profil bersih.
+"""
     )
-
-
-def monitoring_sidebar() -> None:
-    with st.sidebar:
-        st.markdown("#### Monitoring")
-        if LATEST_MODEL.exists():
-            model = json.loads(LATEST_MODEL.read_text(encoding="utf-8"))
-            st.caption(f"Model aktif: `{model['version']}`")
-            st.caption(f"Dilatih: {model['created_at']}")
-        else:
-            st.caption("Belum ada model.")
-        reg = registry.load()
-        st.caption(
-            f"Batch: {len(reg['batches'])} · record_id s/d {reg['next_start_index']:,}"
-        )
-        if REVIEW_QUEUE.exists():
-            import pandas as pd
-
-            queue = pd.read_csv(REVIEW_QUEUE)
-            pending = int((queue["review_status"] == "pending").sum())
-            st.caption(f"Review queue: {pending} pasangan menunggu manusia")
-        last = st.session_state.get("last_run")
-        if last:
-            status = "OK" if last["returncode"] == 0 else "GAGAL"
-            st.caption(f"Run terakhir: {last['seconds']}s · {status}")
 
 
 def validate_payload(payload: bytes) -> dict:
@@ -119,6 +89,8 @@ def run_pipeline(command: list[str]) -> dict:
         command,
         cwd=PROJECT_ROOT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=1,
@@ -191,11 +163,10 @@ def render_last_run() -> None:
 
 
 monitoring_sidebar()
+page_guide(__file__)
 st.subheader("1 · Pilih file")
-# 100 MB per file. The 200 MB Streamlit default is a request cap, not a memory
-# promise: validate + standardize hold the file and its standardized copy in RAM,
-# so a much larger file is read repeatedly before the pipeline starts.
-MAX_UPLOAD_MB = 100
+
+MAX_UPLOAD_MB = 200
 uploaded = st.file_uploader(
     f"CSV (delimiter ; atau ,), maks {MAX_UPLOAD_MB} MB",
     type="csv",

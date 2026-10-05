@@ -64,7 +64,9 @@ def main() -> None:
     preds = pd.read_parquet(preds_path)
 
     if not args.full:
-        labels, _ = load_labels()
+        # Same labels the evaluation will use, otherwise the coverage check
+        # below could pass on a set that is never scored.
+        labels, _ = load_labels(args.source)
         if labels is not None:
             modelled = set(preds["record_id_l"]) | set(preds["record_id_r"])
             in_scope = labels[
@@ -77,15 +79,18 @@ def main() -> None:
                     "subset while ignoring the rest. Use --full."
                 )
 
-    labels, src = load_labels()
+    # "auto" keeps the old gold-first preference. Pinning a source is what makes
+    # --source silver reachable now that gold_labels.csv exists.
+    labels, src = load_labels(args.source)
     if labels is None:
-        raise FileNotFoundError(
-            "No labels found. Run python -m src.labels to generate silver."
+        raise SystemExit(
+            f"No {args.source if args.source != 'auto' else 'gold or silver'} labels found. "
+            + (
+                "Run: python -m src.labels --promote"
+                if args.source in ("gold", "auto")
+                else "Run: python -m src.labels --silver-only"
+            )
         )
-    if args.source == "gold" and src != "gold":
-        raise ValueError("Gold labels requested but only silver available.")
-    if args.source == "silver" and src != "silver":
-        raise ValueError(f"Silver labels requested but source is {src}.")
 
     print(f"Evaluating {len(labels):,} labelled pairs against predictions (source: {src}).")
     positives = int(labels["is_positive"].sum())

@@ -36,9 +36,9 @@ outputs/*
 *.pem
 
 # local-only: dokumentasi & konteks agent. Ada di disk, tidak dikirim ke GitHub.
-/AGENTS.md
-/DESIGN.md
-/MASTER_CONTEXT.md.txt
-/PRD.md
+AGENTS.md
+DESIGN.md
+MASTER_CONTEXT.md.txt
+PRD.md
 /docs/
-/.opencode/skills/
+.opencode/skills/

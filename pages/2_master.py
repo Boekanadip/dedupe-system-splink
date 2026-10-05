@@ -22,13 +22,28 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, MASTER_PATH, PROCESSED_DATA_PATH, PROJECT_ROOT
-
-st.set_page_config(page_title="Master review", page_icon="👤", layout="wide")
-st.title("Master record review")
-st.caption(
-    "Satu baris = satu entity (satu orang). Lihat nilai master, konflik, "
-    "record anggota — dan koreksi nilai kalau salah."
+from src.ui import (
+    format_count,
+    monitoring_sidebar,
+    page_guide,
+    page_header,
 )
+
+st.set_page_config(page_title="Master - Entity Resolution", page_icon="👥", layout="wide")
+page_header(
+    "Daftar Customer",
+    "Hasil akhir: satu baris per orang. Kalau ada datanya yang berbeda-beda, "
+    "kolomnya ditandai agar bisa dibetulkan.",
+)
+monitoring_sidebar()
+page_guide(__file__)
+
+if not MASTER_PATH.exists() or not PROCESSED_DATA_PATH.exists():
+    st.info(
+        "Belum ada master record. Jalankan pipeline dari halaman Upload dulu "
+        "(clustering + master_record)."
+    )
+    st.stop()
 
 AUDIT_PATH = LABELS_DIR / "master_corrections.csv"
 MASTER_FIELDS = [
@@ -37,12 +52,24 @@ MASTER_FIELDS = [
     "master_city_std", "master_state_std", "master_country_std",
 ]
 
+MASTER_LABELS = {
+    "master_first_name_std": "Nama depan",
+    "master_last_name_std": "Nama belakang",
+    "master_email_std": "Email",
+    "master_phone_std": "Nomor telepon",
+    "master_dob_std": "Tanggal lahir",
+    "master_address_std": "Alamat",
+    "master_city_std": "Kota",
+    "master_state_std": "Provinsi",
+    "master_country_std": "Negara",
+}
+
 master = pd.read_parquet(MASTER_PATH)
 records = pd.read_parquet(PROCESSED_DATA_PATH)
 
 # ---- cari entity
 st.subheader("Cari entity")
-query = st.text_input("Cari by customer_id / email / entity_id", placeholder="misal: rec_000123 atau john@x.com")
+query = st.text_input("Cari customer_id / email / entity_id", placeholder="misal: rec_000123 atau john@x.com")
 if query:
     q = query.strip().lower()
     hits = master[
@@ -51,10 +78,9 @@ if query:
         | master["entity_id"].astype(str).str.lower().str.contains(q, na=False)
     ].sort_values("record_count", ascending=False)
 else:
-    # Entity dengan record terbanyak muncul pertama; 500 teratas saja karena
-    # 48k opsi di selectbox tidak terbaca manusia.
+    # 500 teratas; 48k opsi tidak terbaca manusia di selectbox.
     hits = master.sort_values("record_count", ascending=False).head(500)
-st.caption(f"{len(hits):,} entity cocok · urut record terbanyak")
+st.caption(f"{len(hits):,} customer cocok · urut dari yang record-nya terbanyak")
 if hits.empty:
     st.stop()
 
@@ -62,12 +88,11 @@ entity_id = st.selectbox("Pilih entity", hits["entity_id"].tolist())
 entity = master[master["entity_id"] == entity_id].iloc[0]
 
 # ---- detail entity
-st.subheader(f"Entity {entity_id}")
+st.subheader(f"Customer {entity_id}")
 c1, c2, c3 = st.columns(3)
-c1.metric("Record", int(entity["record_count"]))
-c2.metric("Customer ID", len(entity["customer_ids"]))
-c3.metric("Konflik", len(entity["conflicted_fields"]))
-
+c1.metric("Jumlah record", format_count(entity["record_count"]))
+c2.metric("Customer ID berbeda", format_count(len(entity["customer_ids"])))
+c3.metric("Field konflik", format_count(len(entity["conflicted_fields"])))
 if len(entity["conflicted_fields"]):
     st.warning(f"Field konflik (record anggota beda): {', '.join(entity['conflicted_fields'])}")
 
@@ -75,21 +100,23 @@ if len(entity["conflicted_fields"]):
 # nama apa yang dipakai source system, dari kanal mana. Disembunyikan di expander
 # supaya tidak membingungkan, tetap ada untuk audit.
 with st.expander("Lineage (audit) — asal-usul entity ini"):
-    st.caption("record_ids: record fisik pembentuk · customer_ids: id di source "
-               "system · sources: kanal datang")
-    st.write({"record_ids": list(entity["record_ids"]),
-              "customer_ids": list(entity["customer_ids"]),
-              "sources": list(entity["sources"])})
+    st.caption("Kode record pembentuk · Kode customer di source · Sumber data yang dipakai")
+    st.write({
+        "kode record": list(entity["record_ids"]),
+        "kode customer": list(entity["customer_ids"]),
+        "sumber data": list(entity["sources"]),
+    })
 
 # ---- koreksi nilai master
 st.subheader("Nilai master (bisa dikoreksi)")
+st.caption("Perbaiki nilai yang salah di sini. Sistem memakai nilai pertama sebagai default.")
 with st.form("correct_master"):
     cols = st.columns(3)
     new_values = {}
     for i, field in enumerate(MASTER_FIELDS):
         current = entity[field] if field in entity else ""
         new_values[field] = cols[i % 3].text_input(
-            field.replace("master_", "").replace("_std", ""),
+            MASTER_LABELS.get(field, field),
             value="" if pd.isna(current) else str(current),
         )
     reviewer = st.text_input("Reviewer (nama/kode)", value="reviewer")
@@ -134,12 +161,23 @@ if submitted:
 st.subheader("Record anggota")
 member_ids = entity["record_ids"]
 members = records[records["record_id"].isin(member_ids)]
-st.caption(f"{len(members):,} record:")
+st.caption(f"{len(members):,} record penyusun entity ini:")
 st.dataframe(
     members[["record_id", "customer_id", "first_name_std", "last_name_std",
              "email_std", "phone_std", "dob_std", "city_std", "source"]],
-    use_container_width=True,
+    width="stretch",
     height=300,
+    column_config={
+        "record_id": st.column_config.TextColumn("Kode record"),
+        "customer_id": st.column_config.TextColumn("Kode dari sistem asal"),
+        "first_name_std": st.column_config.TextColumn("Nama depan"),
+        "last_name_std": st.column_config.TextColumn("Nama belakang"),
+        "email_std": st.column_config.TextColumn("Email"),
+        "phone_std": st.column_config.TextColumn("Telepon"),
+        "dob_std": st.column_config.TextColumn("Tanggal lahir"),
+        "city_std": st.column_config.TextColumn("Kota"),
+        "source": st.column_config.TextColumn("Sumber data"),
+    },
 )
 
 # ---- tandai salah gabung / salah pecah

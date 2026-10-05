@@ -8,6 +8,8 @@ run silently replaced a 50k entity map and still looked complete.
 from __future__ import annotations
 
 import json
+import locale
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,6 +28,7 @@ from src.config import (
     LABELS_DIR,
     MASTER_PATH,
     MATCH_THRESHOLD,
+    OUTPUT_DIR,
     PREDICTIONS_FULL_PATH,
     PROCESSED_DATA_PATH,
     REVIEW_THRESHOLD,
@@ -567,6 +570,123 @@ def review_pairs_are_not_merged():
     merged = int((joined["entity_l"] == joined["entity_r"]).sum())
     assert merged == 0, f"{merged} REVIEW pairs were merged into one entity anyway"
     return f"{len(review):,} REVIEW pairs, none merged"
+
+
+@check
+def incremental_history_new_entities_is_a_delta():
+    """new_entities is a per-batch delta, never the running total.
+
+    apply_staged() used updated_map["entity_id"].nunique(), i.e. the whole
+    entity count (48,380) written as "entities this batch created". The
+    dashboard's "Batch per minggu" chart summed that field as if it were new
+    entities per batch, so 3 batches looked like they each created 48k
+    entities. A batch of N records can create at most N new entities, so the
+    delta must never exceed new_records.
+    """
+    path = OUTPUT_DIR / "incremental_history.jsonl"
+    if not path.exists():
+        return "SKIPPED: no incremental_history.jsonl"
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows, "incremental_history.jsonl is empty"
+    bad = [
+        r for r in rows
+        if int(r.get("new_entities", 0)) > int(r.get("new_records", 0))
+    ]
+    assert not bad, (
+        f"{len(bad)} row(s) record more new entities than new records "
+        f"(total, not delta): {[(r['batch'], r['new_entities'], r['new_records']) for r in bad]}"
+    )
+    return f"{len(rows)} batch(es), new_entities always <= new_records"
+
+
+@check
+def label_source_can_be_pinned():
+    """load_labels() must be able to return the source the caller asked for.
+
+    It took no arguments and always preferred gold, so `threshold_eval --source
+    silver` raised "Silver labels requested but source is gold" as soon as
+    gold_labels.csv existed. The flag was unreachable, not wrong — and the
+    silver run it existed for could not be reproduced at all.
+    """
+    auto_labels, auto_source = load_labels()
+    assert auto_source in ("none", "silver", "gold"), f"unexpected source {auto_source!r}"
+
+    for wanted in ("gold", "silver"):
+        labels, source = load_labels(wanted)
+        if labels is None:
+            continue  # that file simply has not been produced yet
+        assert source == wanted, (
+            f"load_labels({wanted!r}) resolved to {source!r}; the pin is ignored"
+        )
+
+    try:
+        load_labels("bronze")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("load_labels accepted an unknown source name")
+
+    # The default must stay gold-first, because evaluate.py and
+    # blocking_benchmark.py rely on "reviewed labels win".
+    if auto_labels is not None and (LABELS_DIR / "gold_labels.csv").exists():
+        assert auto_source == "gold", (
+            f"auto resolved to {auto_source!r} while gold_labels.csv exists"
+        )
+    return f"auto={auto_source}, pinned gold/silver honoured, unknown source refused"
+
+
+@check
+def subprocess_capture_cannot_lose_output():
+    """Capturing a child whose output is not cp1252 must not return stdout=None.
+
+    Reproduced on this machine. cp1252 leaves 0x81/0x8D/0x8F/0x90/0x9D undefined,
+    and every UTF-8 3-byte sequence whose middle byte is one of those kills the
+    decoder thread: subprocess.run(..., text=True, capture_output=True) with no
+    encoding then returns returncode 0 with stdout=None. close_gold_loop did
+    sys.stdout.write(None) on that, so `--all` died one step after reporting it
+    fine. U+207B is not hypothetical: it is what the old probability formatter
+    printed, and src/evaluate.py still prints U+2014, which decodes as mojibake.
+    """
+    console = locale.getpreferredencoding(False)
+    undef = []
+    for cp in range(0x80, 0x100):
+        try:
+            bytes([cp]).decode(console)
+        except UnicodeDecodeError:
+            undef.append(cp)
+    assert undef, f"{console} decoded every byte; this check proves nothing here"
+
+    # U+207B SUPERSCRIPT MINUS -> UTF-8 e2 81 bb, byte 0x81 undefined in cp1252.
+    probe = "\u207b"
+    assert 0x81 in [b for b in probe.encode("utf-8")], "probe lost its 0x81 byte"
+
+    child = (
+        "import sys; sys.stdout.reconfigure(encoding='utf-8'); "
+        "print('3.40 \u00d7 10\u207b7\u2014 done')"
+    )
+
+    broken = subprocess.run(
+        [sys.executable, "-c", child],
+        text=True, capture_output=True, encoding=console, errors="strict",
+    )
+    assert broken.stdout is None, (
+        f"expected {console}/strict to fail on U+207B, got {broken.stdout!r}; "
+        "this check no longer proves the fix is needed"
+    )
+
+    fixed = subprocess.run(
+        [sys.executable, "-c", child],
+        text=True, capture_output=True, encoding="utf-8", errors="replace",
+    )
+    assert fixed.returncode == 0, f"child failed with {fixed.returncode}"
+    assert fixed.stdout and "\u207b" in fixed.stdout, (
+        f"utf-8 capture lost the superscript: {fixed.stdout!r}"
+    )
+    return f"{console} undefined bytes {len(undef)}; utf-8+replace keeps U+207B"
 
 
 def main() -> int:

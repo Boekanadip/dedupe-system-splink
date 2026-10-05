@@ -23,15 +23,18 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import MASTER_PATH, OUTPUT_DIR, PROJECT_ROOT
-from src.validate_upload import validate_file
 from src.profiling import load_raw
+from src.ui import format_probability, monitoring_sidebar, page_guide, page_header
+from src.validate_upload import validate_file
 
-st.set_page_config(page_title="Batch review", page_icon="📦", layout="wide")
-st.title("Batch review")
-st.caption(
-    "Hasil analisis sistem untuk batch baru, sebelum digabung. "
-    "Centang record yang dipersoalkan, lalu Apply — atau Reject untuk membatalkan."
+st.set_page_config(page_title="Batch - Entity Resolution", page_icon="📦", layout="wide")
+page_header(
+    "Data Batch Baru",
+    "Sebelum data baru dipakai, periksa dulu setiap barisnya. Baris yang tidak "
+    "disetujui tetap masuk sebagai customer sendiri, tidak dipaksa bergabung.",
 )
+monitoring_sidebar()
+page_guide(__file__)
 
 STAGING_DIR = OUTPUT_DIR / "staging"
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
@@ -41,8 +44,9 @@ def run(args: list[str]) -> tuple[int, str]:
     proc = subprocess.run(
         [sys.executable, "-m", "src.incremental", *args],
         cwd=PROJECT_ROOT, text=True, capture_output=True,
+        encoding="utf-8", errors="replace",
     )
-    return proc.returncode, proc.stdout + proc.stderr
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
 files = sorted(STAGING_DIR.glob("*.parquet")) if STAGING_DIR.exists() else []
@@ -134,19 +138,25 @@ master_lookup = pd.read_parquet(MASTER_PATH).set_index("entity_id")
 display = staging.copy()
 if "approved" not in display.columns:
     display["approved"] = True
+display["approved"] = display["approved"].fillna(True).astype(bool)
 for col in ["master_first_name_std", "master_last_name_std", "master_email_std", "master_phone_std"]:
     display[col] = display["proposed_entity_id"].map(master_lookup[col])
+    display[col] = display[col].where(display[col].notna(), "").astype(str)
+
+# Peluang ditampilkan sebagai teks persen, bukan angka eksponensial mentah.
+if "match_probability" in display.columns:
+    display["match_probability"] = display["match_probability"].map(format_probability)
 
 editable_cols = ["approved"]
 disabled_cols = [c for c in display.columns if c not in editable_cols]
 edited = st.data_editor(
     display,
     disabled=disabled_cols,
-    use_container_width=True,
+    width="stretch",
     height=520,
     column_config={
         "approved": st.column_config.CheckboxColumn("Setujui", default=True),
-        "match_probability": st.column_config.NumberColumn("Skor", format="%.2e"),
+        "match_probability": st.column_config.TextColumn("Peluang"),
     },
 )
 
@@ -176,7 +186,17 @@ if a2.button("Apply proposal", type="primary"):
     else:
         st.error("Apply gagal — lihat log.")
 
-if st.button("Reject proposal (batalkan batch ini)", type="secondary"):
+st.divider()
+st.subheader("Tolak proposal")
+st.caption(
+    "Hapus proposal tanpa menggabung apa pun. Batch tetap terdaftar dan bisa di-stage ulang."
+)
+confirm_reject = st.checkbox(
+    "Saya paham proposal ini akan dihapus",
+    key="reject_confirm",
+    value=False,
+)
+if st.button("Tolak proposal", type="secondary", disabled=not confirm_reject):
     code, log = run(["--reject", "--batch", batch_file])
     with st.expander("Log reject", expanded=code != 0):
         st.code(log[-2000:])

@@ -161,12 +161,14 @@ def recluster() -> None:
     for module, extra in (("clustering", ["--full"]), ("master_record", []), ("evaluate", [])):
         cmd = [sys.executable, "-m", f"src.{module}", *extra]
         print(f"  running: {' '.join(cmd[2:])}")
-        result = subprocess.run(cmd, text=True, capture_output=True)
+        result = subprocess.run(
+            cmd, text=True, capture_output=True, encoding="utf-8", errors="replace"
+        )
         if result.returncode != 0:
-            sys.stdout.write(result.stdout)
-            sys.stderr.write(result.stderr)
+            sys.stdout.write(result.stdout or "")
+            sys.stderr.write(result.stderr or "")
             raise SystemExit(f"Step {module!r} failed")
-        tail = [ln for ln in result.stdout.splitlines() if ln.strip()][-3:]
+        tail = [ln for ln in (result.stdout or "").splitlines() if ln.strip()][-3:]
         for line in tail:
             print(f"    {line}")
 

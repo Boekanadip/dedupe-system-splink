@@ -17,11 +17,17 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR, predictions_path
-from src.labels import load_labels, QUEUE_PATH, GOLD_PATH
+from src.labels import QUEUE_PATH, GOLD_PATH
+from src.ui import monitoring_sidebar, page_guide, page_header
 
-st.set_page_config(page_title="History", page_icon="📜", layout="wide")
-st.title("Decision History")
-st.caption("Audit trail per kandidat: feedback, overrides, review queue, entity ops.")
+st.set_page_config(page_title="Riwayat - Entity Resolution", page_icon="📜", layout="wide")
+page_header(
+    "Riwayat Keputusan",
+    "Catatan siapa mengubah apa dan kapan. Dipakai untuk menelusuri kembali "
+    "kenapa seorang customer digabung atau dipisah.",
+)
+monitoring_sidebar()
+page_guide(__file__)
 
 # ---- search
 c1, c2 = st.columns(2)
@@ -84,7 +90,7 @@ if search_pair:
             if not hit.empty:
                 with cols[list(d.keys()).index(name) % 4]:
                     st.write(f"**{name}**")
-                    st.dataframe(hit.dropna(axis=1, how="all"), use_container_width=True, hide_index=True)
+                    st.dataframe(hit.dropna(axis=1, how="all"), width="stretch", hide_index=True)
 
 # ---- per-record timeline (record appears in any pair)
 if search_rid:
@@ -137,7 +143,7 @@ if search_rid:
             ascending=False,
             na_position="last",
         )
-        st.dataframe(combined.dropna(axis=1, how="all"), use_container_width=True, hide_index=True)
+        st.dataframe(combined.dropna(axis=1, how="all"), width="stretch", hide_index=True)
     else:
         st.info("Tidak ada jejak untuk record ini.")
 
@@ -151,6 +157,6 @@ if "entity_hist" in d:
     if ent_filter != "(semua)":
         eh = eh[(eh.from_entity == ent_filter) | (eh.to_entity == ent_filter)]
     st.dataframe(eh.sort_values("timestamp", ascending=False).dropna(axis=1, how="all"),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
 else:
     st.caption("Belum ada koreksi entity (entity_correction).")

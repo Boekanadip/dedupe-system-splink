@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -20,13 +21,28 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT
-
-st.set_page_config(page_title="Retrain", page_icon="🔄", layout="wide")
-st.title("Retrain & model management")
-st.caption(
-    "Retrain adalah aksi eksplisit di halaman ini — tidak bareng data masuk. "
-    "Data baru tetap lewat incremental; retrain hanya kalau memang dibutuhkan."
+from src.ui import (
+    format_count,
+    format_duration,
+    format_history_table,
+    format_rate,
+    format_threshold,
+    monitoring_sidebar,
+    page_guide,
+    page_header,
+    stratum_label,
 )
+
+import psutil
+
+st.set_page_config(page_title="Model - Entity Resolution", page_icon="⚙️", layout="wide")
+page_header(
+    "Pengaturan Sistem",
+    "Halaman ini tempat mengubah batas kepastian dan melatih ulang sistem. "
+    "Semuanya harus diklik manual — sistem tidak pernah mengubah dirinya sendiri.",
+)
+monitoring_sidebar()
+page_guide(__file__)
 
 MODELS_DIR = PROJECT_ROOT / "models"
 LOCK = OUTPUT_DIR / ".retraining"
@@ -57,164 +73,253 @@ versions = model_versions()
 cur = current_version()
 
 # ---- status sekarang
-st.subheader("Status model")
+st.subheader("Model yang Sedang Dipakai")
 if cur:
     st.success(f"Model aktif: `{cur}`")
 else:
-    st.warning("Belum ada model.")
+    st.warning("Belum ada model. Jalankan dari halaman Upload dulu.")
 c1, c2 = st.columns(2)
 if versions:
     latest_meta = versions[-1]
-    c1.metric("Input rows", f"{latest_meta.get('input_rows', 0):,}")
-    c2.metric("Pairs scored", f"{latest_meta.get('pairs_scored', 0):,}")
+    c1.metric("Jumlah record", format_count(latest_meta.get("input_rows", 0)),
+              help="Berapa baris data yang dipelajari model ini.")
+    c2.metric("Pasangan dibandingkan", format_count(latest_meta.get("pairs_scored", 0)),
+              help="Berapa pasangan record yang dinilai model ini.")
 
 # ---- retrain
-st.subheader("Retrain model")
-st.caption(
-    "Full pipeline dijalankan ulang di SEMUA data (bukan incremental). "
-    "Menghasilkan model version baru. ±2-3 menit."
-)
-@st.fragment(run_every="3s")
-def retrain_runner() -> None:
-    """Stream the retrain log live without freezing the page.
+RETRAIN_LOG = OUTPUT_DIR / "retrain.log"
+# Langkah terpanjang yang terukur ~48s (labels_review_queue). 10 menit tanpa
+# satu baris log berarti prosesnya sudah mati, bukan sedang lambat.
+STALE_SEC = 600
 
-    The subprocess blocks this thread, but only this fragment: the rest of the
-    page and every other Streamlit tab keep responding while it runs.
+
+def lock_status() -> tuple[bool, int, bool]:
+    """(ada_lock, detik sejak log terakhir tumbuh, pid masih hidup)."""
+    if not LOCK.exists():
+        return False, 0, False
+    ref = RETRAIN_LOG if RETRAIN_LOG.exists() else LOCK
+    idle = int(time.time() - ref.stat().st_mtime)
+    try:
+        pid = int(LOCK.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        pid = None
+    return True, idle, bool(pid and psutil.pid_exists(pid))
+
+
+    st.subheader("Latih Ulang Model")
+st.caption(
+    "Jalankan ulang seluruh pipeline di SEMUA data (bukan incremental). "
+    "Menghasilkan versi model baru; versi lama tetap tersimpan dan bisa di-rollback."
+)
+
+
+@st.fragment(run_every=2)
+def retrain_runner() -> None:
+    """Pantau retrain lewat file log, bukan pipe stdout.
+
+    Sebelumnya subprocess di-pipe ke `for line in process.stdout` di dalam
+    fragment ber-`run_every`. Rerun fragment memutus loop itu, menutup pipe,
+    membunuh proses training di tengah jalan, dan `LOCK.unlink()` tidak pernah
+    tercapai — lock basi selamanya. Proses terpisah + log di disk tidak bisa
+    dipotong begitu; liveness dicek via PID di lock file.
     """
-    if LOCK.exists():
-        st.warning("⏳ Retrain sedang berjalan. Halaman ini tetap bisa dipakai.")
-    running = st.session_state.get("retrain_running", False)
-    if running:
-        log = st.session_state.get("retrain_log", "")
-        with st.expander("Log retrain", expanded=True):
-            st.code(log[-4000:] if log else "Menunggu output…", language="log")
-        st.caption("Menunggu proses selesai…")
+    locked, idle, alive = lock_status()
+
+    if locked and not alive:
+        st.error(
+            f"Retrain berhenti — proses tidak ada lagi, log diam {idle // 60} menit. "
+            "Versi model tidak berubah, artefak lama tetap utuh. "
+            "Bersihkan lock lalu jalankan ulang."
+        )
+        if st.button("Bersihkan lock", type="primary"):
+            LOCK.unlink(missing_ok=True)
+            RETRAIN_LOG.unlink(missing_ok=True)
+            st.rerun()
         return
 
-    if st.button("Retrain sekarang", type="primary"):
-        LOCK.write_text("running", encoding="utf-8")
-        st.session_state["retrain_running"] = True
-        st.session_state["retrain_log"] = ""
-        process = subprocess.Popen(
-            [sys.executable, "-m", "src.run_all"],
-            cwd=PROJECT_ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-        )
-        lines: list[str] = []
-        assert process.stdout is not None
-        for line in process.stdout:
-            lines.append(line)
-            st.session_state["retrain_log"] = "".join(lines)
-        process.wait()
-        LOCK.unlink(missing_ok=True)
-        st.session_state["retrain_running"] = False
-        st.session_state["retrain_exit"] = process.returncode
-        st.rerun()
+    if locked:
+        st.info(f"Retrain berjalan — log terakhir {idle}s lalu.")
+        if RETRAIN_LOG.exists():
+            tail = RETRAIN_LOG.read_text(encoding="utf-8", errors="replace")
+            with st.expander("Log retrain", expanded=True):
+                st.code(tail[-4000:] if tail else "Menunggu output…", language="log")
+        return
 
-    if "retrain_exit" in st.session_state:
-        if st.session_state["retrain_exit"] == 0:
-            st.success("Retrain selesai. Model baru aktif.")
-        else:
-            st.error("Retrain gagal — lihat log di bawah.")
-        with st.expander("Log retrain"):
-            st.code(st.session_state.get("retrain_log", "")[-4000:], language="log")
+    confirmed = st.checkbox(
+        "Saya paham retrain akan menghasilkan versi model baru",
+        key="retrain_confirm",
+        value=False,
+    )
+    if st.button("Retrain sekarang", type="primary", disabled=not confirmed):
+        with open(RETRAIN_LOG, "w", encoding="utf-8") as log_handle:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "src.run_all"],
+                cwd=PROJECT_ROOT,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+            )
+        LOCK.write_text(str(proc.pid), encoding="utf-8")
+        st.rerun()
 
 
 retrain_runner()
 
 # ---- drift
-st.subheader("Drift (perubahan antar model)")
+st.subheader("Perubahan sejak model sebelumnya")
 if len(versions) >= 2:
     prev, last = versions[-2], versions[-1]
     pe = prev.get("evaluation", {}).get("decision_rates", {})
     le = last.get("evaluation", {}).get("decision_rates", {})
     d1, d2 = st.columns(2)
     d1.metric(
-        "Auto-match rate",
-        f"{le.get('MATCH', 0):.2%}",
-        delta=f"{(le.get('MATCH', 0) - pe.get('MATCH', 0)):.2%}",
+        "Digabung otomatis",
+        format_rate(le.get("MATCH", 0)),
+        delta=format_rate(le.get("MATCH", 0) - pe.get("MATCH", 0)),
+        delta_color="normal",
     )
     d2.metric(
-        "Review rate",
-        f"{le.get('REVIEW', 0):.2%}",
-        delta=f"{(le.get('REVIEW', 0) - pe.get('REVIEW', 0)):.2%}",
+        "Perlu diperiksa",
+        format_rate(le.get("REVIEW", 0)),
+        delta=format_rate(le.get("REVIEW", 0) - pe.get("REVIEW", 0)),
+        delta_color="inverse",
     )
-    st.caption("Delta vs model sebelumnya. Perubahan besar = pertimbangkan retrain.")
+    st.caption(
+        "Bandingkan dengan versi model sebelumnya. Kalau selisihnya besar, "
+        "artinya pola data berubah dan model perlu dilatih ulang."
+    )
 else:
-    st.caption("Butuh 2 model version untuk membandingkan drift.")
+    st.caption("Butuh 2 versi model untuk bisa dibandingkan.")
 
 # ---- perbandingan model (A/B)
-st.subheader("Perbandingan model")
+st.subheader("Daftar versi model")
 if len(versions) >= 2:
     rows = []
     for v in versions:
         ev = v.get("evaluation", {}).get("decision_rates", {})
         rows.append(
             {
-                "version": v["version"],
-                "input_rows": v.get("input_rows", 0),
-                "match": f"{ev.get('MATCH', 0):.2%}",
-                "review": f"{ev.get('REVIEW', 0):.2%}",
-                "non_match": f"{ev.get('NON_MATCH', 0):.2%}",
-                "runtime": f"{v.get('runtime_seconds', 0):.0f}s",
+                "Versi": v["version"],
+                "Jumlah record": format_count(v.get("input_rows", 0)),
+                "Digabung otomatis": format_rate(ev.get("MATCH", 0)),
+                "Perlu diperiksa": format_rate(ev.get("REVIEW", 0)),
+                "Berbeda orang": format_rate(ev.get("NON_MATCH", 0)),
+                "Waktu proses": format_duration(v.get("runtime_seconds", 0)),
             }
         )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 else:
-    st.caption("Butuh 2 model version.")
+    st.caption("Butuh 2 versi model.")
 
 # ---- feedback
-st.subheader("Feedback (manusia)")
+st.subheader("Catatan dari pemeriksaan manual")
 fb_path = LABELS_DIR / "feedback.csv"
 if fb_path.exists():
     fb = pd.read_csv(fb_path)
-    st.caption(f"{len(fb):,} baris feedback")
+    verdict = {
+        "match": "Orang yang sama",
+        "no_match": "Berbeda orang",
+    }
+    show = fb.tail(20).copy()
+    show["pair_id"] = show["pair_id"].astype(str).str.replace("__", " vs ")
+    show["human_label"] = show["human_label"].map(lambda v: verdict.get(str(v), str(v)))
+    show["model_version"] = show["model_version"].astype(str)
+    show = show.rename(columns={
+        "pair_id": "Pasangan",
+        "human_label": "Keputusan",
+        "reviewer": "Diperiksa oleh",
+        "model_version": "Model",
+        "stratum": "Asal",
+    })
+    show["Asal"] = show["Asal"].map(lambda v: stratum_label(v))
+    st.caption(
+        f"Total {len(fb):,} keputusan manual. 20 terakhir ditampilkan di sini. "
+        "Keputusan ini dipakai mengukur seberapa tepat sistem bekerja, bukan untuk "
+        "melatih model secara diam-diam."
+    )
     st.dataframe(
-        fb[["pair_id", "human_label", "reviewer", "model_version", "stratum"]].tail(20),
-        use_container_width=True,
+        show[["Pasangan", "Keputusan", "Diperiksa oleh", "Model", "Asal"]],
+        width="stretch",
+        hide_index=True,
+        height=320,
     )
 else:
-    st.caption("Belum ada feedback.")
+    st.caption("Belum ada catatan pemeriksaan.")
 
 # ---- triage laporan keanggotaan (dari halaman Master)
 flags_path = LABELS_DIR / "membership_flags.csv"
 if flags_path.exists():
-    st.subheader("Triage: laporan salah gabung / salah pecah")
+    st.subheader("Laporan Salah Gabung / Salah Pecah")
     flags = pd.read_csv(flags_path)
-    flags["status"] = flags["status"].fillna("open")
+    flags["status"] = flags["status"].fillna("open").astype(str)
+    flags["note"] = flags["note"].where(flags["note"].notna(), "").astype(str)
     open_count = int((flags["status"] == "open").sum())
     st.caption(
         f"{len(flags):,} laporan · {open_count:,} belum ditangani. "
-        "Laporan ini umpan balik untuk retrain: entity salah gabung/pecah "
-        "seharusnya memicu peninjauan pasangan di antrean review."
+        "Laporan ini masuk dari halaman **Daftar Customer** ketika ada yang "
+        "menyebut sekelompok customer ini salah digabung atau salah dipecah."
     )
-    edited_flags = st.data_editor(
-        flags,
-        disabled=[c for c in flags.columns if c not in ("status", "note")],
-        use_container_width=True,
+    issue_label = {
+        "wrong_merge": "Salah digabung",
+        "wrong_split": "Salah dipecah",
+    }
+    status_label = {
+        "open": "Belum ditangani",
+        "resolved": "Sudah ditangani",
+        "ignored": "Diabaikan",
+    }
+    # Nilai issue TIDAK diterjemahkan di kolom: file ini dibaca lagi oleh
+    # triage dan entity_correction yang mencari 'wrong_merge'/'wrong_split'
+    # persis. Yang diterjemahkan hanya judul kolomnya, dan nama kolom
+    # dikembalikan ke bentuk asli sebelum disimpan.
+    flags_titles = {
+        "timestamp": "Dilaporkan",
+        "entity_id": "Kode customer",
+        "issue": "Jenis laporan",
+        "reviewer": "Pelapor",
+        "note": "Catatan",
+        "status": "Tindak lanjut",
+    }
+    flags_view = flags.rename(
+        columns={k: v for k, v in flags_titles.items() if k in flags.columns}
+    )
+    edited_view = st.data_editor(
+        flags_view,
+        disabled=[c for c in flags_view.columns if c not in ("Tindak lanjut", "Catatan")],
+        width="stretch",
+        hide_index=True,
         column_config={
-            "status": st.column_config.SelectboxColumn(
-                "Status", options=["open", "resolved", "ignored"]
+            "Tindak lanjut": st.column_config.SelectboxColumn(
+                "Tindak lanjut",
+                options=["open", "resolved", "ignored"],
+                format_func=lambda v: status_label.get(str(v), str(v)),
             ),
-            "note": st.column_config.TextColumn("Catatan"),
+            "Catatan": st.column_config.TextColumn("Catatan"),
+            "Dilaporkan": st.column_config.TextColumn("Dilaporkan", width="small"),
         },
     )
-    if st.button("Simpan triage"):
-        edited_flags.to_csv(flags_path, index=False)
-        st.success("Triage disimpan.")
+    with st.expander("Apa arti jenis laporan?"):
+        st.markdown(
+            "- **wrong_merge** — beberapa customer sebenarnya berbeda orang, tapi "
+            "sistem menggabungkannya jadi satu.\n"
+            "- **wrong_split** — satu orang sebenarnya terpecah jadi beberapa "
+            "customer di sistem."
+        )
+    if st.button("Simpan tindak lanjut"):
+        edited_view.rename(columns={v: k for k, v in flags_titles.items()}).to_csv(
+            flags_path, index=False
+        )
+        st.success("Tindak lanjut disimpan.")
         st.rerun()
 else:
-    st.caption("Belum ada laporan keanggotaan (tandai dari halaman Master).")
+    st.caption("Belum ada laporan. Tandai dari halaman Daftar Customer.")
 
 # ---- threshold exploration
-st.subheader("Threshold exploration")
+st.subheader("Coba Batas Kepastian")
 st.caption(
-    "Apa yang terjadi kalau ambang MATCH/REVIEW digeser? Sweep dihitung ulang "
-    "dari label silver (bersifat optimis — pasangan mudah) dan gold (100 pasangan "
-    "positif, tanpa negatif sehingga presisi tidak bisa diukur di sana)."
+    "Di bawah ini ditunjukkan apa yang terjadi kalau batas kepastian digeser. "
+    "Angka-angkanya dihitung dari pasangan yang sudah diperiksa manusia, jadi "
+    "Ini perkiraan — bukan jaminan."
 )
 
 preds_path = OUTPUT_DIR / "splink_predictions.parquet"
@@ -229,49 +334,104 @@ if preds_path.exists() and silver_path.exists():
     merged = silver.merge(preds, on=["record_id_l", "record_id_r"], how="inner")
     coverage = len(merged) / len(silver) if len(silver) else 0.0
     st.caption(
-        f"Silver: {len(silver):,} label · {len(merged):,} ada di prediksi "
-        f"({coverage:.1%} coverage blocking). Sisanya tidak pernah jadi kandidat — "
-        "recall sebenarnya ≤ angka ini."
+        f"Dasar perhitungan: {len(silver):,} pasangan yang diperiksa. "
+        f"{len(merged):,} di antaranya pernah jadi kandidat perbandingan "
+        f"({format_rate(coverage)}). Sisanya terlewat karena datanya tidak mirip "
+        "sama sekali, jadi angka aslinya bisa lebih baik dari yang tertulis."
     )
     sweep = pd.DataFrame(
         [evaluate_at(merged, "label", "match_probability", t) for t in THRESHOLDS]
     )
+    shown = sweep[["threshold", "tp", "fp", "fn", "tn", "precision", "recall", "f1"]].copy()
+    shown["threshold"] = shown["threshold"].map(lambda v: format_threshold(v))
+    shown = shown.rename(columns={
+        "threshold": "Batas",
+        "tp": "Benar sama",
+        "fp": "Salah gabung",
+        "fn": "Terlewat",
+        "tn": "Benar beda",
+        "precision": "Ketepatan",
+        "recall": "Kelengkapan",
+        "f1": "Nilai gabungan",
+    })
+    for col in ("Benar sama", "Salah gabung", "Terlewat", "Benar beda"):
+        shown[col] = shown[col].map(format_count)
+    for col in ("Ketepatan", "Kelengkapan", "Nilai gabungan"):
+        shown[col] = shown[col].map(lambda v: format_rate(v))
+
     c1, c2 = st.columns(2)
     with c1:
-        st.dataframe(
-            sweep[["threshold", "tp", "fp", "fn", "tn", "precision", "recall", "f1"]],
-            use_container_width=True,
-        )
+        st.dataframe(shown, width="stretch", hide_index=True, height=340)
     with c2:
         st.line_chart(
             sweep.set_index("threshold")[["precision", "recall", "f1"]]
         )
+    with st.expander("Apa arti kolomnya?"):
+        st.markdown(
+            "- **Benar sama** — pasangan yang sistem bilang sama, dan memang sama.\n"
+            "- **Salah gabung** — sistem bilang sama, padahal berbeda orang. "
+            "Ini yang paling merusak: data jadi tercemar.\n"
+            "- **Terlewat** — sebenarnya sama, tapi tidak terambil. Lebih baik "
+            "daripada salah gabung.\n"
+            "- **Ketepatan / Kelengkapan / Nilai gabungan** — 100% berarti tidak ada "
+            "kesalahan sama sekali."
+        )
 
     # Terapkan threshold — aksi eksplisit, bukan otomatis.
-    st.markdown("**Terapkan threshold**")
+    st.markdown("**Ubah batas kepastian**")
+    st.caption(
+        "Batas ini yang menentukan kapan sistem menggabungkan sendiri. "
+        "Semakin tinggi batas atas, semakin sedikit yang digabung otomatis — "
+        "dan semakin banyak yang menunggu Anda periksa."
+    )
     model_dir = MODELS_DIR / cur if cur else None
     cur_match, cur_review = 0.9, 1e-10
     if model_dir and (model_dir / "thresholds.json").exists():
         tfile = json.loads((model_dir / "thresholds.json").read_text(encoding="utf-8"))
         cur_match = tfile.get("match_threshold", cur_match)
         cur_review = tfile.get("review_threshold", cur_review)
+
+    c0, c1 = st.columns([1, 1])
+    c0.metric(
+        "Batas gabung otomatis",
+        format_threshold(cur_match),
+        help="Peluang minimal agar sistem langsung menggabungkan tanpa asking.",
+    )
+    c1.metric(
+        "Batas bawah",
+        format_threshold(cur_review),
+        help="Di bawah peluang ini, pasangan dianggap pasti dua orang berbeda.",
+    )
+
     t1, t2, t3 = st.columns([2, 2, 3])
     new_match = t1.number_input(
-        "MATCH ≥", min_value=0.0, max_value=1.0, value=float(cur_match), step=0.01,
-        format="%.4f",
+        "Gabung otomatis bila peluang ≥",
+        min_value=0.0, max_value=1.0, value=float(cur_match),
+        step=0.01, format="%.2f",
+        help="Contoh: 0,90 berarti pasangan dengan peluang 90% ke atas "
+             f"langsung digabung. Sekarang: {format_threshold(cur_match)}.",
     )
     new_review = t2.number_input(
-        "REVIEW ≥", min_value=0.0, max_value=1.0, value=float(cur_review),
-        format="%.6g",
+        "Anggap pasti beda bila peluang <",
+        min_value=0.0, max_value=1.0, value=float(cur_review),
+        step=0.0000001, format="%.10f",
+        help="Nilai aslinya sengaja dibuat sangat kecil "
+             f"({format_threshold(cur_review)}) supaya tidak ada yang salah gabung. "
+             "Boleh diketik 0 bila tidak ada batas bawah.",
     )
-    reviewer_name = t3.text_input("Reviewer yang memutuskan", value="reviewer")
+    reviewer_name = t3.text_input("Nama Anda", value="reviewer")
     st.caption(
-        "Menerapkan threshold: (1) keputusan di prediksi dihitung ulang, "
-        "(2) clustering + master + evaluasi dijalankan ulang (~10 detik), "
-        "(3) nilai dicatat ke thresholds.json model aktif. Setelah ini semua "
-        "angka entity ikut berubah — pastikan sudah yakin."
+        "Setelah menekan tombol di bawah: (1) semua keputusan dihitung ulang, "
+        "(2) pengelompokan dan daftar customer dijalankan ulang (±10 detik), "
+        "(3) angka baru dicatat di model aktif. "
+        "Semua angka customer bisa berubah — pastikan sudah yakin."
     )
-    if st.button("Terapkan threshold", type="primary"):
+    confirm_threshold = st.checkbox(
+        "Saya paham semua angka customer akan berubah",
+        key="threshold_confirm",
+        value=False,
+    )
+    if st.button("Terapkan threshold", type="primary", disabled=not confirm_threshold):
         if not (0.0 <= new_review < new_match <= 1.0):
             st.error("Harus: 0 ≤ REVIEW < MATCH ≤ 1.")
         else:
@@ -309,6 +469,7 @@ if preds_path.exists() and silver_path.exists():
                     if module == "clustering" else
                     [sys.executable, "-m", f"src.{module}"],
                     cwd=PROJECT_ROOT, text=True,
+                    encoding="utf-8", errors="replace",
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1,
                 )
                 assert proc.stdout is not None
@@ -327,31 +488,51 @@ else:
     st.caption("Butuh predictions + silver_labels untuk sweep.")
 
 # ---- promotion checklist
-st.subheader("Promotion checklist")
+st.subheader("Cek Kelengkapan Sebelum Melatih Ulang")
+st.caption(
+    "Melatih ulang model hanya berguna kalau datanya sudah bersih. "
+    "Daftar ini tidak harus semuanya centang hijau, tapi melihat isinya "
+    "membantu memutuskan."
+)
 gold_path = LABELS_DIR / "gold_labels.csv"
 queue_path = LABELS_DIR / "review_queue.csv"
 checks = []
 if gold_path.exists():
     gold = pd.read_csv(gold_path)
-    checks.append((f"Gold label: {len(gold)} baris", len(gold) > 0))
+    checks.append((f"Keputusan manual tersimpan: {format_count(len(gold))} baris", len(gold) > 0))
 else:
-    checks.append(("Gold label: tidak ada", False))
+    checks.append(("Keputusan manual tersimpan: belum ada", False))
 if queue_path.exists():
     queue = pd.read_csv(queue_path)
     pending = int((queue["review_status"] == "pending").sum())
-    checks.append((f"Review queue pending: {pending}", pending == 0))
+    checks.append((f"Antrean kosong (sudah diperiksa semua): sisa {format_count(pending)}", pending == 0))
 else:
-    checks.append(("Review queue: tidak ada", True))
-checks.append((f"Model version: {cur}", cur is not None))
+    checks.append(("Antrean pemeriksaan: belum ada", True))
+checks.append((f"Model aktif tersedia: {cur}", cur is not None))
 for label, ok in checks:
-    st.write(f"{'✅' if ok else '❌'} {label}")
+    if ok:
+        st.success(f"Lengkap — {label}")
+    else:
+        st.warning(f"Belum — {label}")
 
 # ---- rollback
-st.subheader("Model rollback")
-st.caption("Kembalikan model aktif ke version sebelumnya (ubah latest.json).")
+st.subheader("Kembalikan ke Model Sebelumnya")
+st.caption(
+    "Kalau model baru hasilnya lebih buruk, kembalikan sistem ke versi yang "
+    "lama. Hanya model aktif yang berubah — data hasil processing tidakSentuh."
+)
 if len(versions) >= 2:
-    target = st.selectbox("Rollback ke", [v["version"] for v in versions[:-1]])
-    if st.button("Rollback"):
+    target = st.selectbox(
+        "Kembalikan ke versi",
+        [v["version"] for v in versions[:-1]],
+        format_func=lambda v: f"{v}  ({v[1:9].replace('-', '/')})",
+    )
+    confirm_rollback = st.checkbox(
+        f"Saya paham model aktif akan diganti ke {target}",
+        key="rollback_confirm",
+        value=False,
+    )
+    if st.button("Kembalikan sekarang", disabled=not confirm_rollback):
         LATEST.write_text(
             json.dumps(
                 {
@@ -366,10 +547,14 @@ if len(versions) >= 2:
         st.success(f"Model aktif sekarang: {target}")
         st.rerun()
 else:
-    st.caption("Butuh 2 model version untuk rollback.")
+    st.caption("Butuh 2 versi model untuk bisa mengembalikan.")
 
 # ---- retrain history
-st.subheader("Retrain history")
+st.subheader("Riwayat Pemrosesan")
+st.caption(
+    "Setiap kali data baru diproses, jejaknya tercatat di sini: berapa record "
+    "masuk, berapa yang digabung, dan berapa yang perlu diperiksa."
+)
 history_path = OUTPUT_DIR / "incremental_history.jsonl"
 if history_path.exists():
     history = [
@@ -378,18 +563,37 @@ if history_path.exists():
         if line.strip()
     ]
     if history:
-        st.dataframe(pd.DataFrame(history), use_container_width=True)
+        st.dataframe(
+            format_history_table(pd.DataFrame(history)),
+            width="stretch",
+            hide_index=True,
+            height=300,
+            column_config={
+                "Catatan": st.column_config.TextColumn("Catatan", width="large"),
+                "Waktu": st.column_config.TextColumn("Waktu", width="small"),
+                "Durasi": st.column_config.TextColumn("Durasi", width="small"),
+            },
+        )
+        st.caption(
+            "Kolom **Anomali waktu** berarti durasi yang tercatat bukan waktu proses "
+            "sesungguhnya — biasanya selisih waktu saat menunggu persetujuan."
+        )
     else:
         st.caption("Belum ada riwayat.")
 else:
     st.caption("Belum ada riwayat.")
 
 # ---- provenance
-st.subheader("Training provenance")
+st.subheader("Asal Data Model Ini")
 if versions:
     v = versions[-1]
     st.caption(
-        f"Model `{v['version']}` dilatih dari {v.get('input_rows', 0):,} row, "
-        f"{v.get('pairs_scored', 0):,} pasang, runtime {v.get('runtime_seconds', 0):.0f}s, "
-        f"seed {v.get('random_seed', '-')}, splink {v.get('splink_version', '-')}."
+        f"Model `{v['version']}` dibuat dari {format_count(v.get('input_rows', 0))} record, "
+        f"menilai {format_count(v.get('pairs_scored', 0))} pasangan, "
+        f"selama {format_duration(v.get('runtime_seconds', 0))}. "
+        f"Acak: {v.get('random_seed', '-')} · pustaka: {v.get('splink_version', '-')}."
+    )
+    st.caption(
+        "Nomor acak dipakai agar hasil bisa diulang persis. Kalau angkanya sama, "
+        "kesimpulannya bisa dipercaya."
     )

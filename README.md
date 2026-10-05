@@ -237,10 +237,14 @@ Berikut gambaran struktur modul dan penyimpanan sistem.
 ├── tests/
 │   └── test_smoke.py
 ├── notebooks/
+├── .streamlit/
+│   └── config.toml
 ├── requirements.txt
 ├── .gitignore
 └── README.md
 ```
+
+Daftar modul `src/` di atas bersifat ringkasan. Seluruh modul yang dapat dijalankan sebagai CLI terdaftar pada bagian [Pipeline dan Perintah Pendukung](#7-pipeline-dan-perintah-pendukung).
 
 ### Modul utama
 
@@ -270,6 +274,10 @@ Data mentah, hasil pemrosesan, label, dan output eksperimen disimpan secara loka
 * `models/`: konfigurasi dan parameter model beserta metadata versi.
 
 File data berukuran besar dan data pelanggan tidak seharusnya diunggah ke repository tanpa pemeriksaan keamanan dan kebutuhan yang jelas.
+
+### Dokumen lokal (tidak dikirim ke GitHub)
+
+Dokumen internal — `PRD.md`, `DESIGN.md`, `AGENTS.md`, `MASTER_CONTEXT.md.txt`, folder `docs/`, dan `.opencode/skills/` — hanya ada di disk lokal dan diabaikan via `.gitignore`. File-file tersebut tidak ikut ter-push ke GitHub, tetapi riwayat commit lama masih menyimpannya (lihat `git log --diff-filter=D`).
 
 ---
 
@@ -330,6 +338,12 @@ python -m src.incremental
 
 # Melihat riwayat koreksi entity
 python -m src.entity_correction --history
+
+# Evaluasi terhadap device_id (jalur independen dari silver label)
+python -m src.eval_truth --full
+
+# Ekspor bukti keputusan per pasangan (bahan explainability)
+python -m src.export_linkage --band review
 ```
 
 ---
@@ -459,7 +473,7 @@ Tujuannya adalah mengurangi pekerjaan berulang ketika jumlah data terus bertamba
 Hasil pengujian yang didokumentasikan:
 
 * Pemrosesan incremental sekitar 5 detik untuk batch berisi 100 baris.
-* Pemrosesan penuh sekitar 90 detik pada kondisi pengujian yang dilaporkan.
+* Pemrosesan penuh 97 detik (`outputs/run_summary.json`, run `v20261001_141528`, reuse model).
 * Tidak ditemukan perubahan entity ID lama ketika batch baru ditambahkan dalam eksperimen tersebut.
 
 Hasil ini merupakan pengukuran pada lingkungan dan skenario tertentu. Performa dapat berubah berdasarkan jumlah record, jumlah kandidat yang dihasilkan, aturan blocking, serta karakteristik data baru.
@@ -530,7 +544,7 @@ Beberapa area yang dapat dikembangkan untuk meningkatkan kemampuan sistem melipu
 * Menguji kualitas model pada dataset yang memiliki ground truth independen.
 * Mengevaluasi threshold berdasarkan trade-off precision, recall, dan kebutuhan review.
 * Menguji skenario konflik informasi, missing value, serta duplikasi lintas sumber.
-* Mengembangkan mekanisme koreksi entity dan validasi ulang hasil clustering.
+* Memperluas cakupan koreksi entity yang sudah tersedia (`entity_correction`) dan memvalidasi ulang hasil clustering setelah setiap koreksi.
 * Menguji stabilitas hasil incremental ketika volume dan variasi data meningkat.
 * Memperluas benchmark performa untuk mengukur kemampuan pemrosesan pada ukuran data yang lebih besar.
 

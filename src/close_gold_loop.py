@@ -26,8 +26,15 @@ def run(cmd: list[str], dry_run: bool) -> None:
     print(f"\n== {' '.join(cmd)}")
     if dry_run:
         return
-    result = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
-    sys.stdout.write(result.stdout)
+    # encoding is required: without it this file captured scenario_eval's output,
+    # which prints "→", the decoder thread died, and `result.stdout` was None —
+    # so `sys.stdout.write(None)` raised TypeError and the loop stopped after
+    # evaluate instead of finishing. errors="replace" keeps it total.
+    result = subprocess.run(
+        cmd, cwd=ROOT, text=True, capture_output=True,
+        encoding="utf-8", errors="replace",
+    )
+    sys.stdout.write(result.stdout or "")
     if result.stderr:
         sys.stderr.write(result.stderr)
     if result.returncode != 0:

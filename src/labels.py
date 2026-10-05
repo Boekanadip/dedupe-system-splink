@@ -274,13 +274,25 @@ def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
     ]
 
 
-def load_labels() -> tuple[pd.DataFrame | None, str]:
+def load_labels(source: str | None = None) -> tuple[pd.DataFrame | None, str]:
     """Return reviewed labels if gold exists, else silver, else nothing.
 
     The source string is returned so callers can refuse to call silver output
     "gold metrics".
+
+    `source` pins one file instead of preferring gold. Without it a caller had no
+    way to ask for silver once gold_labels.csv existed, so `threshold_eval
+    --source silver` raised instead of reporting — the flag looked broken rather
+    than unavailable.
     """
-    for path, source in ((GOLD_PATH, "gold"), (SILVER_PATH, "silver")):
+    if source in (None, "auto"):
+        order = ((GOLD_PATH, "gold"), (SILVER_PATH, "silver"))
+    elif source in ("gold", "silver"):
+        order = ((GOLD_PATH, "gold"),) if source == "gold" else ((SILVER_PATH, "silver"),)
+    else:
+        raise ValueError(f"Unknown label source {source!r}; expected 'gold', 'silver' or 'auto'.")
+
+    for path, name in order:
         if not path.exists():
             continue
         # sep=None sniffs the delimiter. Reviewed files come back from Excel
@@ -303,7 +315,7 @@ def load_labels() -> tuple[pd.DataFrame | None, str]:
 
         pairs = raw[["record_id_l", "record_id_r"]].astype(str)
         normalised = raw[label_col].map(normalise_label)
-        if source == "gold" and normalised.isna().any():
+        if name == "gold" and normalised.isna().any():
             # A typo like "yes"/"maybe" would otherwise become a silent negative
             # and quietly poison precision and recall.
             bad = sorted(set(raw[label_col].astype(str)[normalised.isna()]))[:5]
@@ -318,7 +330,7 @@ def load_labels() -> tuple[pd.DataFrame | None, str]:
             }
         )
         labels["is_positive"] = normalised == "match"
-        return labels.drop_duplicates(), source
+        return labels.drop_duplicates(), name
 
     return None, "none"
 

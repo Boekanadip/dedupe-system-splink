@@ -1,13 +1,12 @@
-"""Review queue coverage page.
+"""Halaman cakupan antrean pemeriksaan.
 
-The review queue is a SAMPLE of the REVIEW band (a few hundred of tens of
-thousands). This page shows the full REVIEW band with coverage: which pairs are
-already queued, which are not, and lets a reviewer work through them.
+Antrean pemeriksaan hanya sampel dari ribuan pasangan yang perlu diperiksa.
+Halaman ini menampilkan seluruhnya, lalu menunjukkan pasangan mana yang sudah
+masuk antrean dan mana yang belum, supaya bisa langsung dikerjakan.
 """
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -16,89 +15,98 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT
-
-st.set_page_config(page_title="Review queue", page_icon="📋", layout="wide")
-st.title("Review queue coverage")
-st.caption(
-    "Semua pasangan di band REVIEW. Antrian review adalah sample — "
-    "halaman ini melihat semuanya."
+from src.config import LABELS_DIR, OUTPUT_DIR
+from src.ui import (
+    format_probability,
+    how_to_read,
+    monitoring_sidebar,
+    page_guide,
+    page_header,
+    paginate,
+    probability_verdict,
 )
+
+st.set_page_config(page_title="Antrean - Entity Resolution", page_icon="📋", layout="wide")
+page_header(
+    "Antrean Pemeriksaan",
+    "Semua pasangan yang perlu diperiksa manusia. Antrean kerja hanya mengambil "
+    "sebagian kecil dari daftar ini.",
+)
+monitoring_sidebar()
+page_guide(__file__)
+how_to_read()
 
 QUEUE_PATH = LABELS_DIR / "review_queue.csv"
 PREDS_PATH = OUTPUT_DIR / "splink_predictions.parquet"
 
 if not PREDS_PATH.exists():
-    st.info("Belum ada predictions. Jalankan pipeline dulu.")
+    st.info("Belum ada data hasil pemeriksaan. Jalankan pipeline dulu dari halaman Upload.")
     st.stop()
 
 preds = pd.read_parquet(
     PREDS_PATH,
-    columns=["record_id_l", "record_id_r", "match_probability", "match_weight", "decision"],
+    columns=["record_id_l", "record_id_r", "match_probability", "decision"],
 )
+# Filter lewat kolom decision, bukan perbandingan angka, supaya halaman ini
+# selalu sama dengan yang dipakai pipeline.
 review = preds[preds["decision"] == "REVIEW"].copy()
-# REVIEW-band probabilities sit between 1e-10 and 0.9, so most read as 0.0000 in
-# a fixed-decimal column. log10 turns them into a readable number, and
-# match_weight (log2) is Splink's own scale.
-review["log10_p"] = review["match_probability"].apply(
-    lambda p: round(p, 12) and __import__("math").log10(p) if p > 0 else None
-)
 
-# Which are already in the queue?
 if QUEUE_PATH.exists():
     queue = pd.read_csv(QUEUE_PATH)
     queued = set(zip(queue["record_id_l"], queue["record_id_r"]))
 else:
     queued = set()
-review["queued"] = [
+review["sudah_di_antrean"] = [
     (l, r) in queued for l, r in zip(review["record_id_l"], review["record_id_r"])
 ]
 
-st.subheader("Coverage")
+st.subheader("Ringkasan")
 total = len(review)
-n_queued = int(review["queued"].sum())
+n_queued = int(review["sudah_di_antrean"].sum())
 m1, m2, m3 = st.columns(3)
-m1.metric("Total REVIEW pair", f"{total:,}")
-m2.metric("Sudah di antrian", f"{n_queued:,}")
-m3.metric("Belum di antrian", f"{total - n_queued:,}")
+m1.metric("Pasangan perlu diperiksa", f"{total:,}", help="Semua pasangan yang tidak yakin, sebelum diantrekan.")
+m2.metric("Sudah masuk antrean", f"{n_queued:,}", help="Tersedia di halaman Pemeriksaan untuk Anda nilai.")
+m3.metric("Belum masuk antrean", f"{total - n_queued:,}", help="Belum pernah dilihat manusia.")
 
-# ---- filter
-st.subheader("Filter")
+st.subheader("Saring")
 f1, f2 = st.columns(2)
-queued_filter = f1.selectbox("Status antrian", ["(semua)", "Sudah", "Belum"])
-score_min = f2.slider("Skor minimum", 0.0, 1.0, 0.0)
+queued_filter = f1.selectbox(
+    "Sudah di antrean?", ["(semua)", "Sudah", "Belum"]
+)
+score_min = f2.slider("Peluang minimal", 0.0, 1.0, 0.0)
 filtered = review[review["match_probability"] >= score_min]
 if queued_filter == "Sudah":
-    filtered = filtered[filtered["queued"]]
+    filtered = filtered[filtered["sudah_di_antrean"]]
 elif queued_filter == "Belum":
-    filtered = filtered[~filtered["queued"]]
-st.caption(f"Menampilkan {len(filtered):,} dari {total:,}")
+    filtered = filtered[~filtered["sudah_di_antrean"]]
+st.caption(f"Menampilkan {len(filtered):,} dari {total:,} pasangan.")
 
-# ---- tabel dengan paginasi
-st.subheader("Pasangan REVIEW")
-page_size = 50
-n_pages = max(1, (len(filtered) + page_size - 1) // page_size)
-page = st.number_input("Halaman", min_value=1, max_value=n_pages, value=1)
-start = (page - 1) * page_size
-page_df = filtered.iloc[start : start + page_size]
-st.caption(f"Halaman {page} dari {n_pages}")
+st.subheader("Daftar pasangan")
+page_df, _ = paginate(filtered, page_size=50, key="queue_page")
+table = page_df[["record_id_l", "record_id_r", "match_probability", "sudah_di_antrean"]].copy()
+table["Peluang sama"] = table["match_probability"].map(format_probability)
+table["Di antrean"] = table["sudah_di_antrean"].map(
+    {True: "Sudah", False: "Belum"}
+)
+table["Record A"] = table["record_id_l"]
+table["Record B"] = table["record_id_r"]
 st.dataframe(
-    page_df[["record_id_l", "record_id_r", "log10_p", "match_weight", "match_probability", "queued"]],
-    use_container_width=True,
-    column_config={
-        "log10_p": st.column_config.NumberColumn("log10(P)", format="%.2f"),
-        "match_weight": st.column_config.NumberColumn("Weight (log2)", format="%.2f"),
-        "match_probability": st.column_config.NumberColumn("P", format="%.2e"),
-    },
+    table[["Record A", "Record B", "Peluang sama", "Di antrean"]],
+    width="stretch",
+    hide_index=True,
+    height=460,
 )
 
-# ---- tambah ke antrian
-st.subheader("Tambah ke antrian review")
+if not filtered.empty:
+    st.caption(probability_verdict(float(filtered["match_probability"].max())))
+
+st.subheader("Masukkan ke antrean kerja")
 st.caption(
-    "Masukkan pasangan terpilih ke review_queue.csv (stratum incremental_new_batch) "
-    "agar muncul di halaman Review."
+    "Pasangan yang sedang disaring di atas akan ditambahkan ke antrean, supaya "
+    "bisa diputuskan di halaman **Pemeriksaan**. Memakai antrean tidak mengubah "
+    "data asli apa pun."
 )
-if st.button("Tambah yang terfilter ke antrian"):
+if st.button("Tambahkan yang disaring ke antrean"):
     from src.labels import carry_over_reviewed
 
     new_rows = filtered[["record_id_l", "record_id_r", "match_probability"]].copy()
@@ -111,5 +119,5 @@ if st.button("Tambah yang terfilter ke antrian"):
     combined = pd.concat([old_queue, new_rows], ignore_index=True)
     combined = carry_over_reviewed(combined)
     combined.to_csv(QUEUE_PATH, index=False)
-    st.success(f"Ditambahkan {len(new_rows):,} pasangan ke antrian.")
+    st.success(f"Menambahkan {len(new_rows):,} pasangan ke antrean kerja.")
     st.rerun()

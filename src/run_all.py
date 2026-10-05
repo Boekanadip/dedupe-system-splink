@@ -38,15 +38,20 @@ def run_step(name: str, module_args: list[str]) -> dict:
     command = [sys.executable, "-m", f"src.{module_args[0]}", *module_args[1:]]
     print(f"\n{'=' * 70}\n== {name}\n== {' '.join(command[2:])}\n{'=' * 70}", flush=True)
     started = time.perf_counter()
-    result = subprocess.run(command, text=True, capture_output=True)
+    # encoding/errors are required, not cosmetic: without them a step printing
+    # any character outside the console codepage (scenario_eval prints "→") kills
+    # the reader thread, and the caller gets returncode 0 with stdout=None.
+    result = subprocess.run(
+        command, text=True, capture_output=True, encoding="utf-8", errors="replace"
+    )
     elapsed = round(time.perf_counter() - started, 2)
 
     if result.returncode != 0:
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
+        sys.stdout.write(result.stdout or "")
+        sys.stderr.write(result.stderr or "")
         raise SystemExit(f"Step {name!r} failed with exit code {result.returncode}")
 
-    tail = [ln for ln in result.stdout.splitlines() if ln.strip()][-6:]
+    tail = [ln for ln in (result.stdout or "").splitlines() if ln.strip()][-6:]
     for line in tail:
         print(f"   {line}")
     return {"step": name, "command": " ".join(command[2:]), "seconds": elapsed}

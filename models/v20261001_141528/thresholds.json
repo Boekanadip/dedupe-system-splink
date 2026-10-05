@@ -1,5 +1,11 @@
 {
   "match_threshold": 0.9,
-  "review_threshold": 1e-10,
-  "policy": "P >= match -> MATCH; review <= P < match -> REVIEW; P < review -> NON_MATCH"
+  "review_threshold": 0.001,
+  "policy": "P >= match -> MATCH; review <= P < match -> REVIEW; P < review -> NON_MATCH",
+  "applied_at": "2026-10-05T14:25:22",
+  "reviewer": "reviewer",
+  "previous": {
+    "match_threshold": 0.9,
+    "review_threshold": 1e-10
+  }
 }

@@ -729,12 +729,16 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
     staging_path(batch).unlink(missing_ok=True)
     staged_preds_path(batch).unlink(missing_ok=True)
 
+    # New entities = entity ids this batch introduced, NOT the running total.
+    # nunique() over the whole map returned 48380 and poisoned the "Batch per
+    # minggu" chart on the dashboard (entity_baru summed totals as deltas).
+    staged_entities = set(proposal.values()) - set(existing_map["entity_id"])
     history = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "batch": batch["file"],
         "rows": batch["rows"],
         "new_records": len(new_std),
-        "new_entities": int(updated_map["entity_id"].nunique()),
+        "new_entities": len(staged_entities),
         "entity_merges": [],
         "affected_entities": len(affected),
         "match_edges": int((staging["action"] == "match").sum()),
