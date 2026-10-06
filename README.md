@@ -6,31 +6,7 @@ Sistem **CRM Entity Resolution & Deduplication** untuk mendeteksi, mengevaluasi,
 
 Pipeline utama:
 
-```text
-CSV
- ↓
-Schema Validation
- ↓
-Record ID Generation
- ↓
-Data Standardization
- ↓
-Blocking / Candidate Generation
- ↓
-Splink Probabilistic Record Linkage
- ↓
-MATCH / REVIEW / NON_MATCH
- ↓
-Human Review
- ↓
-Clustering
- ↓
-Entity ID
- ↓
-Master Record
- ↓
-Evaluation & Feedback
-```
+<img width="2553" height="2082" alt="Image" src="https://github.com/user-attachments/assets/a18c9992-e3ee-4347-991d-79356fea0adf" />
 
 Dibangun menggunakan **Python, Splink, DuckDB, Pandas, PyArrow, dan Streamlit**.
 
