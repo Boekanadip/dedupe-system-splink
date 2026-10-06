@@ -34,8 +34,7 @@ Evaluation & Feedback
 
 Dibangun menggunakan **Python, Splink, DuckDB, Pandas, PyArrow, dan Streamlit**.
 
-> Dataset `crm_50000_customers_dirty_v3.csv` digunakan sebagai dataset pengembangan dan evaluasi awal. Dataset tersebut bukan bukti kapasitas produksi.
-
+> Dataset `crm_50000_customers_dirty_v3.csv` digunakan sebagai dataset pengembangan dan evaluasi awal.
 ---
 
 # 1. Quick Start — Menjalankan Demo
@@ -52,15 +51,7 @@ Pastikan sudah tersedia:
 * Dataset dan/atau artifact yang dibutuhkan project
 * Koneksi internet saat proses clone dan instalasi dependency
 
-Project dikembangkan menggunakan Python 3.14.
-
-Tidak membutuhkan:
-
-* Spark
-* Server database
-* GPU
-
-DuckDB berjalan secara lokal di dalam aplikasi.
+Project dikembangkan menggunakan Python 3.14. DuckDB berjalan secara lokal di dalam aplikasi.
 
 ---
 
