@@ -222,7 +222,7 @@ Buka alamat tersebut di browser.
 
 # 5. Jalur Demo yang Disarankan
 
-Untuk demo di laptop baru, gunakan urutan:
+Untuk demo gunakan urutan:
 
 ```text
 1. Clone repository
