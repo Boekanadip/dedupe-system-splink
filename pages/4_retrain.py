@@ -450,8 +450,7 @@ if preds_path.exists() and silver_path.exists():
                 (model_dir / "thresholds.json").write_text(
                     json.dumps(tfile, indent=2), encoding="utf-8"
                 )
-            # Keputusan di prediksi harus dihitung ulang dulu: clustering membaca
-            # kolom decision, bukan config.
+
             import numpy as np
 
             full = pd.read_parquet(preds_path)
