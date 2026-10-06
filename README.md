@@ -125,7 +125,17 @@ Dependency utama project meliputi:
 * `pyarrow`
 * `streamlit`
 
-Versi lengkap mengikuti `requirements.txt`.
+Versi lengkap mengikuti `requirements.txt`. Itu sumber yang benar — kalau ada
+library yang dipakai kode tapi tidak ada di sana, `requirements.txt` yang ketinggalan,
+bukan kodenya.
+
+Dua hal yang perlu diketahui:
+
+* `duckdb` tidak ditulis eksplisit di `requirements.txt`, tapi dipakai langsung oleh
+  beberapa modul dan juga dibawa oleh `splink`. Biasanya terpasang otomatis.
+* `pages/4_retrain.py` mengimpor `psutil`, dan `psutil` **tidak** ada di
+  `requirements.txt`. Kalau halaman Latih Ulang membuka `ModuleNotFoundError: psutil`,
+  jalankan `pip install psutil`. Ini keterbatasan repository, bukan kesalahan install Anda.
 
 ---
 
@@ -161,42 +171,34 @@ crm_50000_customers_dirty_v3.csv
 
 Dataset berasal dari Kaggle Customer 360 dan digunakan untuk pengembangan/evaluasi.
 
-Repository menggunakan:
+**File ini TIDAK ikut di repository.** Pola `data/raw/*` ada di `.gitignore`, jadi setelah
+`git clone` folder `data/raw/` hanya berisi file `.gitkeep`. Pipeline `src.run_all`
+akan gagal di langkah `profiling` kalau file CSV tidak ditempatkan manual di:
+
+```text
+data/raw/crm_50000_customers_dirty_v3.csv
+```
+
+(Path diambil dari `src/config.py:7` — `RAW_DATA_PATH`.)
+
+Jika Anda sudah punya dataset CRM lain, letakkan di path itu (atau sesuaikan
+`src/config.py` jika memang perlu). Jangan mengubah config hanya agar file terbaca
+tanpa memahami pemetaan kolomnya.
+
+Repository menggunakan struktur:
 
 ```text
 data/
-├── raw/
-├── processed/
-└── labels/
+├── raw/       ← CSV mentah (gitignored, letakkan dataset di sini)
+├── processed/ ← hasil standardisasi (gitignored, dibuat pipeline)
+└── labels/    ← review/gold/feedback (gitignored, dibuat pipeline)
 ```
 
-### Penting
-
-Dataset mentah dan hasil pemrosesan tidak seharusnya dimasukkan ke repository jika berisi data besar atau data pelanggan.
-
-Sebelum menjalankan pipeline, pastikan file CSV berada pada **lokasi input yang dibaca oleh `src/config.py`**.
-
-Jika menggunakan dataset baru, jangan langsung mengasumsikan nama kolom sama dengan dataset development. Jalankan validasi upload terlebih dahulu.
-
-Untuk melihat konfigurasi input:
-
-```text
-src/config.py
-```
-
-Untuk validasi file:
-
-```powershell
-python -m src.validate_upload <path-file.csv>
-```
-
-Contoh:
+Validasi file (kolom wajib, delimiter, encoding):
 
 ```powershell
 python -m src.validate_upload data/raw/crm_50000_customers_dirty_v3.csv
 ```
-
-> Gunakan path aktual sesuai konfigurasi repository. Jangan mengubah `src/config.py` hanya agar file dapat dibaca tanpa memahami pemetaan kolomnya.
 
 ---
 
@@ -438,33 +440,81 @@ Data yang berhubungan dengan review dan evaluasi, seperti:
 
 ## `models/`
 
-Versi model dan konfigurasi model.
-
-Contoh:
+**Versi model TERSEDIAP di git.** Setiap clone langsung membawa model yang pernah
+dilatih. Ini adalah hasil dari beberapa `run_all` sebelumnya yang dilacak:
 
 ```text
 models/
+├── latest.json
+├── v20260930_142409/
+│   ├── model.json
+│   ├── metadata.json
+│   ├── thresholds.json
+│   └── evaluation.json
+├── v20261001_092908/
+│   ├── model.json
+│   ├── metadata.json
+│   ├── thresholds.json
+│   └── evaluation.json
 ├── v20261001_141528/
 │   ├── model.json
 │   ├── metadata.json
 │   ├── thresholds.json
 │   └── evaluation.json
-└── latest.json
+├── v20261005_142821/
+│   ├── model.json
+│   ├── metadata.json
+│   ├── thresholds.json
+│   └── evaluation.json
+└── v20261005_145258/
+    ├── model.json
+    ├── metadata.json
+    ├── thresholds.json
+    └── evaluation.json
 ```
 
-## `outputs/`
+File `latest.json` selalu menunjuk ke versi terbaru. Halaman Streamlit dan
+`pages/6_batch.py` membacanya secara default. Jika Anda mengubah atau menghapus
+versi, pastikan model aktif diatur kembali atau jalankan:
 
-Output pipeline, prediksi, entity map, dan laporan evaluasi.
+```powershell
+python -m src.run_all --reuse-model latest
+```
 
-### Catatan
+Contoh struktur minimal (versi baru dibuat saat pipeline dijalankan):
 
-Data pelanggan, file CSV besar, hasil intermediate, dan artifact yang hanya diperlukan pada mesin tertentu tidak boleh dimasukkan ke repository tanpa pemeriksaan terlebih dahulu.
+```text
+models/
+├── latest.json
+└── v<tanggal_waktu>/...
+```
+
+## `outputs/` dan `data/`
+
+Folder ini **hanya berisi `.gitkeep`** setelah clone. Artifact-artifact penting
+(clustering, entity map, prediksi, dll.) dibuat oleh pipeline saat dijalankan.
+
+Lihat alurnya:
+
+* Setelah `run_all` atau `app.py` diproses, `outputs/` akan diisi berisi:
+  `splink_predictions.parquet`, `entity_map.parquet`, `master_customers.parquet`,
+  `run_summary.json`, `thresholds_override.json` (jika ada).
+* `data/processed/` diisi dengan `crm_standardized.parquet`.
+* `data/labels/` diisi dengan `review_queue.csv`, `gold_labels.csv`, `feedback.csv`.
+
+Jika halaman Streamlit menampilkan pesan **"Belum ada data"** atau
+**"artifact not found"**, berarti Anda baru clone dan belum menjalankan
+pipeline. Jalankan langkah validasi/setup lalu jalankan Streamlit.
+
+**Catatan:** Data pelanggan, file CSV besar, hasil intermediate, dan artifact
+hanya diperlukan mesin tertentu tidak boleh dimasukkan ke repository tanpa pemeriksaan
+terlebih dahulu. File penting dipisahkan sesuai aturan `.gitignore`.
 
 ---
 
-# 11. Model Lifecycle
+# 11. Model Lifecycle & Feedback Loop
 
-Model disimpan berdasarkan versi.
+Model disimpan berdasarkan versi dengan pola:
 
 ```text
 models/
@@ -484,9 +534,40 @@ models/
 | `evaluation.json` | Ringkasan evaluasi model                       |
 | `latest.json`     | Menunjukkan model aktif                        |
 
-Model tersimpan digunakan untuk pemrosesan data berikutnya.
+Setelah clustering atau hasil model baru, yang terpenting: **tidak ada yang langsung di-"terima" mentah.**
 
-Retraining dilakukan secara eksplisit sehingga perubahan model tidak terjadi diam-diam hanya karena ada data baru.
+Alurnya berjalan dua arah, tidak lurus:
+
+```text
+Upload (app.py)
+  ├─ run_all --full  (belum ada model)  → buat model + artifact
+  └─ incremental --stage (sudah ada model) → buat proposal staging
+
+Hasil (predictions + entity_map + master) muncul.
+↓
+pages/6_batch.py  → review batch baru SEBELUM digabung (human gate)
+pages/5_queue.py  → daftar pasangan REVIEW yang perlu diperiksa
+pages/1_review.py  → putuskan match/no_match per pasangan
+  ↓
+"Tersimpan ke daftar utama" → src.labels --promote → data/labels/gold_labels.csv
+
+src.close_gold_loop --all  (bisa juga manual 1-2 langkah)
+  → src.feedback  (append-only)
+  → src.apply_gold --apply --recluster  (ubah decision, recluster, rebuild master)
+  → src.evaluate / scenario_eval / threshold_eval
+
+Hasil revisi ini bisa langsung dipakai. Untuk mengubah parameter model,
+keputusan retrain tetap **eksplisit** di pages/4_retrain.py.
+```
+
+**Kuncinya:**
+
+* `feedback.csv` & `gold_labels.csv` **tidak** membuat model retrain sendiri.
+* Mengubah threshold bisa tanpa retrain (lihat `outputs/thresholds_override.json`).
+* Retrain cuma terjadi kalau ditekan **"Retrain sekarang"** di halaman Latih Ulang.
+* Setelah "Apply" batch atau setelah `close_gold_loop`, kembali ke review/eksplorasi:
+  `pages/3_dashboard.py`, `pages/2_master.py`, `pages/8_explain.py`, `pages/9_history.py`,
+  bukan "restart" penuh.
 
 ---
 
@@ -932,3 +1013,11 @@ python -m streamlit run app.py
 ```
 
 Jika seluruh langkah berhasil, aplikasi dapat digunakan melalui alamat lokal yang ditampilkan oleh Streamlit.
+
+---
+
+**Catatan singkat:**
+
+* `pytest` mungkin belum terpasang di laptop kosong. Kalau `python tests/test_smoke.py` gagal dengan "No module named pytest" tapi Anda pakai file test Python biasa, tetap bisa pakai `python tests/test_smoke.py` (tanpa pytest). Test ini bisa dijalankan langsung dengan Python.
+* `psutil` dibutuhkan `pages/4_retrain.py` tapi **tidak** ada di `requirements.txt`. Kalau muncul `ModuleNotFoundError: psutil`, jalankan: `pip install psutil`.
+* Dataset raw **tidak ikut repo**. Wajib diletakkan manual di `data/raw/crm_50000_customers_dirty_v3.csv`. Artifact (`models/outputs/data/*`) dibuat otomatis oleh pipeline.
