@@ -6,7 +6,7 @@ Sistem **CRM Entity Resolution & Deduplication** untuk mendeteksi, mengevaluasi,
 
 Pipeline utama:
 
-<img width="2553" height="2082" alt="Image" src="https://github.com/user-attachments/assets/a18c9992-e3ee-4347-991d-79356fea0adf" />
+<img width="2265" height="2151" alt="Image" src="https://github.com/user-attachments/assets/692a6d6a-58e0-4b1a-92e5-b2928cf18eb6" />
 
 Dibangun menggunakan **Python, Splink, DuckDB, Pandas, PyArrow, dan Streamlit**.
 
@@ -725,8 +725,8 @@ Distribusi skor pada development run:
 
 | Rentang       |  Jumlah |
 | ------------- | ------: |
-| ≤ 1e-10       | 261.530 |
-| 1e-10 – 0,001 |  46.336 |
+| ≤ 1e-5        | 261.530 |
+| 1e-5 – 0,001  |  46.336 |
 | 0,001 – 0,01  |      25 |
 | 0,01 – 0,1    |       2 |
 | 0,1 – 0,9     |       0 |

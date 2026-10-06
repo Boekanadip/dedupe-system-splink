@@ -543,7 +543,7 @@ def main() -> None:
             if staged_model != current_name:
                 raise SystemExit(
                     f"Staging was scored by {staged_model} but the active model is "
-                    f"{current_name}. The proposal is stale — reject it and re-stage:\n"
+                    f"{current_name}. The proposal is stale â€” reject it and re-stage:\n"
                     f"  python -m src.incremental --reject\n"
                     f"  python -m src.incremental --stage"
                 )
@@ -617,7 +617,7 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
 
     # Start from the staged proposal: record_id -> proposed_entity_id. A record
     # the reviewer did not approve does NOT join the proposed entity: it enters
-    # the dataset as its own new entity (records are never silently dropped —
+    # the dataset as its own new entity (records are never silently dropped â€”
     # AGENTS.md data rules).
     proposal = dict(zip(staging["record_id"], staging["proposed_entity_id"]))
     if "approved" in staging.columns:
@@ -634,7 +634,7 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
                 next_id += 1
                 proposal[rid] = f"ent_{next_id:06d}"
             print(
-                f"  {len(rejected):,} record tidak disetujui reviewer — "
+                f"  {len(rejected):,} record tidak disetujui reviewer â€” "
                 "masuk sebagai entity baru sendiri, tidak digabung."
             )
 
@@ -670,7 +670,7 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
     )
     # Append the pairs scored during --stage. Skipping this leaves the predictions
     # file without the new batch, and the device-truth check then reports pairs it
-    # cannot find scored — an artifact that looks like a modelling failure.
+    # cannot find scored â€” an artifact that looks like a modelling failure.
     preds_path = predictions_path(full=True)
     staged_preds = staged_preds_path(batch)
     if preds_path.exists() and staged_preds.exists():
