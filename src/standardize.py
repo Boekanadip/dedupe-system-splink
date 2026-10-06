@@ -12,6 +12,7 @@ from .config import (
     BENCHMARK_RULES,
     COLUMN_MAP,
     DATE_ORDER,
+    DEVICE_ID_ALIASES,
     PROCESSED_DATA_PATH,
     RAW_DATA_PATH,
     SOURCE_RECORD_ID_COLUMN,
@@ -46,7 +47,7 @@ def normalize_email(value) -> str | None:
 
 
 def normalize_phone(value) -> str | None:
-    """Digits only, with the extension dropped.
+    r"""Digits only, with the extension dropped.
 
     MEASURED on the 50k development file before this change: 29,966 of 50,000
     values carry an "xNNN" extension, and `re.sub(r"\D", "")` folded the
@@ -57,6 +58,9 @@ def normalize_phone(value) -> str | None:
     The extension is dropped, not the whole number: a shared switchboard with
     different extensions is still evidence of the same organisation, and the
     main line is the part a customer would recognise as their number.
+
+    Raw docstring on purpose: a plain one turns the "\D" above into a SyntaxWarning
+    on every import.
     """
     if pd.isna(value):
         return None
@@ -296,6 +300,12 @@ def standardize(
         df[f"{canonical}_std"] = df[source].map(lambda v: normalize_date(v, dayfirst))
 
     source = COLUMN_MAP["device_ids"]
+    if source not in df and DEVICE_ID_ALIASES:
+        # The 50k file ships `device_id(s)`, batch_0005 ships `device_id`.
+        # COLUMN_MAP holds one name per canonical field, so without this the 200
+        # records of batch_0005 arrived with no device truth at all and their 35
+        # MATCH edges could never be verified.
+        source = next((alt for alt in DEVICE_ID_ALIASES if alt in df), source)
     if source in df:
         df["device_ids_std"] = df[source].map(normalize_device_ids)
 
