@@ -279,48 +279,7 @@ Training ulang **bukan proses otomatis setiap kali data baru masuk**.
 
 # 7. Arsitektur Sistem
 
-```text
-                    DATA INPUT
-                        │
-                        ▼
-                Schema Validation
-                        │
-                        ▼
-               Record ID Generation
-                        │
-                        ▼
-                Data Standardization
-                        │
-                        ▼
-              Blocking / Candidate
-                  Generation
-                        │
-                        ▼
-             Splink Probabilistic
-                Record Linkage
-                        │
-                        ▼
-              Decision Classification
-                 /       |       \
-                /        |        \
-            MATCH      REVIEW    NON_MATCH
-               │          │
-               │     Human Review
-               │          │
-               └──────────┘
-                        │
-                        ▼
-                   Clustering
-                        │
-                        ▼
-                    Entity ID
-                        │
-                        ▼
-                  Master Record
-                        │
-                        ▼
-              Evaluation & Feedback
-```
+<img width="2553" height="2082" alt="Image" src="https://github.com/user-attachments/assets/a18c9992-e3ee-4347-991d-79356fea0adf" />
 
 ## Komponen utama
 
