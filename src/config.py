@@ -62,6 +62,13 @@ COLUMN_MAP = {
     "source": "source",
 }
 
+# Extra names accepted for the device column, tried only when COLUMN_MAP's name is
+# absent. Needed because batches disagree on the spelling: the 50k file ships
+# `device_id(s)`, batch_0005 ships `device_id`, and a canonical field can only hold
+# one name here. ponytail: extend this only for a measured mismatch, not for
+# names seen in theory - a wrong alias silently drops a whole column of truth.
+DEVICE_ID_ALIASES: tuple[str, ...] = ("device_id",)
+
 SOURCE_RECORD_ID_COLUMN = None
 
 # Day/month order for ambiguous dates (both parts <= 12). None means "derive it
