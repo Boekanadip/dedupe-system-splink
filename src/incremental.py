@@ -729,6 +729,14 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
     staging_path(batch).unlink(missing_ok=True)
     staged_preds_path(batch).unlink(missing_ok=True)
 
+    # Append the new batch's REVIEW pairs to the review queue.
+    try:
+        old_std_q = pd.read_parquet(PROCESSED_DATA_PATH)
+        full_std_q = pd.concat([old_std_q, new_std], ignore_index=True)
+        update_review_queue(new_std, full_std_q)
+    except Exception:
+        pass
+
     # New entities = entity ids this batch introduced, NOT the running total.
     # nunique() over the whole map returned 48380 and poisoned the "Batch per
     # minggu" chart on the dashboard (entity_baru summed totals as deltas).
