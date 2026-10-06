@@ -878,19 +878,6 @@ Pipeline sudah mencakup:
 * model versioning
 * incremental processing
 
-Namun project belum boleh dianggap sebagai bukti kesiapan production pada skala besar.
-
-Validasi lebih lanjut masih diperlukan untuk:
-
-* dataset pelanggan yang lebih beragam
-* kualitas label yang lebih representatif
-* threshold
-* konflik informasi
-* missing value
-* variasi antar sumber
-* dataset berukuran lebih besar
-* kebutuhan infrastruktur skala besar
-
 ---
 
 # 23. Credits
