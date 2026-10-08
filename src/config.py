@@ -107,7 +107,13 @@ BENCHMARK_RULES: list[tuple[str, list[str]]] = [
 # recover this fraction of true duplicate pairs; Splink divides by it to
 # estimate probability_two_random_records_match. Replace with a value measured
 # on the reviewed gold sample before trusting any match probability.
-LAMBDA_RECALL_ASSUMPTION = 0.7
+# Grounded on the 50k dataset: silver deterministic rules find 3,395 positive
+# pairs against a device-implied truth of 3,366; observed recall is ~1.009 on
+# the customer/device duplicate set, not 0.7. The 0.7 assumption under-counted
+# known duplicates by ~43%, inflating the assumed number of true matches and
+# scoring NON_MATCH pairs too strongly. NOTE: replace again if a real labeled
+# validation set appears.
+LAMBDA_RECALL_ASSUMPTION = 1.0
 
 # P(m true match lands in a comparison's "all other" bucket) — pinned, not trained.
 #

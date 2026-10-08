@@ -52,7 +52,7 @@ def run(args: list[str]) -> tuple[int, str]:
 files = sorted(STAGING_DIR.glob("*.parquet")) if STAGING_DIR.exists() else []
 staged_only = [f for f in files if not f.name.endswith(".predictions.parquet")]
 if not staged_only:
-    st.info("Belum ada batch yang di-stage. Upload batch baru di halaman App.")
+    st.info("Belum ada batch yang di-stage. Upload batch baru di halaman Upload Data.")
     st.stop()
 
 selected = st.selectbox("Pilih batch", [f.name for f in staged_only])
@@ -108,9 +108,9 @@ except SystemExit as exc:
 st.subheader(f"{batch_file} — {len(staging):,} record")
 counts = staging["action"].value_counts().to_dict()
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Match (gabung entity lama)", f"{counts.get('match', 0):,}")
-c2.metric("New (entity baru)", f"{counts.get('new', 0):,}")
-c3.metric("Skor rata-rata",
+c1.metric("Sama (gabung entity lama)", f"{counts.get('match', 0):,}")
+c2.metric("Baru (entity baru)", f"{counts.get('new', 0):,}")
+c3.metric("Peluang rata-rata",
           f"{staging['match_probability'].mean():.3f}"
           if staging["match_probability"].notna().any() else "-")
 c4.metric("Model saat stage", str(staging["model_version"].iloc[0]) if "model_version" in staging.columns else "-")
@@ -122,7 +122,7 @@ if "model_version" in staging.columns:
         active = json.loads(latest.read_text(encoding="utf-8"))["version"]
         if staging["model_version"].iloc[0] != active:
             st.error(
-                f"Proposal ini discoring oleh `{staging['model_version'].iloc[0]}` "
+                f"Proposal ini diberi skor oleh `{staging['model_version'].iloc[0]}` "
                 f"tapi model aktif sekarang `{active}`. Proposal basi — "
                 "Reject lalu stage ulang."
             )
@@ -175,13 +175,13 @@ if a1.button("Simpan persetujuan", type="secondary"):
     st.success(f"Persetujuan disimpan: {int(fresh['approved'].sum()):,} record.")
     st.rerun()
 
-if a2.button("Apply proposal", type="primary"):
+if a2.button("Terapkan proposal", type="primary"):
     with st.spinner("Menerapkan proposal..."):
         code, log = run(["--apply", "--batch", batch_file])
     with st.expander("Log apply", expanded=code != 0):
         st.code(log[-3000:])
     if code == 0:
-        st.success("Proposal diterapkan. Batch sudah digabung — cek halaman Master & Dashboard.")
+        st.success("Proposal diterapkan. Batch sudah digabung — cek halaman Daftar Customer & Ringkasan.")
         st.rerun()
     else:
         st.error("Apply gagal — lihat log.")

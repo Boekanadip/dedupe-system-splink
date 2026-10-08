@@ -31,8 +31,8 @@ page_guide(__file__)
 
 # ---- search
 c1, c2 = st.columns(2)
-search_rid = c1.text_input("Record ID (misal rec_000123)", "")
-search_pair = c2.text_input("Pair ID (misal rec_000123__rec_000456)", "")
+search_rid = c1.text_input("Kode record (misal rec_000123)", "")
+search_pair = c2.text_input("Kode pasangan (misal rec_000123__rec_000456)", "")
 
 def load_all():
     """Load all audit sources once."""
@@ -82,7 +82,7 @@ def pair_id(l, r):
 # ---- per-pair timeline
 if search_pair:
     pid = search_pair.strip()
-    st.subheader(f"Timeline untuk pasangan {pid}")
+    st.subheader(f"Jejak waktu untuk pasangan {pid}")
     cols = st.columns(4)
     for name, df in d.items():
         if "pair_id" in df.columns:
@@ -95,7 +95,7 @@ if search_pair:
 # ---- per-record timeline (record appears in any pair)
 if search_rid:
     rid = search_rid.strip()
-    st.subheader(f"Timeline untuk record {rid}")
+    st.subheader(f"Jejak waktu untuk record {rid}")
     all_pairs = []
     # feedback
     if "feedback" in d:
@@ -149,7 +149,7 @@ if search_rid:
 
 # ---- entity history filter
 st.divider()
-st.subheader("Entity Correction History")
+st.subheader("Riwayat Koreksi Entity")
 if "entity_hist" in d:
     eh = d["entity_hist"]
     ents = sorted(set().union(*eh.from_entity.dropna()) | set().union(*eh.to_entity.dropna()))

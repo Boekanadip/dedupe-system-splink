@@ -70,7 +70,7 @@ pair = preds[
 if pair.empty:
     st.warning(
         "Kedua record ini tidak pernah dibandingkan oleh sistem. "
-        "Artinya: tidak ada satu pun data mereka yang sama, sehingga sistem "
+        "Artinya: pasangan ini tidak lolos aturan penyaringan, sehingga sistem "
         "tidak pernah menganggapnya perlu dibandingkan. Ini batas dari data, "
         "bukan penilaian model."
     )
@@ -81,6 +81,7 @@ probability = float(p.get("match_probability", 0) or 0)
 m1, m2 = st.columns(2)
 m1.metric("Peluang sama", format_probability(probability))
 m2.metric("Keputusan sistem", decision_label(p.get("decision", "-")))
+st.caption(f"Skor tanpa pembulatan: P={probability:.3e}; match_weight={float(p['match_weight']):.2f} (log2 odds).")
 
 st.info(probability_verdict(probability))
 st.caption(verdict_plain(p.get("decision", "-")))

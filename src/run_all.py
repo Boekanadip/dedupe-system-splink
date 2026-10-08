@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -28,33 +29,30 @@ STEPS = [
     ("labels_review_queue", ["labels"]),
     ("clustering", ["clustering"]),
     ("master_record", ["master_record"]),
-    # Four-layer evaluation (DESIGN section 17). Not a producer: it reads the
-    # artifacts above and reports on them, so it must run last.
     ("evaluate", ["evaluate"]),
 ]
 
 
-def run_step(name: str, module_args: list[str]) -> dict:
-    command = [sys.executable, "-m", f"src.{module_args[0]}", *module_args[1:]]
-    print(f"\n{'=' * 70}\n== {name}\n== {' '.join(command[2:])}\n{'=' * 70}", flush=True)
+def run_step(name: str, module_args: list[str], timeout: float | None) -> dict:
+    command = [sys.executable, "-u", "-m", f"src.{module_args[0]}", *module_args[1:]]
+    print(f"\n{'=' * 70}\n== {name}\n== {' '.join(command[3:])}\n{'=' * 70}", flush=True)
     started = time.perf_counter()
-    # encoding/errors are required, not cosmetic: without them a step printing
-    # any character outside the console codepage (scenario_eval prints "→") kills
-    # the reader thread, and the caller gets returncode 0 with stdout=None.
-    result = subprocess.run(
-        command, text=True, capture_output=True, encoding="utf-8", errors="replace"
-    )
+    try:
+        result = subprocess.run(
+            command, stdin=subprocess.DEVNULL, stderr=subprocess.STDOUT, timeout=timeout,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8:replace"},
+        )
+    except subprocess.TimeoutExpired:
+        raise SystemExit(
+            f"Step {name!r} exceeded {timeout}s and was killed. "
+            "Inspect the log above for the last completed action, then rerun "
+            "with a larger --step-timeout if it is genuinely slow."
+        ) from None
     elapsed = round(time.perf_counter() - started, 2)
 
     if result.returncode != 0:
-        sys.stdout.write(result.stdout or "")
-        sys.stderr.write(result.stderr or "")
         raise SystemExit(f"Step {name!r} failed with exit code {result.returncode}")
-
-    tail = [ln for ln in (result.stdout or "").splitlines() if ln.strip()][-6:]
-    for line in tail:
-        print(f"   {line}")
-    return {"step": name, "command": " ".join(command[2:]), "seconds": elapsed}
+    return {"step": name, "command": " ".join(command[3:]), "seconds": elapsed}
 
 
 def main() -> None:
@@ -90,7 +88,16 @@ def main() -> None:
             "Off by default: a fresh run trains and saves a new version."
         ),
     )
+    parser.add_argument(
+        "--step-timeout",
+        type=float,
+        default=1800.0,
+        help="Kill a pipeline step that produces no completion within this many "
+        "seconds. 0 disables the guard. Default 1800s: the slowest measured "
+        "step (EM training) takes ~2 minutes on 51k rows.",
+    )
     args = parser.parse_args()
+    step_timeout = args.step_timeout if args.step_timeout > 0 else None
 
     started = time.perf_counter()
     full = not args.sample
@@ -120,16 +127,12 @@ def main() -> None:
 
     results = []
     for name, module_args in steps:
-        results.append(run_step(name, module_args))
+        results.append(run_step(name, module_args, step_timeout))
 
-    # Record which model version produced these artifacts. A later reader asking
-    # "which model made this entity_id?" gets an answer instead of a guess.
     from .model_lifecycle import latest
 
     model_version = latest().name if latest() else None
 
-    # The scope guards in each module stop bad overwrites, but a run that mixes
-    # artifacts of different scopes should still be reported as a failed run.
     expected = scope_of(full)
     checks = {
         "predictions": read_meta(predictions_path(full=full)),

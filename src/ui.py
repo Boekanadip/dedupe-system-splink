@@ -75,7 +75,7 @@ def monitoring_sidebar() -> None:
         st.markdown("#### Bantuan")
 
         st.caption("**Baru pakai?** Baca `PANDUAN.md` di folder project.")
-        st.caption("Alur: Upload → Ringkasan → Antrean → Pemeriksaan → Daftar Customer")
+        st.caption("Alur: Upload → Data Batch Baru → Ringkasan → Antrean → Pemeriksaan → Daftar Customer")
 
 
 PAGE_GUIDE: dict[str, tuple[str, list[str]]] = {
@@ -127,7 +127,7 @@ PAGE_GUIDE: dict[str, tuple[str, list[str]]] = {
         "Periksa data baru sebelum dipakai.",
         [
             "Centang baris yang tidak boleh digabung dengan customer mana pun.",
-            "Klik 'Simpan persetujuan', lalu 'Terapkan'.",
+            "Klik 'Simpan persetujuan', lalu 'Terapkan proposal'.",
             "Baris yang tidak disetujui tetap masuk sebagai customer sendiri.",
         ],
     ),
@@ -561,16 +561,21 @@ def model_levels() -> dict[str, dict[int, tuple[str, float, float]]]:
     levels: dict[str, dict[int, tuple[str, float, float]]] = {}
     for comp in settings.get("comparisons", []):
         gamma_col = "gamma_" + comp.get("output_column_name", "")
-        ordered = [
+        entries = [
             (
-                str(lvl.get("label_for_charts", f"level {i}")),
-                float(lvl.get("m_probability", 0) or 0),
-                float(lvl.get("u_probability", 0) or 0),
+                lvl,
+                (
+                    str(lvl.get("label_for_charts", f"level {i}")),
+                    float(lvl.get("m_probability", 0) or 0),
+                    float(lvl.get("u_probability", 0) or 0),
+                ),
             )
             for i, lvl in enumerate(comp.get("comparison_levels", []))
         ]
+        ordered = [entry for lvl, entry in entries if not lvl.get("is_null_level")]
         last = len(ordered) - 1
         levels[gamma_col] = {last - i: entry for i, entry in enumerate(ordered)}
+        levels[gamma_col].update({-1: entry for lvl, entry in entries if lvl.get("is_null_level")})
     return levels
 
 
@@ -587,6 +592,11 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
         left = row.get(f"{field}_l")
         right = row.get(f"{field}_r")
         weight = math.log2(m / u) if m > 0 and u > 0 else None
+        evidence = (
+            "tidak ada data"
+            if code == -1
+            else format_score(weight) if weight is not None else "tidak ada data"
+        )
         rows.append(
             {
                 "informasi": field_label(field),
@@ -594,7 +604,7 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
                 "record B": "tidak diisi" if _is_blank(right) else str(right),
                 "perbandingan": field_agreement(left, right),
                 "seberapa mirip": similarity_text(label, code),
-                "bukti": format_score(weight) if weight is not None else "tidak ada data",
+                "bukti": evidence,
                 "_bobot": weight if weight is not None else float("-inf"),
             }
         )

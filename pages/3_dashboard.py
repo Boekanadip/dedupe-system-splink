@@ -47,7 +47,7 @@ if LOCK.exists():
     if alive:
         st.info("Retrain berjalan — dashboard bisa menunda refresh sampai lock hilang.")
     else:
-        st.warning("Lock retrain basi (proses sudah mati). Bersihkan di halaman Model.")
+        st.warning("Lock retrain basi (proses sudah mati). Bersihkan di halaman Pengaturan Sistem.")
 
 c1, c2 = st.columns([1, 4])
 if c1.button("Refresh", type="primary"):
@@ -81,35 +81,66 @@ if pred_path.exists():
         "Setiap pasangan kandidat dapat satu dari tiga label. "
         "Yang perlu diperiksa tidak pernah digabung sendiri."
     )
-    counts = preds["decision"].value_counts()
-    chart = pd.DataFrame(
-        {
-            "Jumlah pasangan": counts.values,
-            "Status": [DECISION_LABEL.get(str(k), str(k)) for k in counts.index],
-        }
-    ).set_index("Status")
-    st.bar_chart(chart)
+    import plotly.express as px
+    import plotly.graph_objects as go
+
+    counts = preds["decision"].value_counts().sort_values(ascending=True)
+    total = int(counts.sum())
+    status_labels = [DECISION_LABEL.get(str(k), str(k)) for k in counts.index]
+    pct_labels = [f"{value:,} ({value / total:.1%})" for value in counts.values]
+    fig = go.Figure(
+        go.Bar(
+            x=counts.values,
+            y=status_labels,
+            orientation="h",
+            text=pct_labels,
+            textposition="outside",
+            marker_color="#5aa9e6",
+            textfont=dict(color="#e5e7eb"),
+        )
+    )
+    fig.update_layout(
+        title=dict(text="Hasil keputusan — urut terbanyak ke tersedikit<br><sup>Sumbu Y: status</sup>", x=0),
+        xaxis_title="Jumlah pasangan",
+        yaxis=dict(tickangle=0),
+        plot_bgcolor="#0e1117",
+        paper_bgcolor="#0e1117",
+        font=dict(color="#e5e7eb"),
+        showlegend=False,
+    )
+    st.plotly_chart(fig, width="stretch")
 
     st.subheader("Sebaran peluang")
     st.caption(
-        "Seberapa yakin sistem untuk tiap pasangan. Tiga kelompok yang terpisah "
-        "jelas berarti sistem bekerja: yang hampir pasti sama, yang ragu-ragu, "
-        "dan yang hampir pasti berbeda."
+        "Histogram peluang tiap pasangan kandidat. Punggung kiri yang tinggi "
+        "berarti banyak pasangan nyaris pasti berbeda — sistem bekerja."
     )
-    buckets = pd.cut(
-        preds["match_probability"],
-        bins=[-0.001, 0.0001, 0.5, 0.9, 1.0001],
-        labels=[
-            "Hampir pasti berbeda",
-            "Ragu-ragu",
-            "Cenderung sama",
-            "Hampir pasti sama",
-        ],
+    probs = preds["match_probability"].clip(lower=0, upper=1)
+    hist, edges = pd.cut(probs, bins=25, retbins=True, include_lowest=True)
+    bin_counts = hist.value_counts().sort_index()
+    bin_centers = [(interval.left + interval.right) / 2 for interval in bin_counts.index]
+    bin_pcts = [f"{count:,} ({count / len(probs):.1%})" for count in bin_counts.values]
+    fig2 = go.Figure(
+        go.Bar(
+            x=bin_centers,
+            y=bin_counts.values,
+            width=(edges[1] - edges[0]) * 0.9,
+            text=bin_pcts,
+            textposition="outside",
+            marker_color="#6ee7a0",
+            textfont=dict(color="#e5e7eb"),
+        )
     )
-    bucket_counts = buckets.value_counts().reindex(
-        ["Hampir pasti sama", "Cenderung sama", "Ragu-ragu", "Hampir pasti berbeda"]
+    fig2.update_layout(
+        title=dict(text="Sebaran peluang<br><sup>Sumbu Y: jumlah pasangan</sup>", x=0),
+        xaxis_title="Peluang sama",
+        plot_bgcolor="#0e1117",
+        paper_bgcolor="#0e1117",
+        font=dict(color="#e5e7eb"),
+        showlegend=False,
+        bargap=0,
     )
-    st.bar_chart(bucket_counts)
+    st.plotly_chart(fig2, width="stretch")
 
 # ---- cluster
 cluster_path = OUTPUT_DIR / "cluster_summary.csv"
@@ -117,7 +148,7 @@ if cluster_path.exists():
     cluster = pd.read_csv(cluster_path)
     st.subheader("Hasil pengelompokan")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Customer unik", f"{int(cluster['entities'].iloc[0]):,}")
+    c1.metric("Customer unik", f"{int(cluster['entities'].iloc[0]):}")
     c2.metric("Record yang digabung", f"{int(cluster['records_merged'].iloc[0]):,}",
              help="Record yang berhasil dipastikan sebagai duplikat.")
     c3.metric("Perlu diperiksa", f"{int(cluster['review_pairs'].iloc[0]):,}")
@@ -139,10 +170,21 @@ if history_path.exists():
             .agg(batch=("batch", "count"), record_baru=("new_records", "sum"),
                  entity_baru=("new_entities", "sum"))
         )
-        st.bar_chart(weekly)
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(x=weekly.index, y=weekly["batch"], mode="lines+markers", name="Batch", line=dict(color="#f2a44a", width=2)))
+        fig3.add_trace(go.Scatter(x=weekly.index, y=weekly["record_baru"], mode="lines+markers", name="Record baru", line=dict(color="#4cc9f0", width=2)))
+        fig3.add_trace(go.Scatter(x=weekly.index, y=weekly["entity_baru"], mode="lines+markers", name="Entity baru", line=dict(color="#7bf1a8", width=2)))
+        fig3.update_layout(
+            title=dict(text="Batch per minggu<br><sup>Sumbu X: minggu · Sumbu Y: jumlah</sup>", x=0),
+            xaxis=dict(tickangle=0),
+            plot_bgcolor="#0e1117",
+            paper_bgcolor="#0e1117",
+            font=dict(color="#e5e7eb"),
+        )
+        st.plotly_chart(fig3, width="stretch")
         st.caption(
             f"{len(history):,} batch tercatat, {int(df['new_records'].sum()):,} "
-            "record masuk. Tabel lengkap ada di halaman Model (Retrain history)."
+            "record masuk. Tabel lengkap ada di halaman Pengaturan Sistem (Riwayat Pemrosesan)."
         )
 
 queue_path = Path(__file__).resolve().parents[1] / "data" / "labels" / "review_queue.csv"
@@ -150,17 +192,14 @@ if queue_path.exists():
     queue = pd.read_csv(queue_path)
     st.subheader("Antrean pemeriksaan")
     status = queue["review_status"].value_counts()
-    chart = pd.DataFrame(
-        {
-            "Jumlah pasangan": status.values,
-            "Status": [
-                "Sudah diperiksa" if str(k) == "reviewed" else "Menunggu"
-                for k in status.index
-            ],
-        }
-    ).set_index("Status")
-    st.bar_chart(chart)
+    reviewed = int(status.get("reviewed", 0))
+    total_q = int(len(queue))
+    done_rate = reviewed / total_q if total_q else 0.0
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Perlu diperiksa", f"{total_q:,}")
+    k2.metric("Sudah diperiksa", f"{reviewed:,}")
+    k3.metric("Tingkat selesai", f"{done_rate:.1%}")
     st.caption(
-        f"Total {len(queue):,} pasangan. Yang menunggu bisa dikerjakan di halaman "
+        f"Total {total_q:,} pasangan. Yang menunggu bisa dikerjakan di halaman "
         "**Pemeriksaan**."
     )

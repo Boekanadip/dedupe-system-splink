@@ -689,6 +689,247 @@ def subprocess_capture_cannot_lose_output():
     return f"{console} undefined bytes {len(undef)}; utf-8+replace keeps U+207B"
 
 
+@check
+def blocking_coverage_uses_candidate_union():
+    from unittest.mock import patch
+
+    from src.evaluate import evaluate_blocking
+
+    truth = pd.DataFrame({"record_id_l": ["a", "c"], "record_id_r": ["b", "d"]})
+    rules = pd.DataFrame({"device_truth_covered": [1, 1]})
+    with patch("src.evaluate.predictions_path", return_value=PROCESSED_DATA_PATH), \
+         patch("src.evaluate.pd.read_parquet", return_value=truth), \
+         patch("src.evaluate.rule_coverage", return_value=rules):
+        result = evaluate_blocking(pd.DataFrame(), truth)
+    assert result["truth_pairs_generated_as_candidates"] == 2
+    assert result["truth_pairs_never_generated"] == 0
+    return "union covers two pairs although each individual rule covers only one"
+
+
+@check
+def stage0_entity_violations_count_transitive_merges():
+    from src.stage0_audit import evaluate_reviewed_entities
+
+    entities = pd.DataFrame({
+        "record_id": ["a", "b", "c", "d"],
+        "entity_id": ["one", "one", "one", "two"],
+    })
+    labels = pd.DataFrame({
+        "record_id_l": ["a", "a", "a", "a"],
+        "record_id_r": ["b", "c", "d", "missing"],
+        "is_positive": [True, False, True, True],
+    })
+    result = evaluate_reviewed_entities(entities, labels)
+    assert result["pairs_missing_entity_mapping"] == 1
+    assert result["reviewed_positive_pairs_split"] == 1
+    assert result["reviewed_negative_pairs_merged"] == 1
+    assert result["entities_containing_reviewed_negative_pair"] == 1
+    assert result["records_in_implicated_entities"] == 3
+    assert result["largest_implicated_entity_size"] == 3
+    return "transitive negative merge, positive split and missing mapping counted separately"
+
+
+@check
+def stage0_device_reference_reports_missing_and_mixed():
+    from src.stage0_audit import evaluate_device_reference_entities
+
+    entities = pd.DataFrame({"record_id": ["a", "b", "c", "d"],
+                             "entity_id": ["one", "one", "two", "two"]})
+    records = pd.DataFrame({"record_id": ["a", "b", "c", "d"],
+                            "device_ids_std": [["x"], ["y"], ["x"], None]})
+    truth = pd.DataFrame({"record_id_l": ["a"], "record_id_r": ["c"]})
+    result = evaluate_device_reference_entities(entities, records, truth)
+    assert result["reference_pairs_split"] == 1
+    assert result["entities_with_multiple_device_ids"] == 1
+    assert result["records_without_device_reference"] == 1
+    return "device reference splits, mixed clusters and unreferenced records separated"
+
+
+@check
+def stage0_outside_blocking_sample_excludes_scored_and_gold():
+    from src.stage0_audit import sample_outside_blocking
+
+    records = pd.DataFrame({
+        "record_id": ["a", "b", "c", "d"],
+        "first_name_std": ["anna", "anna", "anna", "bill"],
+        "last_name_std": ["green", "green", "green", "green"],
+        "city_std": ["x", "x", "x", "y"],
+    })
+    scored = pd.DataFrame({"record_id_l": ["a"], "record_id_r": ["b"]})
+    gold = pd.DataFrame({"record_id_l": ["a"], "record_id_r": ["c"]})
+    sample = sample_outside_blocking(records, scored, gold, per_rule=10)
+    assert set(zip(sample["record_id_l"], sample["record_id_r"])) == {("b", "c")}
+    assert sample["label"].eq("").all()
+    return "new unlabelled pair excluded from existing candidates and gold"
+
+
+@check
+def stage0_dispute_pack_carries_evidence_and_blank_adjudication():
+    from src.stage0_audit import dispute_review_pack
+
+    records = pd.DataFrame({
+        "record_id": ["a", "b"],
+        "first_name_std": ["ann", "ann"],
+        "last_name_std": ["lee", "lee"],
+        "email_std": ["ann@x.com", "ann@x.com"],
+    })
+    audit = pd.DataFrame({
+        "record_id_l": ["a"],
+        "record_id_r": ["b"],
+        "human_label": ["match"],
+        "match_probability": [0.001],
+        "verdict": ["contradicted"],
+    })
+    pack = dispute_review_pack(records, audit)
+    assert len(pack) == 1
+    for column in ("adjudicated_label", "reviewer", "reviewed_at", "reviewer_note"):
+        assert column in pack.columns
+    assert pack["adjudicated_label"].eq("").all()
+    assert pack["current_gold_label"].tolist() == ["match"]
+    assert pack["first_name_std_l"].tolist() == ["ann"]
+    assert pack["email_std_r"].tolist() == ["ann@x.com"]
+    return "contradicted pair carries per-field evidence with blank adjudication columns"
+
+
+@check
+def stage0_save_review_pack_refuses_to_overwrite_filled_reviews():
+    import tempfile
+    from pathlib import Path
+
+    from src.stage0_audit import save_review_pack
+
+    frame = pd.DataFrame({
+        "record_id_l": ["a"],
+        "record_id_r": ["b"],
+        "label": [""],
+        "review_status": ["pending"],
+        "reviewer": [""],
+        "reviewer_note": [""],
+        "model_version": ["v1"],
+        "gold_sha256": ["h1"],
+    })
+    filled = frame.copy()
+    filled["label"] = ["match"]
+    filled["reviewer"] = ["human"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "pack.csv"
+        assert save_review_pack(path, filled, "label") is True
+        assert save_review_pack(path, frame, "label") is False
+        stored = pd.read_csv(path)
+        assert stored["label"].tolist() == ["match"], "human review was overwritten"
+    return "filled review file kept when the same snapshot is re-generated"
+
+
+@check
+def stage0_packs_are_not_promoted_by_labels_module():
+    """Guards the workflow: src.labels --promote reads only the strata queue
+    and the FP sample. Stage 0 packs require manual pair/label promotion,
+    otherwise a 50-pair sample or a 9-row dispute adjudication silently
+    looks promoted while gold never changes.
+    """
+    import src.labels as labels
+    from src.stage0_audit import DISPUTE_REVIEW_PATH, SAMPLE_PATH
+
+    sources = [p for p in (labels.QUEUE_PATH, labels.FP_SAMPLE_PATH) if p.exists()]
+    assert SAMPLE_PATH not in sources
+    assert DISPUTE_REVIEW_PATH not in sources
+    return "stage 0 review packs are outside src.labels --promote sources"
+
+
+@check
+def sample_training_cannot_promote_to_active_model():
+    import tempfile
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    linker = SimpleNamespace(misc=SimpleNamespace(save_model_to_json=lambda: {"trained": True}))
+    predictions = pd.DataFrame({"decision": ["MATCH"]})
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        pointer = root / "latest.json"
+        with patch.object(model_lifecycle, "version_dir", lambda vid: root / vid), patch.object(
+            model_lifecycle, "LATEST_POINTER", pointer
+        ):
+            model_lifecycle.save_version(linker, predictions, "sample", 0.1)
+            assert not pointer.exists(), "sample training changed the active model pointer"
+            full = model_lifecycle.save_version(linker, predictions, "full", 0.1)
+            assert json.loads(pointer.read_text(encoding="utf-8"))["path"] == str(full)
+    return "sample cannot become active; full version can"
+
+
+@check
+def retrain_step_streams_and_has_a_timeout():
+    from src.run_all import run_step
+
+    result = run_step("help", ["run_all", "--help"], timeout=30)
+    assert result["step"] == "help"
+    return "CLI subprocess completed with streaming output and a time limit"
+
+
+@check
+def pinned_comparisons_keep_null_levels():
+    from src.splink_model import build_settings
+    from splink import DuckDBAPI, Linker
+
+    columns = ["record_id", "first_name_std", "last_name_std", "email_std",
+               "address_std", "city_std", "state_std", "country_std", "dob_std", "phone_std"]
+    records = pd.read_parquet(PROCESSED_DATA_PATH, columns=columns).head(2)
+    model = Linker(records, build_settings(), db_api=DuckDBAPI()).misc.save_model_to_json()
+    for comparison in model["comparisons"]:
+        levels = comparison["comparison_levels"]
+        assert any(level.get("is_null_level") for level in levels), comparison["output_column_name"]
+        assert levels[-1]["sql_condition"] == "ELSE"
+    return "all nine pinned comparisons retain a null level before ELSE"
+
+
+@check
+def explain_page_maps_null_and_exact_evidence_correctly():
+    from src.ui import model_levels
+
+    email = model_levels()["gamma_gamma_email_std"]
+    assert "null" in email[-1][0].lower()
+    assert "Exact match on email_std" in email[4][0]
+    return "email null is gamma -1; exact email is gamma 4"
+
+
+@check
+def stage1_group_split_bridges_unscored_pairs():
+    from src.stage1_abc import record_groups
+
+    all_labels = pd.DataFrame({
+        "record_id_l": ["a", "b", "d"],
+        "record_id_r": ["b", "c", "e"],
+    })
+    scored = all_labels.iloc[[0, 2]].reset_index(drop=True)
+    groups = record_groups(all_labels, scored)
+    assert groups[0] != groups[1]
+    scored = all_labels.iloc[[0, 1]].reset_index(drop=True)
+    groups = record_groups(all_labels, scored)
+    assert groups[0] == groups[1]
+    return "unscored pair bridges labelled record groups before split"
+
+
+@check
+def stage1_shadow_counts_and_provenance_are_consistent():
+    from src.stage1_abc import evaluate, load_data
+
+    gold, scored, provenance = load_data(include_disputed=False)
+    assert len(gold) == len(scored) + provenance["unscored_gold_pairs"] + int(gold["is_disputed"].sum())
+    assert scored["agree_email"].equals(
+        scored["email_std_l"].notna() & scored["email_std_r"].notna()
+        & scored["email_std_l"].eq(scored["email_std_r"])
+    )
+    report = evaluate(include_disputed=False)
+    assert report["mode"] == "shadow_only"
+    assert report["provenance"]["unscored_gold_pairs"] >= 0
+    assert report["positive_pairs"] > 0
+    assert report["verdict"] == "not_proven"
+    for fold in report["folds"]:
+        assert fold["shared_record_ids"] == 0
+        assert fold["A"]["tp"] + fold["A"]["fp"] + fold["A"]["fn"] + fold["A"]["tn"] == fold["test_pairs"]
+    return f"{report['scored_gold_pairs']} scored labels; fixed Splink policy unchanged"
+
+
 def main() -> int:
     failures = 0
     for fn in CHECKS:

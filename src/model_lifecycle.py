@@ -62,7 +62,13 @@ def save_version(
     runtime_seconds: float,
     extra_metadata: dict | None = None,
 ) -> Path:
-    """Write one immutable model version and return its directory."""
+    """Write one immutable model version and return its directory.
+
+    A sample run is saved but never becomes the active model: `latest` is what
+    inference, the dashboard and incremental scoring read, and a 10k sample
+    version pointing at it would replace the full-scope model that 51,555
+    records were resolved with.
+    """
     created = datetime.now()
     vid = version_id(created)
     target = version_dir(vid)
@@ -118,17 +124,18 @@ def save_version(
     }
     (target / "evaluation.json").write_text(json.dumps(evaluation, indent=2), encoding="utf-8")
 
-    LATEST_POINTER.write_text(
-        json.dumps(
-            {
-                "version": vid,
-                "path": str(target),
-                "created_at": created.isoformat(timespec="seconds"),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    if scope != "sample":
+        LATEST_POINTER.write_text(
+            json.dumps(
+                {
+                    "version": vid,
+                    "path": str(target),
+                    "created_at": created.isoformat(timespec="seconds"),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
     return target
 
 

@@ -60,21 +60,19 @@ def _unavailable(what: str, why: str) -> dict:
 # --------------------------------------------------------------------------
 def evaluate_blocking(df: pd.DataFrame, truth: pd.DataFrame) -> dict:
     preds_path = predictions_path(full=True)
-    candidate_pairs = (
-        len(pd.read_parquet(preds_path)) if preds_path.exists() else None
-    )
-
     if truth.empty:
         return _unavailable(
             "blocking coverage of true duplicate pairs",
             "no device_id channel in this dataset",
         )
+    if not preds_path.exists():
+        return _unavailable("blocking coverage", f"{preds_path.name} not found")
 
-    # Which truth pairs never even became candidates? This is the hard recall
-    # ceiling: a pair that blocking drops can never be scored, however good the
-    # model is.
+    candidates = pd.read_parquet(preds_path, columns=["record_id_l", "record_id_r"])
+    candidate_pairs = len(candidates)
     rule_rows = rule_coverage(df, truth)
-    union_covered = int(rule_rows["device_truth_covered"].max()) if len(rule_rows) else 0
+    union_covered = len(truth.merge(candidates.drop_duplicates(),
+                                    on=["record_id_l", "record_id_r"], how="inner"))
 
     return {
         "status": "measured",

@@ -51,14 +51,26 @@ with st.expander("Alur proses", expanded=False):
 Setiap file baru melewati tahap-tahap ini. Data yang sudah ada tidak dihapus.
 
 1. **Pengecekan file** — dicek kolomnya lengkap, format tanggalnya apa.
-2. **Pembersihan** — nama, email, nomor telepon dibersihkan supaya bisa dibandingkan.
-   Nilai aslinya tetap disimpan, tidak ditimpa.
-    3. **Penyaringan** — sistem membagi data ke ribuan kelompok kecil supaya tidak
-       perlu membandingkan semuanya. 12 aturan dipakai sekaligus.
+2. **Pembersihan** — nama, email, nomor telepon dibersihkan supaya bisa dibandingkan. Nilai aslinya tetap disimpan, tidak ditimpa.
+3. **Penyaringan** — sistem membagi data ke ribuan kelompok kecil supaya tidak perlu membandingkan semuanya. 12 aturan dipakai sekaligus.
 4. **Penilaian** — tiap pasangan yang lolos penyaringan diberi angka peluang 0%–100%.
-5. **Keputusan** — 90% ke atas digabung sendiri; yang tidak yakin menunggu Anda.
+5. **Keputusan** — peluang 90% ke atas digabung sendiri (setelah Anda menyetujui proposal di halaman Data Batch Baru); yang tidak yakin menunggu Anda.
 6. **Pengelompokan** — semua yang sudah digabung dirangkum jadi satu entitas.
 7. **Rangkuman** — tiap entitas dapat satu baris profil bersih.
+
+## Cara baca hasilnya
+
+Setiap pasangan record dapat satu peluang dari 0% sampai 100%:
+
+| Peluang | Arti | Yang dilakukan |
+| --- | --- | --- |
+| 90% ke atas | sangat yakin orang sama | Digabung otomatis |
+| 0% sampai 90% | tidak yakin | Masuk antrean, periksa Anda |
+| nyaris 0% | yakin dua orang berbeda | Dianggap berbeda orang |
+
+Halaman **Pemeriksaan** (kiri) dipakai untuk menilai satu per satu.
+Halaman **Pengaturan Sistem** menyimpan percobaan batas dan perbandingan antar versi model.
+Setiap keputusan Anda disimpan dengan bukti per-field, jadi auditnya bisa ditelusuri ulang.
 """
     )
 
@@ -275,7 +287,7 @@ if uploaded:
         f"{batch['record_id_range'][0]}..{batch['record_id_range'][1]}"
     )
 
-    from . import model_lifecycle
+    from src import model_lifecycle
 
     has_model = model_lifecycle.latest() is not None
     has_entities = (PROJECT_ROOT / "outputs" / "entity_map.parquet").exists()
@@ -283,7 +295,7 @@ if uploaded:
         command = [sys.executable, "-m", "src.incremental", "--stage"]
         st.caption(
             "Batch di-stage: sistem menganalisis dan menulis proposal. "
-            "Buka tab Batch review untuk verifikasi sebelum digabung."
+            "Buka halaman Data Batch Baru untuk verifikasi sebelum digabung."
         )
     else:
         command = [sys.executable, "-m", "src.run_all"]
@@ -293,10 +305,16 @@ if uploaded:
     outcome = run_pipeline(command)
     outcome["status_box"].empty()
     outcome["log_box"].empty()
-    st.success(
-        "Analisis selesai. Buka tab Batch review untuk melihat proposal dan "
-        "menerapkannya."
-    )
+    if outcome["returncode"] == 0:
+        st.success(
+            "Analisis selesai. Buka halaman Data Batch Baru untuk melihat proposal "
+            "dan menerapkannya."
+        )
+    else:
+        st.error(
+            "Analisis gagal — lihat log di atas untuk memperbaikinya, lalu tekan "
+            "Analisis batch lagi. Registrasi batch dilewati otomatis."
+        )
 
     summary = (
         json.loads(RUN_SUMMARY.read_text(encoding="utf-8"))

@@ -47,7 +47,7 @@ def pin_else_level(comparison, output_column_name: str, floor: float):
     CustomComparison because mutating the objects returned by
     `create_comparison_levels()` has no effect — they are rebuilt per call.
     """
-    levels = [level for level in comparison.create_comparison_levels() if not level.is_null_level]
+    levels = comparison.create_comparison_levels()
     levels[-1].configure(m_probability=floor, fix_m_probability=True)
     return cl.CustomComparison(comparison_levels=levels, output_column_name=output_column_name)
 

@@ -87,8 +87,30 @@ if hits.empty:
 entity_id = st.selectbox("Pilih entity", hits["entity_id"].tolist())
 entity = master[master["entity_id"] == entity_id].iloc[0]
 
+# ---- indikator laporan keanggotaan (salah gabung / salah pecah)
+FLAGS_PATH = LABELS_DIR / "membership_flags.csv"
+open_flags = pd.DataFrame()
+if FLAGS_PATH.exists():
+    try:
+        _flags = pd.read_csv(FLAGS_PATH)
+        _flags["status"] = _flags["status"].fillna("open").astype(str)
+        open_flags = _flags[(_flags["entity_id"] == entity_id) & (_flags["status"] == "open")]
+    except Exception:
+        open_flags = pd.DataFrame()
+
 # ---- detail entity
 st.subheader(f"Customer {entity_id}")
+if not open_flags.empty:
+    issues = {
+        "wrong_merge": "salah gabung (2 orang jadi 1)",
+        "wrong_split": "salah pecah (1 orang jadi 2)",
+    }
+    for _, row in open_flags.iterrows():
+        st.warning(
+            f"Laporan: **{issues.get(str(row['issue']), row['issue'])}** — "
+            f"status `{row.get('status', 'open')}`, oleh {row.get('reviewer', '—')} "
+            f"pada {row.get('timestamp', '—')}."
+        )
 c1, c2, c3 = st.columns(3)
 c1.metric("Jumlah record", format_count(entity["record_count"]))
 c2.metric("Customer ID berbeda", format_count(len(entity["customer_ids"])))
@@ -180,6 +202,7 @@ st.dataframe(
     },
 )
 
+
 # ---- tandai salah gabung / salah pecah
 # def dulu, baru tombol: Streamlit mengeksekusi script atas-ke-bawah, jadi
 # _flag harus sudah terdefinisi pada saat tombol dievaluasi.
@@ -231,3 +254,28 @@ if f1.button("Tandai salah gabung"):
     _flag(entity_id, "wrong_merge", reviewer_name)
 if f2.button("Tandai salah pecah"):
     _flag(entity_id, "wrong_split", reviewer_name)
+
+
+# ---- daftar entity bermasalah (setelah penandaan, supaya daftar selalu mencakup yang baru)
+if FLAGS_PATH.exists():
+    try:
+        _all_flags = pd.read_csv(FLAGS_PATH)
+        _all_flags["status"] = _all_flags["status"].fillna("open").astype(str)
+        _open = _all_flags[_all_flags["status"] == "open"]
+        if not _open.empty:
+            st.subheader("Entity yang pernah ditandai masalah")
+            st.dataframe(
+                _open[["entity_id", "issue", "status", "reviewer", "timestamp"]].rename(
+                    columns={
+                        "entity_id": "Kode entity",
+                        "issue": "Masalah",
+                        "status": "Status",
+                        "reviewer": "Pelapor",
+                        "timestamp": "Waktu",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+    except Exception:
+        pass

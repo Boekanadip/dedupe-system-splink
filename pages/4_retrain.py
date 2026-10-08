@@ -21,6 +21,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT
+from src.run_all import RUN_SUMMARY_PATH
 from src.ui import (
     format_count,
     format_duration,
@@ -80,7 +81,7 @@ else:
     st.warning("Belum ada model. Jalankan dari halaman Upload dulu.")
 c1, c2 = st.columns(2)
 if versions:
-    latest_meta = versions[-1]
+    latest_meta = next((v for v in versions if v["version"] == cur), versions[-1])
     c1.metric("Jumlah record", format_count(latest_meta.get("input_rows", 0)),
               help="Berapa baris data yang dipelajari model ini.")
     c2.metric("Pasangan dibandingkan", format_count(latest_meta.get("pairs_scored", 0)),
@@ -88,8 +89,6 @@ if versions:
 
 # ---- retrain
 RETRAIN_LOG = OUTPUT_DIR / "retrain.log"
-# Langkah terpanjang yang terukur ~48s (labels_review_queue). 10 menit tanpa
-# satu baris log berarti prosesnya sudah mati, bukan sedang lambat.
 STALE_SEC = 600
 
 
@@ -106,7 +105,7 @@ def lock_status() -> tuple[bool, int, bool]:
     return True, idle, bool(pid and psutil.pid_exists(pid))
 
 
-    st.subheader("Latih Ulang Model")
+st.subheader("Latih Ulang Model")
 st.caption(
     "Jalankan ulang seluruh pipeline di SEMUA data (bukan incremental). "
     "Menghasilkan versi model baru; versi lama tetap tersimpan dan bisa di-rollback."
@@ -126,16 +125,32 @@ def retrain_runner() -> None:
     locked, idle, alive = lock_status()
 
     if locked and not alive:
-        st.error(
-            f"Retrain berhenti — proses tidak ada lagi, log diam {idle // 60} menit. "
-            "Versi model tidak berubah, artefak lama tetap utuh. "
-            "Bersihkan lock lalu jalankan ulang."
-        )
-        if st.button("Bersihkan lock", type="primary"):
+        finished = (RUN_SUMMARY_PATH.exists()
+                    and RUN_SUMMARY_PATH.stat().st_mtime > LOCK.stat().st_mtime)
+        if finished:
+            summary = json.loads(RUN_SUMMARY_PATH.read_text(encoding="utf-8"))
+            st.success(f"Retrain selesai — model {summary['model_version']}; "
+                       f"total {format_duration(summary['total_seconds'])}.")
             LOCK.unlink(missing_ok=True)
-            RETRAIN_LOG.unlink(missing_ok=True)
-            st.rerun()
+        else:
+            st.error(
+                f"Pipeline retrain tidak menyelesaikan semua tahap; log diam {idle // 60} menit. "
+                "Sebagian artefak atau versi model mungkin sudah berubah. Periksa log sebelum mengulang."
+            )
+            if st.button("Bersihkan lock", type="primary"):
+                LOCK.unlink(missing_ok=True)
+                st.rerun()
+        if RETRAIN_LOG.exists():
+            with st.expander("Log retrain", expanded=not finished):
+                st.code(RETRAIN_LOG.read_text(encoding="utf-8", errors="replace")[-4000:], language="log")
         return
+
+    if locked and idle > STALE_SEC:
+        st.warning(
+            f"Log diam {idle // 60} menit sementara proses masih hidup. "
+            "Kalau diam tanpa batas, matikan retrain di terminal dan hapus log, "
+            "lalu periksa apakah artefak sebagian terbuat."
+        )
 
     if locked:
         st.info(f"Retrain berjalan — log terakhir {idle}s lalu.")
@@ -167,8 +182,16 @@ retrain_runner()
 
 # ---- drift
 st.subheader("Perubahan sejak model sebelumnya")
-if len(versions) >= 2:
-    prev, last = versions[-2], versions[-1]
+ordered = sorted((v for v in versions if v.get("scope") == "full"),
+                 key=lambda v: v.get("created_at") or "")
+active_index = next((i for i, v in enumerate(ordered) if v["version"] == cur), None)
+if active_index:
+    prev, last = ordered[active_index - 1], ordered[active_index]
+elif len(ordered) >= 2:
+    prev, last = ordered[-2], ordered[-1]
+else:
+    prev = last = None
+if prev and last:
     pe = prev.get("evaluation", {}).get("decision_rates", {})
     le = last.get("evaluation", {}).get("decision_rates", {})
     d1, d2 = st.columns(2)
@@ -185,8 +208,8 @@ if len(versions) >= 2:
         delta_color="inverse",
     )
     st.caption(
-        "Bandingkan dengan versi model sebelumnya. Kalau selisihnya besar, "
-        "artinya pola data berubah dan model perlu dilatih ulang."
+        "Ini hanya hitungan keputusan per versi, BUKAN bukti akurasi. "
+        "Gunakan bagian 'Apakah model jadi lebih baik?' di bawah untuk bukti sebanding."
     )
 else:
     st.caption("Butuh 2 versi model untuk bisa dibandingkan.")
@@ -200,6 +223,7 @@ if len(versions) >= 2:
         rows.append(
             {
                 "Versi": v["version"],
+                "Lingkup": v.get("scope"),
                 "Jumlah record": format_count(v.get("input_rows", 0)),
                 "Digabung otomatis": format_rate(ev.get("MATCH", 0)),
                 "Perlu diperiksa": format_rate(ev.get("REVIEW", 0)),
@@ -210,6 +234,71 @@ if len(versions) >= 2:
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 else:
     st.caption("Butuh 2 versi model.")
+
+st.subheader("Apakah model jadi lebih baik?")
+VS_GOLD_PATH = OUTPUT_DIR / "version_gold_scores.json"
+if not VS_GOLD_PATH.exists():
+    st.caption("Bukti belum dihitung. Jalankan: `python -m src.version_gold_scores` di terminal.")
+else:
+    report = json.loads(VS_GOLD_PATH.read_text(encoding="utf-8"))
+    prov = report.get("provenance", {})
+    vs = report.get("versions", [])
+    st.caption(report.get("limitation", ""))
+    st.caption(
+        "Semua versi diukur ulang pada revisi gold dan data bersih yang sama, kandidat sama, "
+        f"batas yang sama ({format_threshold(vs[0]['own_match_threshold'] if vs else 0.9)}). "
+        "Jadi beda angka adalah beda model, bukan beda data atau batas."
+    )
+    current_rows = vs[-1].get("trained_on_rows") if vs else None
+    for entry in vs:
+        rows_trained = entry.get("trained_on_rows")
+        if current_rows and rows_trained and rows_trained != current_rows:
+            entry["_training_data_note"] = (
+                f"dilatih pada {rows_trained:,} baris; dinilai ulang sekarang "
+                f"pada {current_rows:,} baris — sebanding untuk model, bukan "
+                "untuk snapshot"
+            )
+    # Same gold, same candidates, same 0.9, one dot per version.
+    ref = vs[0]["own_match_threshold"] if vs else 0.9
+    f1 = []
+    for entry in vs:
+        m = entry["clean"][f"at_{ref}"]
+        # A model that scores more positives only proves growth if false
+        # positives do not rise. Keep both mistake directions visible.
+        f1.append({"f1": m["f1"], "tp": m["tp"], "fp": m["fp"], "fn": m["fn"]})
+    trend = pd.DataFrame(
+        {"waktu": [datetime.fromisoformat(entry["created_at"]) if entry.get("created_at") else None for entry in vs],
+         "F1": [row["f1"] for row in f1]}
+    ).set_index("waktu")
+    st.line_chart(trend)
+    first = vs[0] if vs else {}
+    clean0 = first.get('clean', {}).get(f"at_{ref}", {})
+    incl0 = first.get('including_disputed', {}).get(f"at_{ref}", {})
+    st.caption(
+        f"Ukuran bukti: {int(prov.get('gold_pairs') or 0):,} pasang yang diperiksa manusia "
+        f"({int(prov.get('gold_positive_pairs') or 0):,} benar-benar sama, "
+        f"{int(prov.get('gold_disputed_pairs') or 0):,} masih berselisih). "
+        f"Posisi bersih terbaru: TP={int(clean0.get('tp', 0) or 0)}, FP={int(clean0.get('fp', 0) or 0)}, "
+        f"FN={int(clean0.get('fn', 0) or 0)}, F1={format_rate(clean0.get('f1', 0))}. "
+        f"Termasuk berselisih: TP={int(incl0.get('tp', 0) or 0)}, "
+        f"FP={int(incl0.get('fp', 0) or 0)}, FN={int(incl0.get('fn', 0) or 0)}, "
+        f"F1={format_rate(incl0.get('f1', 0))}. "
+        "Model datar karena buktinya belum mampu membedakan data baik dan data kotor."
+    )
+    with st.expander("Detail: tiap versi pada batas yang sama"):
+        detail = pd.DataFrame(
+            {
+                "versi": [entry["version"] for entry in vs],
+                "baris latih": [format_count(entry.get("trained_on_rows")) for entry in vs],
+                "batas": [format_threshold(ref) for _ in vs],
+                "benar sama": [row["tp"] for row in f1],
+                "salah gabung": [row["fp"] for row in f1],
+                "terlewat": [row["fn"] for row in f1],
+                "F1 bersih": [format_rate(row["f1"]) for row in f1],
+                "catatan": [entry.get("_training_data_note", "—") for entry in vs],
+            }
+        )
+        st.dataframe(detail, width="stretch", hide_index=True)
 
 # ---- feedback
 st.subheader("Catatan dari pemeriksaan manual")
@@ -318,8 +407,8 @@ else:
 st.subheader("Coba Batas Kepastian")
 st.caption(
     "Di bawah ini ditunjukkan apa yang terjadi kalau batas kepastian digeser. "
-    "Angka-angkanya dihitung dari pasangan yang sudah diperiksa manusia, jadi "
-    "Ini perkiraan — bukan jaminan."
+    "Angka-angkanya dihitung dari label perak (otomatis), jadi "
+    "ini perkiraan — bukan jaminan."
 )
 
 preds_path = OUTPUT_DIR / "splink_predictions.parquet"
@@ -395,7 +484,7 @@ if preds_path.exists() and silver_path.exists():
     c0.metric(
         "Batas gabung otomatis",
         format_threshold(cur_match),
-        help="Peluang minimal agar sistem langsung menggabungkan tanpa asking.",
+        help="Peluang minimal agar sistem langsung menggabungkan tanpa bertanya.",
     )
     c1.metric(
         "Batas bawah",
@@ -518,7 +607,7 @@ for label, ok in checks:
 st.subheader("Kembalikan ke Model Sebelumnya")
 st.caption(
     "Kalau model baru hasilnya lebih buruk, kembalikan sistem ke versi yang "
-    "lama. Hanya model aktif yang berubah — data hasil processing tidakSentuh."
+    "lama. Hanya model aktif yang berubah — data hasil processing tidak disentuh."
 )
 if len(versions) >= 2:
     target = st.selectbox(

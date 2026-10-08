@@ -230,7 +230,7 @@ with tab_r:
     st.caption(
         f"Antrean kerja berisi {len(queue):,} dari {len(review):,} pasangan yang "
         "perlu diperiksa. Sisanya belum pernah dilihat manusia sama sekali. "
-        "Masukkan yang skornya tertinggi supaya yang paling mungkin duplicate "
+        "Masukkan yang skornya tertinggi supaya yang paling mungkin duplikat "
         "pertama dicek."
     )
     f1, f2 = st.columns(2)
