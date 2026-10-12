@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT
 from src.ui import (
+    workflow_step,
     decision_label,
     field_label,
     format_probability,
@@ -33,6 +34,7 @@ from src.ui import (
     monitoring_sidebar,
     page_guide,
     page_header,
+    probability_band_help,
     probability_verdict,
     review_status_label,
     show_evidence,
@@ -44,10 +46,16 @@ QUEUE_PATH = LABELS_DIR / "review_queue.csv"
 PREDS_PATH = OUTPUT_DIR / "splink_predictions.parquet"
 EDITABLE = ["label", "reviewer", "reviewer_note"]
 
-# Kolom yang tampil di kisi "Daftar", dengan judul Bahasa Indonesia.
+# Estimasi biaya review. 30 detik per pasangan adalah perkiraan kasar untuk
+# pasangan dengan 9 field + tabel bukti. Dipakai supaya keputusan membludaknya
+# antrean terlihat mahal, bukan sekadar angka besar yang tidak bermakna.
+SECONDS_PER_PAIR = 30
+
+# Kolom yang tampil di kisi "Daftar"
 GRID_COLUMNS: list[tuple[str, str]] = [
     ("record_id_l", "Record A"),
     ("record_id_r", "Record B"),
+    ("agree_count", "Field yang cocok"),
     ("first_name_std_l", "Nama depan A"),
     ("first_name_std_r", "Nama depan B"),
     ("last_name_std_l", "Nama belakang A"),
@@ -69,7 +77,7 @@ GRID_COLUMNS: list[tuple[str, str]] = [
 ]
 GRID_TITLES = {raw: title for raw, title in GRID_COLUMNS}
 
-st.set_page_config(page_title="Review - Entity Resolution", page_icon="🔎", layout="wide")
+st.set_page_config(page_title="Review Entity Resolution", page_icon="🔎", layout="wide")
 page_header(
     "Pemeriksaan Pasangan",
     "Sistem tidak yakin apakah dua record itu orang yang sama. "
@@ -78,6 +86,7 @@ page_header(
 monitoring_sidebar()
 page_guide(__file__)
 how_to_read()
+workflow_step(__file__)
 
 if not QUEUE_PATH.exists():
     st.info("Belum ada antrean. Jalankan pipeline dari halaman Upload dulu.")
@@ -98,6 +107,22 @@ k2.metric("Menunggu", f"{pending:,}", help="Belum ada keputusan dari Anda.")
 k3.metric("Sudah diperiksa", f"{reviewed:,}")
 k4.metric("Ditetapkan sama", f"{n_match:,}", help="Anda memutuskan ini orang yang sama.")
 k5.metric("Ditetapkan beda", f"{n_nomatch:,}", help="Anda memutuskan ini dua orang berbeda.")
+
+# Estimasi biaya: tanpa ini, 97.423 pasangan hanya terlihat sebagai angka besar.
+# Dalam jam kerja, angkanya nyata dan mahal — dan itulah yang harus diputuskan.
+if pending > 0:
+    hours = pending * SECONDS_PER_PAIR / 3600
+    if hours >= 1:
+        cost = f"± {hours:,.0f} jam kerja".replace(",", ".")
+    else:
+        cost = f"± {pending * SECONDS_PER_PAIR / 60:.0f} menit".replace(".", ",")
+    st.caption(
+        f"⏱ Perkiraan waktu memeriksa semua yang menunggu: **{cost}** "
+        f"(asumsi {SECONDS_PER_PAIR} detik per pasangan). "
+        "Kalau angkanya terlalu besar, saring dulu lewat tab Asal pasangan "
+        "atau minta sistem menaikkan batas bawah agar pasangan yang jelas-jelas "
+        "bukan duplikat tidak masuk antrean."
+    )
 if "msg" in st.session_state:
     st.info(st.session_state["msg"])
 
@@ -108,7 +133,6 @@ def apply_labels(pairs: list[tuple[str, str, str, str, str]]) -> int:
     """pairs: (l, r, label, reviewer, note). Mutates queue in place then writes."""
     if not pairs:
         return 0
-    # re-read to avoid stale frame if user switched tabs
     frame = pd.read_csv(QUEUE_PATH)
     for c in EDITABLE:
         frame[c] = frame[c].where(frame[c].notna(), "").astype(str)
@@ -120,7 +144,6 @@ def apply_labels(pairs: list[tuple[str, str, str, str, str]]) -> int:
             frame.loc[mask, "reviewer_note"] = note
         frame.loc[mask, "review_status"] = "reviewed" if label else "pending"
     frame.to_csv(QUEUE_PATH, index=False)
-    # keep in-memory copy in sync for this rerun
     for c in EDITABLE:
         queue[c] = frame[c].values
         queue["review_status"] = frame["review_status"].values
@@ -174,10 +197,6 @@ with tab_compare:
         row = pool.iloc[idx]
 
         probability = float(row["match_probability"])
-        # Nilai field dan kode tingkat kesamaan diambil dari file predictions.
-        # Antrean tidak menyimpan semua field (mis. negara), jadi baca dari
-        # predictions supaya tabel "Kenapa?" tidak menampilkan "tidak diisi"
-        # untuk data yang sebenarnya ada.
         value_fields = (
             "first_name_std", "last_name_std", "email_std", "phone_std",
             "dob_std", "address_std", "city_std", "state_std", "country_std",
@@ -204,7 +223,7 @@ with tab_compare:
         m1.metric(
             "Peluang sama",
             format_probability(probability),
-            help="0% = pasti berbeda orang, 100% = pasti orang yang sama.",
+            help=probability_band_help(),
         )
         m2.metric("Status model", decision_label(evidence_row.get("decision", "REVIEW")))
 
@@ -275,8 +294,6 @@ with tab_list:
     st.caption(f"Menampilkan {len(filtered):,} dari {len(queue):,} pasangan.")
     shown = [raw for raw, _ in GRID_COLUMNS if raw in filtered.columns]
     grid = filtered[shown].rename(columns=GRID_TITLES)
-    # Peluang ditampilkan sebagai teks persen supaya tidak ada angka mentah
-    # seperti 0.0000 atau 1e-10 di tabel.
     grid["Peluang"] = grid["Peluang"].map(format_probability)
 
     editable = [GRID_TITLES[c] for c in shown if c in EDITABLE]
@@ -300,7 +317,7 @@ with tab_list:
             GRID_TITLES["stratum"]: st.column_config.TextColumn("Asal pasangan"),
         },
     )
-    # Grid ditampilkan dengan judul Indonesia; penyimpanan memakai nama kolom asli.
+
     edited = edited.rename(columns={title: raw for raw, title in GRID_COLUMNS})
     for col in EDITABLE:
         if col in edited.columns:
@@ -344,3 +361,42 @@ if st.button("Simpan ke daftar utama"):
     with st.expander("Log penyimpanan", expanded=result.returncode != 0):
         st.code(log)
     st.rerun()
+
+# Panduan "habis ini ke mana". Tanpa ini, reviewer menyimpan keputusan lalu
+# berhenti — tidak tahu bahwa keputusan itu belum dipakai apa pun sampai
+# model dilatih ulang. Keputusan manusia tidak otomatis mengubah model.
+if st.session_state.get("msg", "").startswith("Berhasil disimpan"):
+    st.divider()
+    st.subheader("Habis ini ke mana?")
+    st.markdown(
+        f"""
+Keputusan Anda sudah masuk ke **`data/labels/gold_labels.csv`** — file paling
+berharga di sistem ini. Isinya dipakai untuk **mengukur seberapa tepat model**,
+bukan untuk memutuskan sendiri.
+
+Tapi perlu diketahui: **keputusan Anda belum mengubah model.** Model yang
+sedang jalan tetap sama seperti sebelumnya. Perubahan baru terjadi kalau model
+dilatih ulang.
+
+Urutan selanjutnya:
+
+1. **Lihat hasil pengukuran** — buka halaman **Ringkasan**. Di sana terlihat
+   berapa customer unik, berapa yang digabung, dan berapa yang masih perlu
+   diperiksa.
+
+2. **Kalau hasilnya sudah memuaskan** — selesai. Tidak perlu apa-apa.
+
+3. **Kalau hasilnya belum benar** — buka halaman **Pengaturan Sistem** lalu
+   tekan **Latih ulang**. Di situ model belajar dari keputusan yang baru saja
+   Anda simpan. Prosesnya beberapa menit.
+
+4. **Kalau ada yang salah gabung** — buka halaman **Daftar Customer**, cari
+   customer yang keliru, lalu laporkan sebagai *salah gabung*. Itu jadi masukan
+   untuk perbaikan berikutnya.
+
+Saran: jangan melatih ulang setiap kali menilai beberapa pasangan. Kumpulkan
+dulu beberapa lusin keputusan, baru latih ulang — supaya perubahannya terukur.
+"""
+    )
+    if st.button("Buka Pengaturan Sistem untuk melatih ulang"):
+        st.switch_page("pages/4_retrain.py")
