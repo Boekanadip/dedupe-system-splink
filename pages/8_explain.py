@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import MATCH_THRESHOLD, OUTPUT_DIR, REVIEW_THRESHOLD, predictions_path
 from src.ui import (
+    workflow_step,
     decision_label,
     format_probability,
     format_rate,
@@ -38,6 +39,7 @@ page_header(
 )
 monitoring_sidebar()
 page_guide(__file__)
+workflow_step(__file__)
 how_to_read()
 
 preds_path = predictions_path(full=True)
@@ -57,23 +59,43 @@ st.caption(
     "Bobot setiap field diambil dari model yang sedang dipakai."
 )
 
-c1, c2 = st.columns(2)
-l_ids = sorted(preds["record_id_l"].unique().tolist())
-r_ids = sorted(preds["record_id_r"].unique().tolist())
-rid_l = c1.selectbox("Record pertama", l_ids, index=0)
-rid_r = c2.selectbox("Record kedua", [r for r in r_ids if r != rid_l] or r_ids)
+# Daftar berisi PASANGAN yang benar-benar pernah dibandingkan, bukan dua
+# dropdown bebas. Dulu memilih dua record secara terpisah menghasilkan ribuan
+# kombinasi yang tidak pernah disaring, dan halaman berhenti di pesan "tidak
+# pernah dibandingkan" — padahal yang dicari orang adalah alasan kenapa sebuah
+# pasangan digabung atau dipisah.
+#
+# VECTORIZED on purpose: the first version built the label with .apply() over
+# 1.1M rows, which took tens of seconds and made the page look hung. String
+# concatenation and .map() run in C and finish immediately.
+compared = preds[
+    ["record_id_l", "record_id_r", "match_probability", "decision"]
+].copy()
+compared["pasangan"] = (
+    compared["record_id_l"].astype(str) + "  ↔  " + compared["record_id_r"].astype(str)
+)
+compared = compared.sort_values("match_probability", ascending=False).reset_index(drop=True)
+compared["label_pil"] = (
+    compared["pasangan"]
+    + " · " + compared["decision"].map(decision_label)
+    + " · " + compared["match_probability"].map(format_probability)
+)
+
+st.caption(f"Menampilkan {len(compared):,} pasangan yang pernah dibandingkan sistem.")
+pick_idx = st.selectbox(
+    "Pilih pasangan",
+    range(len(compared)),
+    format_func=lambda i: compared.loc[i, "label_pil"],
+    key="explain_pair",
+)
+row = compared.loc[pick_idx]
 
 pair = preds[
-    ((preds["record_id_l"] == rid_l) & (preds["record_id_r"] == rid_r))
-    | ((preds["record_id_l"] == rid_r) & (preds["record_id_r"] == rid_l))
+    (preds["record_id_l"] == row["record_id_l"])
+    & (preds["record_id_r"] == row["record_id_r"])
 ]
 if pair.empty:
-    st.warning(
-        "Kedua record ini tidak pernah dibandingkan oleh sistem. "
-        "Artinya: pasangan ini tidak lolos aturan penyaringan, sehingga sistem "
-        "tidak pernah menganggapnya perlu dibandingkan. Ini batas dari data, "
-        "bukan penilaian model."
-    )
+    st.warning("Pasangan ini tidak lagi ada di hasil prediksi terbaru.")
     st.stop()
 p = pair.iloc[0].to_dict()
 
