@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -10,8 +12,6 @@ LABELS_DIR = PROJECT_ROOT / "data" / "labels"
 
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 
-# One definition per artifact. These used to be hardcoded in three modules, so a
-# --full run left labels and threshold_eval reading the stale 10k sample file.
 PREDICTIONS_SAMPLE_PATH = OUTPUT_DIR / "splink_predictions_sample.parquet"
 PREDICTIONS_FULL_PATH = OUTPUT_DIR / "splink_predictions.parquet"
 ENTITY_MAP_PATH = OUTPUT_DIR / "entity_map.parquet"
@@ -19,6 +19,8 @@ MASTER_PATH = OUTPUT_DIR / "master_customers.parquet"
 
 SCOPE_SAMPLE = "sample"
 SCOPE_FULL = "full"
+
+PIPELINE_LOCK = OUTPUT_DIR / ".pipeline_running"
 
 
 def predictions_path(full: bool) -> Path:
@@ -34,7 +36,7 @@ def meta_path(artifact: Path) -> Path:
 
 
 def read_meta(path: Path) -> dict:
-    """Provenance sidecar for an artifact. Empty when absent, never invented."""
+    """Baca berkas asal-usul artefak; hasil kosong jika berkas tidak ada."""
     meta_file = meta_path(path)
     if not meta_file.exists():
         return {}
@@ -42,8 +44,211 @@ def read_meta(path: Path) -> dict:
 
 
 def write_meta(path: Path, **fields) -> None:
+    """Tulis secara atomik melalui berkas sementara agar tidak terbaca sebagian."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    meta_path(path).write_text(json.dumps(fields, indent=2, default=str), encoding="utf-8")
+    target = meta_path(path)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(json.dumps(fields, indent=2, default=str), encoding="utf-8")
+    os.replace(tmp, target)
+
+
+STAGING_DIR = OUTPUT_DIR / ".staging"
+STAGING_MANIFEST = STAGING_DIR / "manifest.json"
+STAGING_ENV = "PIPELINE_STAGING"
+
+
+def _staged_name(path: Path) -> str:
+    """Nama unik berkas di .staging/: nama asli dan hash singkat folder induk,
+    supaya outputs/entity_map.parquet dan data/processed/entity_map.parquet
+    tidak bertabrakan (walau praktisnya tidak terjadi)."""
+    import hashlib
+
+    parent_hash = hashlib.md5(str(Path(path).parent).encode()).hexdigest()[:8]
+    return f"{parent_hash}_{Path(path).name}"
+
+
+def _read_manifest() -> dict:
+    if not STAGING_MANIFEST.exists():
+        return {}
+    try:
+        return json.loads(STAGING_MANIFEST.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_manifest(manifest: dict) -> None:
+    STAGING_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STAGING_MANIFEST.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    os.replace(tmp, STAGING_MANIFEST)
+
+
+def _register_staged(staged: Path, real: Path) -> None:
+    manifest = _read_manifest()
+    manifest[staged.name] = str(real)
+    _write_manifest(manifest)
+
+
+def active_path(path: Path) -> Path:
+    """Tentukan jalur berkas yang harus dibaca.
+
+    Proses turunan pipeline (PIPELINE_STAGING=1) membaca versi staging jika ada,
+    agar langkah berikutnya membaca keluaran langkah sebelumnya, bukan data
+    lama. Pembaca luar (Streamlit) tidak mengatur variabel lingkungan tersebut,
+    sehingga selalu membaca berkas yang sudah di-commit.
+    """
+    if os.environ.get(STAGING_ENV) != "1":
+        return Path(path)
+    staged = STAGING_DIR / _staged_name(path)
+    if staged.exists():
+        return staged
+    return Path(path)
+
+
+def _stage_write(tmp: Path, path: Path) -> None:
+    """Pindahkan berkas .tmp yang sudah jadi ke .staging/ dan catat di manifest."""
+    path = Path(path)
+    STAGING_DIR.mkdir(parents=True, exist_ok=True)
+    staged = STAGING_DIR / _staged_name(path)
+    os.replace(tmp, staged)
+    _register_staged(staged, path)
+
+
+def atomic_write_parquet(frame, path: Path, **kwargs) -> None:
+    """Tulis DataFrame. Saat pipeline berjalan: ke .staging/. Di luar pipeline:
+    tulis secara atomik ke jalur asli, misalnya dari halaman ambang tanpa run_all."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    frame.to_parquet(tmp, index=False, **kwargs)
+    if os.environ.get(STAGING_ENV) == "1":
+        _stage_write(tmp, path)
+    else:
+        os.replace(tmp, path)
+
+
+def atomic_write_text(text: str, path: Path, encoding: str = "utf-8") -> None:
+    """Tulis teks ke staging saat pipeline berjalan, atau langsung jika tidak."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding=encoding)
+    if os.environ.get(STAGING_ENV) == "1":
+        _stage_write(tmp, path)
+    else:
+        os.replace(tmp, path)
+
+
+def atomic_write_json(obj, path: Path, indent: int = 2) -> None:
+    """Tulis objek Python sebagai JSON."""
+    atomic_write_text(json.dumps(obj, indent=indent, default=str), path)
+
+
+def atomic_write_csv(frame, path: Path, **kwargs) -> None:
+    """Tulis DataFrame sebagai CSV. JANGAN pakai atomic_write_parquet untuk berkas
+    .csv — fungsi tersebut menulis format parquet ke berkas berekstensi .csv dan merusaknya
+    (pernah terjadi pada 2026-10-12: silver_pairs.csv dan review_queue.csv
+    jadi tidak terbaca)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    frame.to_csv(tmp, index=False, **kwargs)
+    if os.environ.get(STAGING_ENV) == "1":
+        _stage_write(tmp, path)
+    else:
+        os.replace(tmp, path)
+
+
+def append_jsonl(entry: dict, path: Path) -> None:
+    """Tambahkan satu baris JSON ke berkas JSONL."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, default=str) + "\n")
+
+
+def finalize_staged() -> int:
+    """Tukar semua berkas .staging/ ke jalur aslinya, lalu bersihkan.
+
+    Ini titik "commit" proses. Sebelum dipanggil, pembaca luar melihat keadaan lama
+    sepenuhnya; sesudahnya, state baru sepenuhnya. Jendela inkonsistensi tinggal
+    mikrosekon (waktu os.replace per file), bukan 70-465 detik seperti dulu.
+
+    Kembalikan jumlah berkas yang ditukar.
+    """
+    manifest = _read_manifest()
+    swapped = 0
+    for name, real in manifest.items():
+        staged = STAGING_DIR / name
+        if not staged.exists():
+            continue
+        dest = Path(real)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staged, dest)
+        swapped += 1
+    # Bersihkan sisa (termasuk .tmp yang tertinggal jika proses gagal).
+    if STAGING_DIR.exists():
+        for leftover in STAGING_DIR.iterdir():
+            leftover.unlink(missing_ok=True)
+    return swapped
+
+
+def discard_staged() -> int:
+    """Buang semua berkas .staging/ tanpa menyentuh jalur asli.
+
+    Dipakai kalau run gagal: state lama tetap utuh, tidak ada yang ditukar.
+    """
+    manifest = _read_manifest()
+    count = len(manifest)
+    if STAGING_DIR.exists():
+        for leftover in STAGING_DIR.iterdir():
+            leftover.unlink(missing_ok=True)
+    return count
+
+
+def staged_pending() -> dict:
+    """Manifest staging yang belum di-commit. Kosong jika tidak ada proses aktif."""
+    return _read_manifest()
+
+
+# --- Pipeline lock ---
+
+
+def acquire_pipeline_lock(note: str = "") -> None:
+    """Tandai pipeline sedang berjalan. Catat PID agar kunci basi dapat dideteksi
+    (proses sudah berhenti tetapi kuncinya tertinggal)."""
+    PIPELINE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    import time
+
+    PIPELINE_LOCK.write_text(
+        json.dumps({"pid": os.getpid(), "started_at": time.time(), "note": note}),
+        encoding="utf-8",
+    )
+
+
+def release_pipeline_lock() -> None:
+    PIPELINE_LOCK.unlink(missing_ok=True)
+
+
+def pipeline_locked() -> dict | None:
+    """Kembalikan informasi jika pipeline sedang berjalan, atau None jika tidak.
+
+    Kunci yang lebih tua dari 2 jam dianggap basi (proses gagal tetapi kunci
+    tertinggal) dan tidak memblokir.
+    """
+    import time
+
+    if not PIPELINE_LOCK.exists():
+        return None
+    try:
+        info = json.loads(PIPELINE_LOCK.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        PIPELINE_LOCK.unlink(missing_ok=True)
+        return None
+    age = time.time() - float(info.get("started_at", 0))
+    if age > 7200:
+        PIPELINE_LOCK.unlink(missing_ok=True)
+        return None
+    return info
 
 COLUMN_MAP = {
     "customer_id": "customer_id",
@@ -62,33 +267,26 @@ COLUMN_MAP = {
     "source": "source",
 }
 
-# Extra names accepted for the device column, tried only when COLUMN_MAP's name is
-# absent. Needed because batches disagree on the spelling: the 50k file ships
-# `device_id(s)`, batch_0005 ships `device_id`, and a canonical field can only hold
-# one name here. ponytail: extend this only for a measured mismatch, not for
-# names seen in theory - a wrong alias silently drops a whole column of truth.
 DEVICE_ID_ALIASES: tuple[str, ...] = ("device_id",)
+# Isi hanya kalau DB asli memakai nama berbeda. Contoh:
+#     DB_COLUMN_MAP = {
+#         "first_nm": "first_name",
+#         "e_mail":   "email",
+#         "telp":     "phone_number",
+#         "tgl_lahir":"dob",
+#     }
+DB_COLUMN_MAP: dict[str, str] = {}
 
 SOURCE_RECORD_ID_COLUMN = None
 
-# Day/month order for ambiguous dates (both parts <= 12). None means "derive it
-# from the rows where day > 12 or month > 12". A column with no such evidence is
-# NOT guessed: standardize exits and asks, because dob_exact and city_dob depend
-# on this answer. Measured on the current dataset: 30,279 rows have day > 12 and
-# 0 have month > 12, so the file resolves to "dmy" on its own.
+# sehingga berkas dapat menentukan urutan "dmy" sendiri.
 DATE_ORDER: str | None = None  # "dmy" | "mdy"
 
 RANDOM_SEED = 42
 SMOKE_SAMPLE_SIZE = 10000
 
-# Starter blocking rules shared between benchmark and training.
-# Equi-join keys only; fuzzy similarity belongs after candidate generation (DESIGN.md).
-# Rules 1-6 are exact keys; 7-12 use lossy prefix keys (see standardize.add_blocking_keys)
-# because exact blocking produced only 3,487 of 49,995,000 pairs on a 10k sample.
-# Measured on that 10k sample. `email_local_pre3` on its own was rejected:
-# 480,961 pairs with a 368-record block, because email_local_pre3 collides on
-# common first-name prefixes. Adding last_name_std_pre3 cuts it to 2,796.
-BENCHMARK_RULES: list[tuple[str, list[str]]] = [
+# Default blocking rules (fallback when no config file).
+DEFAULT_BENCHMARK_RULES: list[tuple[str, list[str]]] = [
     ("email_exact", ["email_std"]),
     ("phone_exact", ["phone_std"]),
     ("name_exact", ["first_name_std", "last_name_std"]),
@@ -103,56 +301,51 @@ BENCHMARK_RULES: list[tuple[str, list[str]]] = [
     ("city_state_dob_year", ["city_std", "state_std", "dob_year_std"]),
 ]
 
-# ASSUMPTION, not a measurement. The deterministic rules below are assumed to
-# recover this fraction of true duplicate pairs; Splink divides by it to
-# estimate probability_two_random_records_match. Replace with a value measured
-# on the reviewed gold sample before trusting any match probability.
-# Grounded on the 50k dataset: silver deterministic rules find 3,395 positive
-# pairs against a device-implied truth of 3,366; observed recall is ~1.009 on
-# the customer/device duplicate set, not 0.7. The 0.7 assumption under-counted
-# known duplicates by ~43%, inflating the assumed number of true matches and
-# scoring NON_MATCH pairs too strongly. NOTE: replace again if a real labeled
-# validation set appears.
+# Backward compat: BENCHMARK_RULES stays importable as the default list.
+BENCHMARK_RULES = DEFAULT_BENCHMARK_RULES
+
+
+def load_benchmark_rules(config_path: str | Path | None = None) -> list[tuple[str, list[str]]]:
+    """Load blocking rules from a JSON file; fallback to DEFAULT_BENCHMARK_RULES.
+
+    Config file format: [{"name": "...", "columns": ["col1", "col2"]}, ...]
+    """
+    from pathlib import Path
+    import json
+
+    path = Path(config_path) if config_path else PROJECT_ROOT / "config" / "blocking_rules.json"
+    if not path.exists():
+        return DEFAULT_BENCHMARK_RULES
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [(item["name"], item["columns"]) for item in data]
+    except (json.JSONDecodeError, KeyError, TypeError, OSError):
+        return DEFAULT_BENCHMARK_RULES
+
 LAMBDA_RECALL_ASSUMPTION = 1.0
 
-# P(m true match lands in a comparison's "all other" bucket) — pinned, not trained.
-#
-# WHY: on this dataset every duplicate group is identical on every field, so EM
-# finds m ~= 0 for the "differs" level and Splink clamps it to 8.58e-300. log2 of
-# that is -996.6, so all 292,016 non-matches scored EXACTLY -996.578428 (std
-# 2.3e-13, one single value) and the review band could never contain anything.
-# The model could not express "unsure" at all.
-#
-# MEASURED at 4k rows, sweeping this value, holding everything else fixed:
-#   floor  weight values  weight range        pairs in review band  match edges
-#   none          1       -996.6 (constant)                      0          13
-#   0.01        505       -886.6 .. -31.7                       1          13
-#   0.05        505       -493.7 .. -17.8                     121          13
-#   0.20        504       -996.6 ..  -1.7                    1269          13
-#
-# 0.05 chosen: the band opens to a reviewable size while the match-edge count is
-# unchanged. 0.20 floods the queue; 0.01 is too tight to be useful.
-#
-# ASSUMPTION, not a measurement from real dirty data: that ~5% of true matches
-# differ completely on a given field. It cannot be measured here — this dataset
-# contains no such pair, which is the whole reason this constant is needed.
 M_ELSE_LEVEL_FLOOR: float | None = 0.05
+M_ELSE_LEVEL_FLOOR_BY_FIELD: dict[str, float] = {
+    "dob_std": 0.001,        # tanggal lahir beda -> hampir pasti orang berbeda
+    "phone_std": 0.001,      # nomor telepon beda -> kuat menolak
+    "email_std": 0.005,      # email beda -> cukup kuat (bisa ganti email)
+    "first_name_std": 0.02,  # nama bisa salah ketik / ganti
+    "last_name_std": 0.02,
+    "address_std": 0.02,     # alamat bisa pindah
+    # city/state/country sengaja TIDAK di-override: memang sering kosong/salah.
+}
 
-# Measured on the 50k file: with the pinned m floor the score distribution is
-# still bimodal on the match side — 1,867/1,867 device pairs score exactly p =
-# 1.0, so every threshold in [0.5, 0.999] selects the same 1,867 edges. 0.9 is
-# therefore safe HERE, but is NOT a general threshold; re-measure when data,
-# comparisons, or the floor change.
+
+def m_else_floor_for(column: str) -> float | None:
+    """Nilai batas bawah untuk satu kolom, dengan fallback ke M_ELSE_LEVEL_FLOOR."""
+    if M_ELSE_LEVEL_FLOOR is None:
+        return None
+    return M_ELSE_LEVEL_FLOOR_BY_FIELD.get(column, M_ELSE_LEVEL_FLOOR)
+
+
 MATCH_THRESHOLD = 0.9
-# Below this a pair is rejected outright. Between it and MATCH_THRESHOLD a human
-# checks. 1e-300 means "Splink collapsed this row to zero belief". REVIEW band
-# content on 50k with the m floor pinned: 27,773 pairs in (1e-10, 0.9).
-REVIEW_THRESHOLD = 1e-10
+REVIEW_THRESHOLD = 1e-8
 
-# Threshold can be applied from the retrain page (Threshold exploration). The
-# applied values live in outputs/thresholds_override.json so every later run and
-# subprocess picks them up without editing code; the defaults above stay as the
-# documented fallback when no override exists.
 _OVERRIDE = OUTPUT_DIR / "thresholds_override.json"
 if _OVERRIDE.exists():
     try:
@@ -160,4 +353,4 @@ if _OVERRIDE.exists():
         MATCH_THRESHOLD = float(_t.get("match_threshold", MATCH_THRESHOLD))
         REVIEW_THRESHOLD = float(_t.get("review_threshold", REVIEW_THRESHOLD))
     except (json.JSONDecodeError, OSError, TypeError, ValueError):
-        pass  # a broken override must not stop the pipeline; defaults stand
+        pass  # jika ditimpa, gunakan nilai bawaan

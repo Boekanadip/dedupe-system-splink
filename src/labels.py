@@ -12,35 +12,44 @@ from .config import (
     OUTPUT_DIR,
     PROCESSED_DATA_PATH,
     predictions_path as config_predictions_path,
+    atomic_write_parquet,
+    atomic_write_json,
+    active_path,
+    atomic_write_csv,
 )
 
-# Explicit filenames. Sourcing labels by glob order would silently pick up a
-# half-reviewed queue instead of the reviewed set.
+# Gunakan nama berkas secara eksplisit. Mengambil label berdasarkan urutan glob
+# dapat membuat antrean yang baru ditinjau sebagian terbaca sebagai set yang
+# sudah selesai ditinjau.
 SILVER_PATH = LABELS_DIR / "silver_pairs.csv"
 GOLD_PATH = LABELS_DIR / "gold_labels.csv"
 QUEUE_PATH = LABELS_DIR / "review_queue.csv"
-# Written by src/review_sample.py. Declared here as a plain path (not an import)
-# because review_sample already imports REVIEW_FIELDS from this module.
+# Ditulis oleh src/review_sample.py. Didefinisikan sebagai jalur biasa, bukan
+# impor, karena review_sample sudah mengimpor REVIEW_FIELDS dari modul ini.
 FP_SAMPLE_PATH = LABELS_DIR / "review_fp_sample.csv"
 
 TRUTHY = {"1", "true", "t", "yes", "y", "match", "positive", "duplicate", "dup"}
-# Without these, a reviewer's "no_match" is neither saved nor accepted: promote_gold
-# silently dropped every row whose label was not in TRUTHY, so a fully reviewed
-# 100-pair file could yield a gold set with no negatives in it at all.
+# Tanpa nilai-nilai ini, keputusan "no_match" dari peninjau tidak disimpan atau
+# diterima: promote_gold membuang semua baris yang labelnya tidak tercantum dalam
+# TRUTHY tanpa peringatan. Akibatnya, berkas 100 pasangan yang seluruhnya sudah
+# ditinjau dapat menghasilkan set acuan tanpa satu pun contoh negatif.
 FALSY = {
     "0", "false", "f", "no", "n", "no_match", "non_match", "not_match",
     "different", "beda", "beda_orang", "negative", "reject", "tidak_cocok",
 }
 LABEL_VALUES = TRUTHY | FALSY
 
-# Review cap per stratum. A queue nobody can finish is not a queue.
+# Batas jumlah tinjauan per stratum. Antrean yang tidak mungkin diselesaikan
+# bukanlah antrean yang berguna.
 QUEUE_SAMPLE_PER_STRATUM = 200
-# Email-only collisions are already known to be different people: 1,596 email
-# matches sit on different customer_id and phone. Sample few of them.
+# Tabrakan yang hanya berbagi email sudah diketahui berasal dari orang berbeda:
+# 1.596 pasangan dengan email sama memiliki customer_id dan nomor telepon berbeda.
+# Ambil sebagian kecil sebagai sampel.
 QUEUE_SAMPLE_LOW_VALUE = 50
 
-# Side-by-side values a reviewer needs to judge a pair. Standardized columns only:
-# reviewing the raw values would invite judging the typo, not the identity.
+# Nilai berdampingan yang dibutuhkan peninjau untuk menilai pasangan. Gunakan
+# kolom terstandardisasi saja: nilai mentah dapat membuat peninjau menilai
+# salah ketiknya, bukan identitas orangnya.
 REVIEW_FIELDS = [
     "first_name_std",
     "last_name_std",
@@ -51,6 +60,53 @@ REVIEW_FIELDS = [
     "state_std",
     "address_std",
 ]
+
+# Satu daftar kolom antrean, dipakai semua penulis: build_review_queue,
+# halaman Antrean (bulk-add) dan halaman Celah (enqueue). Dulu tiap penulis
+# menentukan kolomnya sendiri, sehingga tombol tambah massal menyalin hanya
+# record_id + peluang dan menghasilkan 400 baris tanpa bukti — peninjau
+# melihat dua kode record tanpa nama/email/telepon untuk dinilai.
+QUEUE_COLUMNS: list[str] = [
+    "record_id_l",
+    "record_id_r",
+    "stratum",
+    "agree_count",
+    "agree_email",
+    "agree_phone",
+    "agree_dob",
+    "agree_name",
+    "agree_city",
+    "match_probability",
+    *[f"{f}_{side}" for side in ("l", "r") for f in REVIEW_FIELDS],
+    "label",
+    "review_status",
+    "reviewer",
+    "reviewer_note",
+]
+
+
+def exclude_gold_pairs(queue: pd.DataFrame, gold: pd.DataFrame) -> pd.DataFrame:
+    """Return queue rows whose unordered record pair is not already in gold."""
+    pair_columns = {"record_id_l", "record_id_r"}
+    for name, frame in (("review queue", queue), ("gold labels", gold)):
+        missing = pair_columns - set(frame.columns)
+        if missing:
+            raise ValueError(f"{name} is missing pair columns: {sorted(missing)}")
+
+    gold_pairs = {
+        tuple(sorted((str(left), str(right))))
+        for left, right in gold[["record_id_l", "record_id_r"]].itertuples(
+            index=False, name=None
+        )
+        if pd.notna(left) and pd.notna(right)
+    }
+    queue_pairs = [
+        tuple(sorted((str(left), str(right))))
+        for left, right in queue[["record_id_l", "record_id_r"]].itertuples(
+            index=False, name=None
+        )
+    ]
+    return queue.loc[[pair not in gold_pairs for pair in queue_pairs]].copy()
 
 
 def _pairs_where(df: pd.DataFrame, where: str) -> pd.DataFrame:
@@ -69,14 +125,16 @@ def _pairs_where(df: pd.DataFrame, where: str) -> pd.DataFrame:
 
 
 def build_silver(df: pd.DataFrame) -> pd.DataFrame:
-    """Deterministic high-precision pairs. Not reviewed, therefore not gold.
+    """Pasangan deterministik berpresisi tinggi. Belum ditinjau, jadi bukan label acuan.
 
-    customer_id is deliberately NOT used as a basis (AGENTS.md forbids it as
-    sole duplicate truth). It agrees with these rules on all 1,867 pairs and is
-    reported separately as a sanity check, never as the source of the label.
+    customer_id sengaja TIDAK digunakan sebagai dasar (AGENTS.md melarangnya
+    sebagai satu-satunya acuan duplikat). Nilainya sesuai dengan aturan ini pada
+    seluruh 1.867 pasangan dan dilaporkan terpisah sebagai pemeriksaan kewajaran,
+    bukan sebagai sumber label.
 
-    Positives require two identifiers to agree, because email alone collides:
-    1,596 email matches sit on different customer_id / phone / dob.
+    Label positif mensyaratkan kesesuaian dua pengenal karena email saja dapat
+    berbenturan: 1.596 pasangan dengan email sama memiliki customer_id, nomor
+    telepon, atau tanggal lahir yang berbeda.
     """
     positives = _pairs_where(
         df,
@@ -94,9 +152,9 @@ def build_silver(df: pd.DataFrame) -> pd.DataFrame:
     positives["label"] = 1
     positives["evidence"] = "phone+dob | email+phone"
 
-    # Same phone or same email but the other identifiers contradict: two people
-    # sharing one contact field. NULL-safe diffs so a null on one side does not
-    # silently count as agreement or as a conflict.
+    # Nomor telepon atau email sama, tetapi pengenal lain bertentangan: dua orang
+    # berbagi satu kolom kontak. Perbedaan aman terhadap NULL agar nilai kosong di
+    # satu sisi tidak diam-diam dianggap sebagai kecocokan maupun pertentangan.
     negatives = _pairs_where(
         df,
         """
@@ -123,10 +181,10 @@ def build_silver(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def customer_id_agreement(df: pd.DataFrame, silver: pd.DataFrame) -> dict:
-    """Sanity check only: do the deterministic labels agree with customer_id?
+    """Pemeriksaan kewajaran saja: apakah label deterministik sesuai dengan customer_id?
 
-    Reported because a low number would mean the silver rules are wrong, not
-    because customer_id decides the label.
+    Dilaporkan karena angka yang rendah berarti aturan silver keliru, bukan
+    karena customer_id menentukan label.
     """
     cid = _pairs_where(df, 'l."customer_id" = r."customer_id"')
     labelled = silver[["record_id_l", "record_id_r"]].merge(
@@ -143,12 +201,13 @@ def customer_id_agreement(df: pd.DataFrame, silver: pd.DataFrame) -> dict:
 
 
 def agree_fields(df: pd.DataFrame, preds: pd.DataFrame) -> pd.DataFrame:
-    """Record WHICH identity fields agree, not just how many.
+    """Catat kolom identitas MANA yang cocok, bukan hanya jumlahnya.
 
-    Counting is misleading here: 2,590 of the candidate pairs agree on dob only,
-    which is a birthday collision between different people. A count-based
-    stratum buried those next to the 610 same-full-name pairs that genuinely
-    need a reviewer's judgement.
+    Hitungan saja dapat menyesatkan: 2.590 pasangan kandidat hanya memiliki
+    tanggal lahir yang sama, yang dapat terjadi pada orang berbeda. Pengelompokan
+    berdasarkan jumlah kesamaan menempatkannya bersama 610 pasangan dengan nama
+    lengkap yang sama, padahal pasangan tersebut benar-benar memerlukan penilaian
+    peninjau.
     """
     con = duckdb.connect()
     con.register("src", df)
@@ -171,8 +230,8 @@ def agree_fields(df: pd.DataFrame, preds: pd.DataFrame) -> pd.DataFrame:
 
 
 def attach_evidence(df: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
-    """Widen a pair table with both records' field values, so a reviewer never
-    has to open another file to judge a pair."""
+    """Lengkapi tabel pasangan dengan nilai kolom dari kedua catatan agar
+    peninjau tidak perlu membuka berkas lain untuk menilai pasangan."""
     left = df[["record_id", *REVIEW_FIELDS]].rename(
         columns={**{"record_id": "record_id_l"}, **{c: f"{c}_l" for c in REVIEW_FIELDS}}
     )
@@ -186,11 +245,24 @@ def attach_evidence(df: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
-    """Strata a human must review, prioritising silver/Model disagreement.
+    """Kelompokkan pasangan untuk ditinjau manusia, dahulukan perbedaan silver/model.
 
-    Produced from the current prediction output. Strata, not a uniform random
-    sample, because 11,807 uniform pairs would waste most of them on obvious
-    non-matches.
+    Dibuat dari keluaran prediksi saat ini. Sampel dikelompokkan berdasarkan
+    strata, bukan diambil acak merata, karena 11.807 pasangan yang dipilih merata
+    sebagian besar akan berupa pasangan yang jelas bukan kecocokan.
+
+    PENGURUTAN (2026-10-12). Sebelumnya antrean diurutkan berdasarkan
+    (stratum, probability), sehingga strata yang "mudah" muncul lebih dahulu,
+    bukan pasangan yang paling mungkin duplikat. Untuk produksi, prioritasnya
+    berbeda dari antrean triase pada umumnya: pasangan dengan BANYAK kolom yang
+    cocok tetapi belum diputuskan LEBIH berisiko jika salah digabungkan (data
+    orang asing dapat mencemari catatan master) daripada pasangan yang hanya
+    cocok pada satu kolom. Karena itu, antrean diurutkan berdasarkan:
+      1. agree_count menurun — jumlah kolom identitas yang cocok (risiko jika salah)
+      2. match_probability menurun — perkiraan model
+    Pasangan dengan email, telepon, nama, dan tanggal lahir yang sama tetapi
+    skornya belum meyakinkan adalah pasangan yang harus lebih dahulu dilihat
+    peninjau manusia.
     """
     predictions_path = config_predictions_path(full=full)
     if not predictions_path.exists():
@@ -203,9 +275,9 @@ def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
     preds = pd.read_parquet(predictions_path)[["record_id_l", "record_id_r", "match_probability"]]
     silver = build_silver(df)
 
-    # Labels are built on every row, but a model run may cover a sample. A silver
-    # pair outside the modelled rows is not "unlabelled", it is simply out of
-    # scope, and mixing the two would make the strata wrong.
+    # Label dibuat untuk semua baris, tetapi proses model mungkin hanya mencakup
+    # sampel. Pasangan silver di luar baris yang dimodelkan bukan "belum berlabel",
+    # melainkan di luar cakupan; mencampur keduanya akan mengacaukan pengelompokan.
     modelled = set(preds["record_id_l"]) | set(preds["record_id_r"])
     silver_in_scope = silver[
         silver["record_id_l"].isin(modelled) & silver["record_id_r"].isin(modelled)
@@ -221,15 +293,22 @@ def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
         how="left",
     ).merge(agree_fields(df, preds), on=["record_id_l", "record_id_r"], how="left")
 
+    # agree_count = berapa banyak field identitas yang cocok. Dipakai sebagai
+    # prioritas risiko: makin banyak field cocok tanpa keputusan, makin berbahaya
+    # kalau salah gabung (data master jadi tercampur orang lain).
+    agree_cols = ["agree_email", "agree_phone", "agree_dob", "agree_name", "agree_city"]
+    merged["agree_count"] = merged[agree_cols].fillna(False).sum(axis=1)
+
     strata: list[tuple[str, pd.DataFrame]] = []
-    # labelled by silver, contradicted by the model — the disagreements are what
-    # a reviewer can actually correct.
+    # Diberi label oleh silver, tetapi bertentangan dengan model. Perbedaan inilah
+    # yang dapat diperiksa dan dikoreksi oleh peninjau.
     strata.append(("silver_positive_low_probability", merged[(merged["label"] == 1) & (merged["match_probability"] < 0.5)]))
     strata.append(("silver_negative_high_probability", merged[(merged["label"] == 0) & (merged["match_probability"] >= 0.5)]))
-    # Blocked together but unlabelled. Stratified by WHICH field agrees, not by
-    # probability: every score below the top decile here is 1e-300, so probability
-    # separates nothing. A shared name or phone is a real judgement call; a
-    # shared dob alone is a birthday collision and is not worth reviewer time.
+    # Terblokir bersama tetapi belum berlabel. Kelompokkan berdasarkan kolom
+    # yang cocok, bukan probabilitas: semua skor di bawah desil tertinggi adalah
+    # 1e-300, sehingga probabilitas tidak membedakan pasangan. Nama atau telepon
+    # yang sama perlu dinilai; dob yang sama saja dapat terjadi karena ulang tahun
+    # kebetulan dan tidak sepadan dengan waktu peninjau.
     unlabelled = merged[merged["label"].isna()]
     strata.append(("unlabelled_high_probability", unlabelled[unlabelled["match_probability"] >= 0.5]))
     strata.append(("unlabelled_same_name", unlabelled[unlabelled["agree_name"]]))
@@ -256,17 +335,23 @@ def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
     queue = pd.concat(frames, ignore_index=True)
     queue = attach_evidence(df, queue)
 
-    # label is intentionally blank: filling it IS the review. Gold is produced by
-    # copying this file to gold_labels.csv with 'label' set, not by renaming.
+    # Label sengaja dibiarkan kosong: mengisinya merupakan proses peninjauan.
+    # Label acuan dibuat dengan menyalin berkas ini ke gold_labels.csv setelah
+    # kolom 'label' diisi, bukan dengan sekadar mengganti nama berkas.
     queue["label"] = None
     queue["review_status"] = "pending"
     queue["reviewer"] = None
     queue["reviewer_note"] = None
-    queue = queue.sort_values(["stratum", "match_probability"], ascending=[True, False])
+    # Prioritas: banyak field cocok dulu (risiko salah gabung tinggi), lalu
+    # peluang model tertinggi. Stratum dipertahankan untuk filtering, bukan
+    # untuk menentukan urutan kerja.
+    queue = queue.sort_values(
+        ["agree_count", "match_probability"], ascending=[False, False]
+    )
     return queue[
         [
-            "record_id_l", "record_id_r", "stratum",
-            "agree_email", "agree_phone", "agree_dob", "agree_name", "agree_city",
+            "record_id_l", "record_id_r", "stratum", "agree_count",
+            *agree_cols,
             "match_probability",
             *[f"{f}_{side}" for side in ("l", "r") for f in REVIEW_FIELDS],
             "label", "review_status", "reviewer", "reviewer_note",
@@ -275,15 +360,16 @@ def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
 
 
 def load_labels(source: str | None = None) -> tuple[pd.DataFrame | None, str]:
-    """Return reviewed labels if gold exists, else silver, else nothing.
+    """Kembalikan label yang ditinjau jika label acuan tersedia, jika tidak label silver, atau None.
 
-    The source string is returned so callers can refuse to call silver output
-    "gold metrics".
+    Nama sumber dikembalikan agar pemanggil dapat mencegah keluaran silver
+    disebut "metrik gold".
 
-    `source` pins one file instead of preferring gold. Without it a caller had no
-    way to ask for silver once gold_labels.csv existed, so `threshold_eval
-    --source silver` raised instead of reporting — the flag looked broken rather
-    than unavailable.
+    `source` menetapkan satu berkas, bukan otomatis mengutamakan gold. Tanpa
+    parameter ini, pemanggil tidak dapat meminta silver setelah
+    gold_labels.csv tersedia, sehingga `threshold_eval --source silver` gagal
+    alih-alih melaporkan sumber yang tidak tersedia. Akibatnya, seolah-olah
+    opsinya rusak.
     """
     if source in (None, "auto"):
         order = ((GOLD_PATH, "gold"), (SILVER_PATH, "silver"))
@@ -295,9 +381,9 @@ def load_labels(source: str | None = None) -> tuple[pd.DataFrame | None, str]:
     for path, name in order:
         if not path.exists():
             continue
-        # sep=None sniffs the delimiter. Reviewed files come back from Excel
-        # with ';' under a comma-decimal locale, and read_csv(path) would fold
-        # the whole header into one column name.
+        # sep=None mendeteksi pemisah secara otomatis. Berkas yang dikembalikan
+        # dari Excel memakai ';' pada pengaturan desimal berkoma. read_csv(path)
+        # akan membaca seluruh judul kolom sebagai satu nama.
         raw = pd.read_csv(path, sep=None, engine="python")
         required = {"record_id_l", "record_id_r"}
         if not required.issubset(raw.columns):
@@ -316,8 +402,8 @@ def load_labels(source: str | None = None) -> tuple[pd.DataFrame | None, str]:
         pairs = raw[["record_id_l", "record_id_r"]].astype(str)
         normalised = raw[label_col].map(normalise_label)
         if name == "gold" and normalised.isna().any():
-            # A typo like "yes"/"maybe" would otherwise become a silent negative
-            # and quietly poison precision and recall.
+            # Salah ketik seperti "yes"/"maybe" jika dibiarkan akan menjadi
+            # keputusan negatif tanpa peringatan dan merusak angka presisi serta recall.
             bad = sorted(set(raw[label_col].astype(str)[normalised.isna()]))[:5]
             raise ValueError(
                 f"{path.name}: unrecognised label values {bad}. "
@@ -338,18 +424,19 @@ def load_labels(source: str | None = None) -> tuple[pd.DataFrame | None, str]:
 def save_silver(df: pd.DataFrame) -> pd.DataFrame:
     silver = build_silver(df)
     LABELS_DIR.mkdir(parents=True, exist_ok=True)
-    silver.to_csv(SILVER_PATH, index=False)
+    atomic_write_csv(silver, SILVER_PATH)
     return silver
 
 
 def carry_over_reviewed(queue: pd.DataFrame) -> pd.DataFrame:
-    """Re-attach labels already given for these same pairs.
+    """Pasangkan kembali label yang sudah diberikan untuk pasangan yang sama.
 
-    The queue is rebuilt on every run from a random sample, so regenerating it
-    must not throw away human judgement. Re-running the pipeline deleted 100
-    completed reviews this way. Carrying labels forward is safe because a pair
-    (record_id_l, record_id_r) is a fixed fact: whether the reviewer called it a
-    match does not change when the queue is redrawn.
+    Antrean dibangun ulang pada setiap proses dari sampel acak, sehingga
+    pembuatannya kembali tidak boleh menghapus penilaian manusia. Proses ulang
+    pipeline pernah menghapus 100 hasil pemeriksaan yang sudah selesai.
+    Membawa label lama tetap aman karena pasangan (record_id_l, record_id_r)
+    merupakan fakta tetap: keputusan match dari peninjau tidak berubah ketika
+    antrean dibuat ulang.
     """
     if not QUEUE_PATH.exists() or queue.empty:
         return queue
@@ -362,9 +449,9 @@ def carry_over_reviewed(queue: pd.DataFrame) -> pd.DataFrame:
     if reviewed.empty:
         return queue
 
-    # Keys are compared as strings on both sides: Excel may have rewritten
-    # rec_000123 as a number, and an int/str mismatch would silently drop every
-    # review it was supposed to carry.
+    # Kunci dibandingkan sebagai teks di kedua sisi: Excel mungkin mengubah
+    # rec_000123 menjadi angka, sehingga perbedaan int/str dapat membuang semua
+    # hasil tinjauan yang seharusnya dipertahankan tanpa peringatan.
     keys = ["record_id_l", "record_id_r"]
     queue = queue.copy()
     reviewed = reviewed.copy()
@@ -397,26 +484,28 @@ def save_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
     if not queue.empty:
         LABELS_DIR.mkdir(parents=True, exist_ok=True)
         queue = carry_over_reviewed(queue)
-        queue.to_csv(QUEUE_PATH, index=False)
+        atomic_write_csv(queue, QUEUE_PATH)
     return queue
 
 
 def _label_key(value) -> str:
-    """Fold spelling variants so 'non-match', 'No Match' and 'non_match' agree.
+    """Samakan variasi ejaan seperti 'non-match', 'No Match', dan 'non_match'.
 
-    A reviewer naturally writes 'non-match'. Without this, a full 236-row review
-    promoted to 11 gold rows with no error anywhere — the earlier version of this
-    bug dropped every 'no_match' row silently, and then a hyphen spelled it again.
+    Peninjau biasanya menulis 'non-match'. Tanpa normalisasi ini, peninjauan
+    lengkap atas 236 baris pernah hanya mempromosikan 11 baris gold tanpa pesan
+    kesalahan. Versi bug sebelumnya diam-diam membuang semua baris 'no_match';
+    penggunaan tanda hubung membuat masalah itu muncul kembali.
     """
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def normalise_label(value) -> str | None:
-    """Map any accepted review vocabulary to 'match' / 'no_match', else None.
+    """Petakan istilah tinjauan yang diterima ke 'match' / 'no_match', atau None.
 
-    None means "not reviewed or not understood". Callers must treat that as
-    missing, never as a negative: a blank cell counted as no_match would inflate
-    the false-positive rate without a single human looking at the pair.
+    None berarti "belum ditinjau atau tidak dipahami". Pemanggil harus
+    memperlakukannya sebagai nilai yang hilang, bukan label negatif: sel kosong
+    yang dihitung sebagai no_match akan meningkatkan tingkat false positive
+    tanpa ada peninjau yang memeriksa pasangan tersebut.
     """
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         return None
@@ -429,27 +518,30 @@ def normalise_label(value) -> str | None:
 
 
 def _read_review(path) -> pd.DataFrame:
-    """Read a review file while surviving the Excel comma-decimal locale round-trip.
+    """Baca berkas tinjauan dengan aman setelah dibuka dan disimpan di Excel dengan desimal berkoma.
 
-    That locale saves CSV with ';' delimiter and converts all numbers to comma-
-    decimal scientific notation: match_probability becomes '2,92E+11', phone_std
-    becomes '1,83352E+14'.  Those numeric columns are read as strings and survive
-    the round-trip as strings, which is all gold_labels.csv needs for them.
+    Pengaturan lokal tersebut menyimpan CSV dengan pemisah ';' dan mengubah
+    angka menjadi notasi ilmiah dengan koma desimal: match_probability menjadi
+    '2,92E+11' dan phone_std menjadi '1,83352E+14'. Kolom angka dibaca sebagai
+    teks dan tetap berupa teks setelah proses bolak-balik, sesuai kebutuhan
+    gold_labels.csv.
     """
     raw = path.read_text(encoding="utf-8")
-    # The file is semicolon-delimited after an Excel save.  The first row has 27
-    # semicolons.  Detect that before sep=None mis-sniffs it as one column.
+    # Setelah disimpan dari Excel, berkas memakai pemisah titik koma. Baris
+    # pertama memiliki 27 titik koma. Deteksi ini sebelum sep=None keliru
+    # menganggap berkas hanya memiliki satu kolom.
     if ";" in raw.split("\n", 1)[0]:
         return pd.read_csv(path, sep=";")
     return pd.read_csv(path, sep=None, engine="python")
 
 
 def _backup_gold() -> Path | None:
-    """Never destroy an existing gold set without a copy.
+    """Jangan hapus set acuan yang ada tanpa membuat salinan.
 
-    gold_labels.csv is the only file a human's judgement lives in. The queue files
-    are rebuilt (and can be replaced by a different sample) on every run, so
-    promoting a new queue over an old gold silently deletes the reviewed labels.
+    gold_labels.csv adalah satu-satunya berkas yang menyimpan penilaian manusia.
+    Berkas antrean dibangun ulang (dan dapat diganti dengan sampel lain) pada
+    setiap proses. Karena itu, mempromosikan antrean baru di atas berkas gold
+    lama akan menghapus label yang sudah ditinjau tanpa pemberitahuan.
     """
     if not GOLD_PATH.exists() or GOLD_PATH.stat().st_size == 0:
         return None
@@ -460,18 +552,20 @@ def _backup_gold() -> Path | None:
 
 
 def promote_gold() -> int:
-    """Copy reviewed queue rows into gold_labels.csv.
+    """Salin baris antrean yang sudah ditinjau ke gold_labels.csv.
 
-    Reads BOTH the strata queue and the false-positive sample, so a reviewed
-    sample drawn for precision checking cannot sit unused next to a gold file.
-    Unreviewed rows are dropped rather than carried through: a blank label would
-    otherwise be read as "not a match" and count as a false negative.
+    Membaca antrean strata DAN sampel false positive agar sampel yang ditinjau
+    untuk memeriksa presisi tidak dibiarkan tanpa digunakan di samping berkas
+    gold. Baris yang belum ditinjau dibuang, bukan dibawa: jika tidak, label
+    kosong akan dibaca sebagai "bukan kecocokan" dan dihitung sebagai false
+    negative.
 
-    Existing gold rows whose pair is NOT in this promotion run are KEPT
-    (same rule as feedback.csv): human labels accumulate. A re-reviewed pair
-    takes the newer label (keep='last'). An empty promotion never overwrites
-    gold — wiping 247 reviewed labels because the current queue is blank
-    would be silent data loss.
+    Baris gold lama yang pasangannya TIDAK ada dalam proses promosi ini
+    DIPERTAHANKAN (aturan yang sama seperti feedback.csv): label manusia terus
+    terakumulasi. Untuk pasangan yang ditinjau ulang, gunakan label terbaru
+    (keep='last'). Promosi kosong tidak pernah menimpa gold — menghapus 247
+    label yang telah ditinjau hanya karena antrean saat ini kosong merupakan
+    kehilangan data tanpa pemberitahuan.
     """
     sources = [path for path in (QUEUE_PATH, FP_SAMPLE_PATH) if path.exists()]
     if not sources:
@@ -481,7 +575,7 @@ def promote_gold() -> int:
     frames = []
     for path in sources:
         frame = _read_review(path)
-        # Detect numeric columns mangled by Excel's comma-decimal locale.
+        # Deteksi kolom angka yang berubah akibat pengaturan desimal berkoma di Excel.
         mangled = {
             c for c in frame.columns
             if frame[c].dtype == object and frame[c].astype(str).str.contains(
@@ -536,14 +630,15 @@ def promote_gold() -> int:
         for col in keep_cols:
             if col not in existing.columns:
                 existing[col] = None
-        # Older reviewed pairs survive; a re-reviewed pair takes the new label.
+        # Pertahankan pasangan lama yang sudah ditinjau; gunakan label baru
+        # untuk pasangan yang ditinjau ulang.
         merged = pd.concat([existing[keep_cols], new], ignore_index=True)
         merged = merged.drop_duplicates(subset=["record_id_l", "record_id_r"], keep="last")
     else:
         merged = new
 
     LABELS_DIR.mkdir(parents=True, exist_ok=True)
-    merged.to_csv(GOLD_PATH, index=False)
+    atomic_write_csv(merged, GOLD_PATH)
     print(f"Gold rows: {len(merged):,} (was {n_before:,}, +{len(merged) - n_before:,} net)")
     return len(merged)
 
@@ -587,11 +682,11 @@ def main() -> None:
         feedback_main()
         return
 
-    if not PROCESSED_DATA_PATH.exists():
+    if not active_path(PROCESSED_DATA_PATH).exists():
         raise FileNotFoundError(
             "Standardized parquet belum ada. Jalankan: python -m src.standardize"
         )
-    df = pd.read_parquet(PROCESSED_DATA_PATH)
+    df = pd.read_parquet(active_path(PROCESSED_DATA_PATH))
 
     silver = save_silver(df)
     positives = int((silver["label"] == 1).sum())

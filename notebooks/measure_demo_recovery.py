@@ -1,12 +1,13 @@
-"""Did each demo row land in the same entity as its source record?
+"""Periksa apakah setiap baris demo masuk ke entity yang sama dengan sumbernya.
 
-Ground truth comes from customer_id, which survives standardization as an
-untouched raw column and is never a blocking key or a comparison. Every
-batch_0003 row is a copy of a batch_0002 row, so the correct outcome is
-"same entity_id as the batch_0002 record with this customer_id".
+Label acuan berasal dari customer_id, yang tetap tersimpan sebagai kolom mentah
+setelah standardisasi dan tidak pernah menjadi kunci blocking atau pembanding.
+Setiap baris batch_0003 merupakan salinan baris batch_0002, sehingga hasil yang
+benar adalah entity_id yang sama dengan catatan batch_0002 ber-customer_id ini.
 
-This measures one thing only: for the 1,000 demo rows, how many match their
-source entity. It does not measure precision on non-demo pairs.
+Pengukuran ini hanya menghitung berapa dari seribu baris demo yang cocok dengan
+entity sumbernya. Pengukuran ini tidak menghitung presisi pada pasangan di luar
+baris demo.
 
     python notebooks/measure_demo_recovery.py
 """
@@ -38,7 +39,7 @@ def main() -> None:
     demo = merged[merged["record_id"] >= first]
     old = merged[merged["record_id"] < first]
 
-    # One entity per customer_id in the OLD data is the reference answer.
+    # Satu entity per customer_id pada data LAMA menjadi jawaban acuan.
     reference = old.groupby("customer_id")["entity_id"].first()
     expected = demo["customer_id"].map(reference)
     known = int(expected.notna().sum())

@@ -1,4 +1,4 @@
-"""Apply human gold labels to the decision column (FR-09: label -> hasil akhir).
+"""Terapkan label acuan dari peninjau pada kolom keputusan (FR-09: label -> hasil akhir).
 
 Pipeline standalone hanya memutuskan dari threshold. Setelah manusia promote
 label ke gold, pasangan REVIEW yang ditandai match tidak pernah masuk entity —
@@ -15,7 +15,8 @@ Guard per pasangan (override manusia DITOLAK, bukan dipaksa):
   * device conflict — kedua sisi punya device id DAN beda. Menambah pasangan
     ini ke satu entity membuat entity mencampur dua device id (jawaban kunci
     dataset ini) dan smoke test gagal. Pasangan seperti ini dilaporkan.
-  * Nothing else is silently changed: kolom match_probability TIDAK disentuh.
+  * Tidak ada hal lain yang diubah tanpa pemberitahuan: kolom
+    match_probability TIDAK disentuh.
 
 Setiap penerapan dicatat ke outputs/human_overrides.jsonl (pair, keputusan
 lama, label, waktu, model_version) — audit trail untuk halaman riwayat.
@@ -61,7 +62,7 @@ def device_sets(records: pd.DataFrame) -> dict[str, frozenset]:
 
 
 def plan() -> pd.DataFrame:
-    """One row per gold pair that would change, with the guard verdict."""
+    """Satu baris per pasangan acuan yang akan berubah, beserta hasil pemeriksaan pengamannya."""
     labels, src = load_labels()
     if labels is None or src != "gold":
         raise SystemExit("No gold labels. Promote first: python -m src.labels --promote")
@@ -86,7 +87,7 @@ def plan() -> pd.DataFrame:
         reason = ""
         blocked = False
         if not r["gold_match"] and r["match_probability"] >= MATCH_THRESHOLD:
-            # Downgrading here would break P >= threshold => MATCH (smoke test).
+            # P >= threshold => MATCH (uji asap).
             blocked = True
             reason = "konflik: gold no_match tapi P >= threshold — perlu retrain/threshold review"
         elif r["gold_match"]:
@@ -123,9 +124,6 @@ def apply_changes(plan_df: pd.DataFrame) -> int:
         key.loc[(r["record_id_l"], r["record_id_r"]), "decision"] = r["decision_after"]
         changed += 1
     out = key.reset_index()
-    # Preserve column order: set_index/reset_index round-trips, but older
-    # artifacts may have carried extra columns — order is not semantically
-    # important, only the decision column changes.
     out.to_parquet(path, index=False)
 
     meta = read_meta(path)

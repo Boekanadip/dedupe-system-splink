@@ -59,36 +59,54 @@ st.caption(
     "Bobot setiap field diambil dari model yang sedang dipakai."
 )
 
-# Daftar berisi PASANGAN yang benar-benar pernah dibandingkan, bukan dua
-# dropdown bebas. Dulu memilih dua record secara terpisah menghasilkan ribuan
-# kombinasi yang tidak pernah disaring, dan halaman berhenti di pesan "tidak
-# pernah dibandingkan" — padahal yang dicari orang adalah alasan kenapa sebuah
-# pasangan digabung atau dipisah.
-#
-# VECTORIZED on purpose: the first version built the label with .apply() over
-# 1.1M rows, which took tens of seconds and made the page look hung. String
-# concatenation and .map() run in C and finish immediately.
-compared = preds[
-    ["record_id_l", "record_id_r", "match_probability", "decision"]
-].copy()
-compared["pasangan"] = (
-    compared["record_id_l"].astype(str) + "  ↔  " + compared["record_id_r"].astype(str)
+interesting = preds[preds["decision"].isin(["MATCH", "REVIEW"])].copy()
+
+c1, c2 = st.columns([2, 3])
+search = c1.text_input(
+    "Cari record_id (opsional)",
+    placeholder="misal: rec_054487",
+    help="Isi untuk mencari pasangan yang melibatkan record tertentu.",
 )
-compared = compared.sort_values("match_probability", ascending=False).reset_index(drop=True)
-compared["label_pil"] = (
-    compared["pasangan"]
-    + " · " + compared["decision"].map(decision_label)
-    + " · " + compared["match_probability"].map(format_probability)
+band = c2.selectbox(
+    "Tampilkan",
+    ["Digabung + perlu diperiksa", "Hanya digabung", "Hanya perlu diperiksa"],
+    key="explain_band",
 )
 
-st.caption(f"Menampilkan {len(compared):,} pasangan yang pernah dibandingkan sistem.")
-pick_idx = st.selectbox(
-    "Pilih pasangan",
-    range(len(compared)),
-    format_func=lambda i: compared.loc[i, "label_pil"],
-    key="explain_pair",
-)
-row = compared.loc[pick_idx]
+pool = interesting
+if band == "Hanya digabung":
+    pool = pool[pool["decision"] == "MATCH"]
+elif band == "Hanya perlu diperiksa":
+    pool = pool[pool["decision"] == "REVIEW"]
+
+if search:
+    s = search.strip().lower()
+    pool = pool[
+        pool["record_id_l"].str.lower().str.contains(s, na=False)
+        | pool["record_id_r"].str.lower().str.contains(s, na=False)
+    ]
+
+pool = pool.sort_values("match_probability", ascending=False).reset_index(drop=True)
+
+if pool.empty:
+    st.info("Tidak ada pasangan untuk pencarian ini.")
+    st.stop()
+
+st.caption(f"{len(pool):,} pasangan. Urut dari peluang tertinggi.")
+
+CAP = 2000
+shown = pool.head(CAP)
+if len(pool) > CAP:
+    st.caption(f"Menampilkan {CAP:,} teratas dari {len(pool):,}. Persempit pencarian untuk melihat sisanya.")
+
+label_list = (
+    shown["record_id_l"] + "  ↔  " + shown["record_id_r"]
+    + " · " + shown["decision"].map(decision_label)
+    + " · " + shown["match_probability"].map(format_probability)
+).tolist()
+
+pick_idx = st.selectbox("Pilih pasangan", range(len(shown)), format_func=lambda i: label_list[i], key="explain_pair")
+row = shown.iloc[pick_idx]
 
 pair = preds[
     (preds["record_id_l"] == row["record_id_l"])

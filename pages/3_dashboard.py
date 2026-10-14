@@ -1,7 +1,8 @@
-"""Dashboard: manual refresh.
+"""Dasbor: penyegaran manual.
 
-Reads current artifacts on every load / on explicit refresh. No auto-refresh
-timer — the operator decides when to reload.
+Artefak terbaru dibaca setiap kali halaman dimuat atau saat disegarkan secara
+manual. Tidak ada penyegaran otomatis; operator menentukan kapan harus memuat
+ulang.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.ui import (
+    workflow_step,
     DECISION_LABEL,
     format_rate,
     monitoring_sidebar,
@@ -32,6 +34,7 @@ page_header(
 )
 monitoring_sidebar()
 page_guide(__file__)
+workflow_step(__file__)
 
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs"
 LOCK = OUTPUT_DIR / ".retraining"
@@ -60,6 +63,7 @@ if eval_path.exists():
     report = json.loads(eval_path.read_text(encoding="utf-8"))
     entity = report.get("entity", {})
     decision = report.get("decision", {})
+    linkage = report.get("linkage", {})
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Customer unik", f"{entity.get('entities', 0):,}",
              help="Jumlah orang yang berhasil dipastikan setelah duplikat digabung.")
@@ -71,6 +75,87 @@ if eval_path.exists():
              help="Berapa persen pasangan yang menunggu keputusan manusia.")
     if report.get("model_version"):
         st.caption(f"Model yang dipakai: `{report['model_version']}`")
+
+    # ---- kualitas penggabungan.
+    precision = linkage.get("precision_on_truth")
+    mixed = entity.get("entities_mixing_two_device_ids")
+    if precision is not None or mixed is not None:
+        st.subheader("Kualitas penggabungan")
+        q1, q2, q3 = st.columns(3)
+        q1.metric(
+            "Ketepatan (device_id)",
+            format_rate(precision) if precision is not None else "-",
+            help=(
+                "Dari pasangan yang digabung, berapa persen device_id-nya sama. "
+                "Ini BATAS ATAS: satu orang bisa memakai banyak perangkat, jadi "
+                "angka ini sengaja menampilkan yang terburuk."
+            ),
+        )
+        q2.metric(
+            "Salah gabung (device_id)",
+            f"{linkage.get('false_merges', 0):,}",
+            help="Pasangan digabung tapi device_id-nya berbeda.",
+        )
+        q3.metric(
+            "Customer tercemar",
+            f"{mixed:,}" if mixed is not None else "-",
+            help="Jumlah customer yang di dalamnya ada lebih dari satu device_id.",
+        )
+        st.caption(
+            "⚠ **Cara membaca angka ini.** Penghitungan memakai `device_id`, yang "
+            "pada dataset ini identik dengan `customer_id`. Jadi angka ini adalah "
+            "**batas atas** kesalahan, bukan ukuran akurasi di dunia nyata. "
+            "Angka yang lebih dipercaya ada di bawah, dihitung dari keputusan "
+            "manusia."
+        )
+
+        # ---- versi yang dihitung dari keputusan manusia
+        try:
+            from src.threshold_eval import evaluate_at
+            from src.labels import load_labels
+
+            labels, src_label = load_labels("gold")
+            preds_g = pd.read_parquet(
+                OUTPUT_DIR / "splink_predictions.parquet",
+                columns=["record_id_l", "record_id_r", "match_probability"],
+            )
+            if labels is not None and not labels.empty:
+                merged = preds_g.merge(
+                    labels[["record_id_l", "record_id_r", "is_positive"]],
+                    on=["record_id_l", "record_id_r"], how="inner",
+                )
+                merged["label"] = merged["is_positive"].astype(int)
+                if merged["label"].nunique() > 1:
+                    g = evaluate_at(merged, "label", "match_probability", 0.9)
+                    g1, g2, g3 = st.columns(3)
+                    g1.metric(
+                        "Ketepatan (keputusan manusia)",
+                        format_rate(g["precision"]),
+                        help="Dari yang sistem bilang sama, berapa persen yang "
+                             "manusia juga setujui. Ini angka yang paling dipercaya.",
+                    )
+                    g2.metric(
+                        "Kelengkapan (keputusan manusia)",
+                        format_rate(g["recall"]),
+                        help="Dari yang manusia bilang sama, berapa persen yang "
+                             "berhasil ditangkap sistem.",
+                    )
+                    g3.metric(
+                        "Cakupan pengukuran",
+                        f"{len(merged):,} dari {int(linkage.get('match_edges', 0)):,}",
+                        help="Berapa pasangan yang benar-benar punya label manusia. "
+                             "Sisanya belum pernah dinilai, jadi angka di kiri hanya "
+                             "mewakili sebagian.",
+                    )
+                    st.caption(
+                        f"⚠ **Cakupan terbatas.** Angka di atas dihitung dari "
+                        f"{len(merged):,} pasangan yang sudah pernah diputuskan "
+                        f"manusia (sumber: `{src_label}`). Sisa pasangan belum "
+                        "pernah dinilai, jadi angka ini belum mewakili seluruh "
+                        "data — dan memang tidak boleh dikutip seolah-olah iya."
+                    )
+        except Exception as exc:
+            st.caption(f"Pengukuran dari keputusan manusia belum tersedia: {exc}")
 
 # ---- keputusan
 pred_path = OUTPUT_DIR / "splink_predictions.parquet"
@@ -142,7 +227,7 @@ if pred_path.exists():
     )
     st.plotly_chart(fig2, width="stretch")
 
-# ---- cluster
+# ---- kelompok
 cluster_path = OUTPUT_DIR / "cluster_summary.csv"
 if cluster_path.exists():
     cluster = pd.read_csv(cluster_path)
@@ -154,13 +239,26 @@ if cluster_path.exists():
     c3.metric("Perlu diperiksa", f"{int(cluster['review_pairs'].iloc[0]):,}")
 
 history_path = OUTPUT_DIR / "incremental_history.jsonl"
+run_summary_path = OUTPUT_DIR / "run_summary.json"
+history: list[dict] = []
 if history_path.exists():
     history = [
         json.loads(line)
         for line in history_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    if history:
+if not history and run_summary_path.exists():
+    summary = json.loads(run_summary_path.read_text(encoding="utf-8"))
+    history = [{
+        "timestamp": eval_path.stat().st_mtime if eval_path.exists() else 0,
+        "batch": f"full:{summary.get('model_version', 'unknown')}",
+        "new_records": entity.get("records", 0) if eval_path.exists() else 0,
+        "new_entities": entity.get("entities", 0) if eval_path.exists() else 0,
+    }]
+    if isinstance(history[0]["timestamp"], (int, float)):
+        from datetime import datetime as _dt
+        history[0]["timestamp"] = _dt.fromtimestamp(history[0]["timestamp"]).isoformat(timespec="seconds")
+if history:
         st.subheader("Batch per minggu")
         df = pd.DataFrame(history)
         df["timestamp"] = pd.to_datetime(df["timestamp"])

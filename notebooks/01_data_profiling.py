@@ -1,14 +1,15 @@
 # %% [markdown]
-# # 01 — Data Profiling
-# Run this file as a Jupyter notebook in VS Code.
-# First update `src/config.py` if the CSV column names differ.
+# # 01 — Profiling Data
+# Jalankan berkas ini sebagai notebook Jupyter di VS Code.
+# Perbarui `src/config.py` terlebih dahulu jika nama kolom CSV berbeda.
 
 # %%
 import pathlib
 import sys
 
-# Resolve the repo root from this file so it works regardless of the working
-# directory. sys.path.append(os.path.abspath('..')) depended on the CWD.
+# Temukan folder utama proyek dari lokasi berkas ini agar tetap berfungsi dari
+# direktori kerja mana pun. sys.path.append(os.path.abspath('..')) bergantung
+# pada direktori kerja saat ini.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import pandas as pd
@@ -56,8 +57,8 @@ print("Last name anomalies:", profile_result["name_anomalies_last"])
 print("Phone anomalies:", profile_result["phone_anomalies"])
 
 # %% [markdown]
-# ## Inspect dirty values
-# Change `cols_to_inspect` only if your logical-to-source mapping changes.
+# ## Periksa nilai mentah
+# Ubah `cols_to_inspect` hanya jika pemetaan nama logis ke nama sumber berubah.
 
 # %%
 cols_to_inspect = [
@@ -75,4 +76,5 @@ for c in cols_to_inspect:
     print(df[c].dropna().astype(str).sample(min(20, df[c].notna().sum()), random_state=42).to_string(index=False))
 
 # %% [markdown]
-# Next step: build conservative standardization and linkage features. Do not train Splink yet.
+# Langkah berikutnya: buat standardisasi konservatif dan fitur pencocokan.
+# Jangan latih Splink terlebih dahulu.

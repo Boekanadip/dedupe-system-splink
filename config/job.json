@@ -1,0 +1,7 @@
+{
+  "source": "data/synthetic/crm.duckdb",
+  "table": "crm_customers",
+  "mode": "stage",
+  "date_order": "auto",
+  "watermark": true
+}

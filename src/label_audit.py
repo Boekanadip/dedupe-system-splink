@@ -1,20 +1,22 @@
-"""Cross-check human labels against the device_id channel.
+"""Periksa silang label manusia dengan kanal device_id.
 
-Nothing in the pipeline ever compared a human label against the one channel the
-model never sees. MEASURED on the current state: 8 of 114 human `match`
-decisions share a name and an email but carry a different `customer_id`, a
-different `device_id`, and a different date of birth, phone, address, city and
-state. Those are two different customers who happen to share an email, not one
-person who moved - labelling them `match` understated recall and, worse, taught
-the next reviewer that a shared email is enough.
+Pipeline belum pernah membandingkan label manusia dengan kanal yang tidak
+pernah dilihat model. PENGUKURAN pada kondisi saat ini: 8 dari 114 keputusan
+`match` manusia memiliki nama dan email yang sama, tetapi `customer_id`,
+`device_id`, tanggal lahir, telepon, alamat, kota, dan negara yang berbeda.
+Mereka adalah dua customer berbeda yang kebetulan menggunakan email sama,
+bukan satu orang yang berpindah. Memberi label `match` pada pasangan tersebut
+mengecilkan recall dan, lebih buruk lagi, mengajari peninjau berikutnya bahwa
+email yang sama sudah cukup.
 
-`device_id` is a reference channel and not real-world truth (see AGENTS.md 11),
-so this module never rewrites a label on its own: it reports, it files the
-evidence, and it only corrects gold once a human has ruled, via --apply.
+`device_id` adalah kanal acuan, bukan kebenaran dunia nyata (lihat AGENTS.md 11),
+sehingga modul ini tidak pernah menulis ulang label secara otomatis: modul ini
+melaporkan dan menyimpan bukti, lalu memperbaiki label gold hanya setelah
+peninjau memutuskan dan menggunakan --apply.
 
 Run:
-    python -m src.label_audit                 # report only, writes nothing
-    python -m src.label_audit --apply         # correct contradicted rows in gold
+    python -m src.label_audit                 # hanya laporkan, tanpa menulis
+    python -m src.label_audit --apply         # perbaiki baris yang bertentangan di gold
 """
 from __future__ import annotations
 
@@ -57,12 +59,13 @@ def _pair_key(left: str, right: str) -> tuple[str, str]:
 
 
 def audit() -> pd.DataFrame:
-    """One row per labelled pair, with a verdict against the device channel.
+    """Satu baris per pasangan berlabel, beserta hasil pemeriksaan kanal device.
 
-    Verdict is one of:
-      agrees        - the label matches what the device channel says
-      contradicted  - the label says match, the device channel says different
-      unverifiable  - at least one side carries no device id, so nothing to check
+      Hasil pemeriksaan:
+      agrees        - label sesuai dengan informasi kanal device
+      contradicted  - label menyatakan match, sedangkan kanal device menunjukkan sebaliknya
+      unverifiable  - salah satu sisi tidak memiliki device id, sehingga tidak
+                      ada yang dapat diperiksa
     """
     if not GOLD_PATH.exists():
         raise SystemExit(f"No gold labels at {GOLD_PATH}")

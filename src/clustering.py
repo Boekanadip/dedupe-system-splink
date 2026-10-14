@@ -16,13 +16,17 @@ from .config import (
     read_meta,
     scope_of,
     write_meta,
+    atomic_write_parquet,
+    atomic_write_json,
+    active_path,
+    atomic_write_csv,
 )
 
 CLUSTER_SUMMARY_PATH = OUTPUT_DIR / "cluster_summary.csv"
 
 
 def load_predictions(full: bool) -> pd.DataFrame:
-    path = predictions_path(full=full)
+    path = active_path(predictions_path(full=full))
     if not path.exists():
         raise FileNotFoundError(
             f"{path.name} not found. Run: python -m src.splink_model"
@@ -32,11 +36,12 @@ def load_predictions(full: bool) -> pd.DataFrame:
 
 
 def guard_against_scope_downgrade(full: bool, force: bool) -> None:
-    """Refuse to replace a full-run entity map with a sample-run one.
+    """Tolak penggantian peta entity hasil proses penuh dengan peta hasil sampel.
 
-    A sample run still emits all 50,000 record_ids, so every downstream length
-    check passes and nothing looks wrong. What actually changed is that 49,850
-    records became singletons because their match edges were never scored.
+    Proses sampel tetap menghasilkan seluruh 50.000 record_id, sehingga semua
+    pemeriksaan jumlah baris berikutnya lolos dan tidak terlihat ada masalah.
+    Padahal, 49.850 catatan menjadi entity tunggal karena sisi kecocokannya
+    tidak pernah diberi skor.
     """
     existing = read_meta(ENTITY_MAP_PATH)
     if not existing or force:
@@ -47,8 +52,6 @@ def guard_against_scope_downgrade(full: bool, force: bool) -> None:
     if old_scope == new_scope:
         return
 
-    # Only the destructive direction is blocked. A full run over a sample map is
-    # a repair, not a regression, so it must stay allowed.
     if not full and old_scope == SCOPE_FULL:
         raise SystemExit(
             f"Refusing to overwrite a scope={old_scope} entity map with a scope={new_scope} run.\n"
@@ -63,10 +66,10 @@ def guard_against_scope_downgrade(full: bool, force: bool) -> None:
 def connected_components(
     record_ids: list[str], edges: pd.DataFrame
 ) -> dict[str, str]:
-    """Union-find over match edges. No graph library needed for a forest this size.
+    """Jalankan union-find pada sisi kecocokan. Ukuran graf ini tidak memerlukan pustaka graf.
 
-    Entity ids are assigned from the lowest record_id in each component, so the
-    same input always produces the same entity_id.
+    ID entity ditetapkan berdasarkan record_id terendah pada setiap komponen,
+    sehingga masukan yang sama selalu menghasilkan entity_id yang sama.
     """
     parent = {rid: rid for rid in record_ids}
 
@@ -79,7 +82,7 @@ def connected_components(
     def union(a: str, b: str) -> None:
         root_a, root_b = find(a), find(b)
         if root_a != root_b:
-            # Keep the lexicographically smaller root as the representative.
+            # Pertahankan akar yang lebih kecil secara leksikografis sebagai wakil.
             low, high = sorted((root_a, root_b))
             parent[high] = low
 
@@ -118,16 +121,14 @@ def main() -> None:
     args = parser.parse_args()
 
     started = time.perf_counter()
-    if not PROCESSED_DATA_PATH.exists():
+    if not active_path(PROCESSED_DATA_PATH).exists():
         raise FileNotFoundError("Run python -m src.standardize first.")
 
     guard_against_scope_downgrade(full=args.full, force=args.force)
 
-    records = pd.read_parquet(PROCESSED_DATA_PATH)[["record_id"]]
+    records = pd.read_parquet(active_path(PROCESSED_DATA_PATH))[["record_id"]]
     preds = load_predictions(args.full)
 
-    # Records the predictions could not have scored are not evidence of
-    # "no duplicates here", so say so instead of reporting a clean result.
     modelled = set(preds["record_id_l"]) | set(preds["record_id_r"])
     unscored = len(records) - len(records[records["record_id"].isin(modelled)])
     if unscored and not args.full:
@@ -136,9 +137,6 @@ def main() -> None:
             "singletons mean 'unexamined', not 'unique'. Use --full for a real answer."
         )
 
-    # Cluster on the three-way decision, not on a raw probability, so REVIEW and
-    # NON_MATCH stay unmerged by construction: an uncertain pair must not quietly
-    # become a merged customer. Fall back to the threshold for older artifacts.
     if "decision" in preds.columns:
         edges = preds[preds["decision"] == "MATCH"]
         n_review = int((preds["decision"] == "REVIEW").sum())
@@ -160,7 +158,7 @@ def main() -> None:
 
     entity_map = records.copy()
     entity_map["entity_id"] = entity_map["record_id"].map(entity_ids)
-    entity_map.to_parquet(ENTITY_MAP_PATH, index=False)
+    atomic_write_parquet(entity_map, ENTITY_MAP_PATH)
 
     sizes = entity_map.groupby("entity_id").size()
     summary = {
@@ -178,7 +176,7 @@ def main() -> None:
         "scope": scope_of(args.full),
         "runtime_seconds": round(time.perf_counter() - started, 2),
     }
-    pd.DataFrame([summary]).to_csv(CLUSTER_SUMMARY_PATH, index=False)
+    atomic_write_csv(pd.DataFrame([summary]), CLUSTER_SUMMARY_PATH)
     write_meta(ENTITY_MAP_PATH, artifact="entity_map", **summary)
 
     print(f"Records: {summary['records']:,}")

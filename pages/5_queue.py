@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR
 from src.ui import (
+    workflow_step,
     format_probability,
     how_to_read,
     monitoring_sidebar,
@@ -35,6 +36,7 @@ page_header(
 monitoring_sidebar()
 page_guide(__file__)
 how_to_read()
+workflow_step(__file__)
 
 QUEUE_PATH = LABELS_DIR / "review_queue.csv"
 PREDS_PATH = OUTPUT_DIR / "splink_predictions.parquet"
@@ -47,8 +49,7 @@ preds = pd.read_parquet(
     PREDS_PATH,
     columns=["record_id_l", "record_id_r", "match_probability", "decision"],
 )
-# Filter lewat kolom decision, bukan perbandingan angka, supaya halaman ini
-# selalu sama dengan yang dipakai pipeline.
+# Gunakan kolom decision sebagai penyaring
 review = preds[preds["decision"] == "REVIEW"].copy()
 
 if QUEUE_PATH.exists():
@@ -106,17 +107,44 @@ st.caption(
     "bisa diputuskan di halaman **Pemeriksaan**. Memakai antrean tidak mengubah "
     "data asli apa pun."
 )
-if st.button("Tambahkan yang disaring ke antrean"):
-    from src.labels import carry_over_reviewed
 
-    new_rows = filtered[["record_id_l", "record_id_r", "match_probability"]].copy()
+BULK_ADD_CAP = 200
+
+st.caption(
+    f"⚠ Maksimal **{BULK_ADD_CAP} pasangan per klik**, diurutkan dari peluang "
+    "tertinggi. Ini disengaja supaya antrean tetap bisa diselesaikan manusia."
+)
+
+bulk_pool = filtered.sort_values("match_probability", ascending=False).head(BULK_ADD_CAP)
+st.caption(f"Pratinjau {len(bulk_pool):,} pasangan yang akan ditambahkan (peluang tertinggi):")
+st.dataframe(
+    bulk_pool[["record_id_l", "record_id_r", "match_probability"]].head(20),
+    width="stretch",
+    hide_index=True,
+    height=300,
+)
+
+if st.button(f"Tambahkan {len(bulk_pool):,} pasangan tertinggi ke antrean"):
+    from src.config import PROCESSED_DATA_PATH
+    from src.labels import QUEUE_COLUMNS, attach_evidence, carry_over_reviewed
+
+    records = pd.read_parquet(PROCESSED_DATA_PATH)
+    new_rows = bulk_pool[["record_id_l", "record_id_r", "match_probability"]].copy()
+    new_rows = attach_evidence(records, new_rows)
     new_rows["stratum"] = "manual_review"
     new_rows["label"] = None
     new_rows["review_status"] = "pending"
     new_rows["reviewer"] = None
     new_rows["reviewer_note"] = None
+    for col in QUEUE_COLUMNS:
+        if col not in new_rows.columns:
+            new_rows[col] = None
+    new_rows = new_rows[[c for c in QUEUE_COLUMNS if c in new_rows.columns]]
+
     old_queue = pd.read_csv(QUEUE_PATH) if QUEUE_PATH.exists() else pd.DataFrame()
     combined = pd.concat([old_queue, new_rows], ignore_index=True)
+    # tidak menumpuk pasangan yang sama dua kali.
+    combined = combined.drop_duplicates(subset=["record_id_l", "record_id_r"], keep="first")
     combined = carry_over_reviewed(combined)
     combined.to_csv(QUEUE_PATH, index=False)
     st.success(f"Menambahkan {len(new_rows):,} pasangan ke antrean kerja.")

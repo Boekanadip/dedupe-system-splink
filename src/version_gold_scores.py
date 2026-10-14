@@ -17,6 +17,7 @@ from .config import (
     predictions_path,
     read_meta,
 )
+from .evaluation_freshness import model_inventory_sha256
 from .label_audit import audit as audit_gold_against_device
 from .labels import GOLD_PATH, load_labels
 from .registry import sha256_of
@@ -72,6 +73,7 @@ def build() -> dict:
     gold_sha256 = sha256_of(GOLD_PATH)
     processed_sha256 = sha256_of(PROCESSED_DATA_PATH)
     prediction_sha256 = sha256_of(pred_path)
+    model_inventory_hash = model_inventory_sha256(pred_meta.get("blocking_rules"))
 
     disputed = audit_gold_against_device()
     disputed = disputed.loc[disputed["verdict"] == "contradicted", ["record_id_l", "record_id_r"]]
@@ -153,6 +155,7 @@ def build() -> dict:
             "gold_disputed_pairs": int(labels["is_disputed"].sum()),
             "processed_data_sha256": processed_sha256,
             "prediction_sha256": prediction_sha256,
+            "model_inventory_sha256": model_inventory_hash,
             "random_seed": RANDOM_SEED,
         },
         "limitation": (

@@ -8,7 +8,7 @@ Semua bahasa di halaman ini diambil dari src/ui.py supaya istilah yang sama
 tidak pernah ditulis berbeda di halaman lain. Kolom di file tetap nama teknis
 (backward compatible); hanya tampilannya yang diganti bahasa manusia.
 
-Both write the SAME columns (label / reviewer / reviewer_note).
+Kedua tab menulis kolom yang SAMA (label / reviewer / reviewer_note).
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT
+from src.labels import exclude_gold_pairs, load_labels
 from src.ui import (
     workflow_step,
     decision_label,
@@ -46,9 +47,7 @@ QUEUE_PATH = LABELS_DIR / "review_queue.csv"
 PREDS_PATH = OUTPUT_DIR / "splink_predictions.parquet"
 EDITABLE = ["label", "reviewer", "reviewer_note"]
 
-# Estimasi biaya review. 30 detik per pasangan adalah perkiraan kasar untuk
-# pasangan dengan 9 field + tabel bukti. Dipakai supaya keputusan membludaknya
-# antrean terlihat mahal, bukan sekadar angka besar yang tidak bermakna.
+# 30 detik per pasangan adalah perkiraan kasar
 SECONDS_PER_PAIR = 30
 
 # Kolom yang tampil di kisi "Daftar"
@@ -95,6 +94,12 @@ if not QUEUE_PATH.exists():
 queue = pd.read_csv(QUEUE_PATH)
 for col in EDITABLE:
     queue[col] = queue[col].where(queue[col].notna(), "").astype(str)
+hidden_gold_count = 0
+gold, _ = load_labels("gold")
+if gold is not None:
+    visible_queue = exclude_gold_pairs(queue, gold)
+    hidden_gold_count = len(queue) - len(visible_queue)
+    queue = visible_queue
 
 pending = int((queue["review_status"] == "pending").sum())
 reviewed = int((queue["review_status"] != "pending").sum())
@@ -102,14 +107,23 @@ n_match = int((queue["label"] == "match").sum())
 n_nomatch = int((queue["label"] == "no_match").sum())
 
 k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Total pasangan", f"{len(queue):,}")
+k1.metric("Pasangan aktif", f"{len(queue):,}")
 k2.metric("Menunggu", f"{pending:,}", help="Belum ada keputusan dari Anda.")
 k3.metric("Sudah diperiksa", f"{reviewed:,}")
 k4.metric("Ditetapkan sama", f"{n_match:,}", help="Anda memutuskan ini orang yang sama.")
 k5.metric("Ditetapkan beda", f"{n_nomatch:,}", help="Anda memutuskan ini dua orang berbeda.")
+if hidden_gold_count:
+    st.caption(
+        f"{hidden_gold_count:,} pasangan yang sudah tersimpan di daftar utama "
+        "disembunyikan dari antrean. Riwayatnya tetap ada di berkas data."
+    )
+if queue.empty:
+    if hidden_gold_count:
+        st.success("Semua pasangan antrean sudah tersimpan di daftar utama. Tidak ada yang perlu ditinjau.")
+    else:
+        st.info("Tidak ada pasangan untuk ditinjau.")
+    st.stop()
 
-# Estimasi biaya: tanpa ini, 97.423 pasangan hanya terlihat sebagai angka besar.
-# Dalam jam kerja, angkanya nyata dan mahal — dan itulah yang harus diputuskan.
 if pending > 0:
     hours = pending * SECONDS_PER_PAIR / 3600
     if hours >= 1:
@@ -130,7 +144,7 @@ tab_compare, tab_list = st.tabs(["Bandingkan satu per satu", "Daftar (massal)"])
 
 
 def apply_labels(pairs: list[tuple[str, str, str, str, str]]) -> int:
-    """pairs: (l, r, label, reviewer, note). Mutates queue in place then writes."""
+    """pairs: (l, r, label, reviewer, note). Ubah antrean langsung, lalu simpan."""
     if not pairs:
         return 0
     frame = pd.read_csv(QUEUE_PATH)
@@ -143,10 +157,13 @@ def apply_labels(pairs: list[tuple[str, str, str, str, str]]) -> int:
         if note is not None:
             frame.loc[mask, "reviewer_note"] = note
         frame.loc[mask, "review_status"] = "reviewed" if label else "pending"
+        queue_mask = (queue["record_id_l"] == rid_l) & (queue["record_id_r"] == rid_r)
+        queue.loc[queue_mask, "label"] = label
+        queue.loc[queue_mask, "reviewer"] = reviewer
+        if note is not None:
+            queue.loc[queue_mask, "reviewer_note"] = note
+        queue.loc[queue_mask, "review_status"] = "reviewed" if label else "pending"
     frame.to_csv(QUEUE_PATH, index=False)
-    for c in EDITABLE:
-        queue[c] = frame[c].values
-        queue["review_status"] = frame["review_status"].values
     return len(pairs)
 
 
@@ -185,9 +202,7 @@ with tab_compare:
             f"{r.record_id_l} vs {r.record_id_r} · peluang {format_probability(r.match_probability)}"
             for r in pool.itertuples()
         ]
-        # Kursor disimpan di session_state tanpa key widget, supaya tombol bisa
-        # memindahkan posisi ke pasangan berikutnya. Menulis key milik widget
-        # setelah widget dibuat akan membatalkan seluruh halaman.
+
         cursor = int(st.session_state.get("cmp_cursor", 0)) % len(pool)
         idx = st.selectbox(
             "Pilih pasangan", range(len(pool)),
@@ -362,9 +377,6 @@ if st.button("Simpan ke daftar utama"):
         st.code(log)
     st.rerun()
 
-# Panduan "habis ini ke mana". Tanpa ini, reviewer menyimpan keputusan lalu
-# berhenti — tidak tahu bahwa keputusan itu belum dipakai apa pun sampai
-# model dilatih ulang. Keputusan manusia tidak otomatis mengubah model.
 if st.session_state.get("msg", "").startswith("Berhasil disimpan"):
     st.divider()
     st.subheader("Habis ini ke mana?")

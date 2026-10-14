@@ -1,28 +1,30 @@
-"""Score the linkage against device_id, a channel the pipeline never uses.
+"""Nilai hasil linkage dengan device_id, kanal yang tidak pernah dipakai pipeline.
 
-WHY THIS EXISTS
-Silver labels are defined as `phone_std + dob_std` agreement, and those exact
-fields are blocking keys, so coverage against silver is 100% by construction and
-F1 against silver is an artifact. It cannot answer "how accurate is it?".
+ALASAN MODUL INI ADA
+Label silver didefinisikan sebagai kesamaan `phone_std + dob_std`, dan kolom
+tersebut juga menjadi kunci blocking. Karena itu, cakupan terhadap label silver
+selalu 100% dan nilai F1 terhadapnya merupakan artefak. Pengukuran tersebut
+tidak dapat menjawab "seberapa akurat sistem ini?".
 
-`device_id(s)` is a different channel: it is not a blocking key and not a
-comparison anywhere in the model, so agreement with it is not built into the
-pipeline. MEASURED on this file: 48,200 distinct device ids over 48,200
-customer_id groups, and no group carries two different device ids. So device_id
-is 1:1 with the source identity. That makes it the answer key, NOT independent
-evidence:
+`device_id(s)` adalah kanal berbeda: kolom ini bukan kunci blocking maupun
+pembanding dalam model, sehingga kesepakatan dengannya tidak dibangun ke dalam
+pipeline. PENGUKURAN pada berkas ini: terdapat 48.200 device_id unik untuk
+48.200 kelompok customer_id, dan tidak ada kelompok yang memiliki dua
+device_id berbeda. Jadi, device_id berkorespondensi satu banding satu dengan
+identitas sumber. Ini menjadikannya kunci acuan, BUKAN bukti independen:
 
-  - What it proves: blocking + Splink + clustering reproduce the source grouping
-    without ever reading customer_id or device_id.
-  - What it cannot prove: anything about fuzzy duplicates, real-world recall, or
-    a client's data. One fact counted four ways is not four confirmations.
+  - Hal yang dibuktikan: blocking + Splink + clustering mereproduksi
+    pengelompokan sumber tanpa membaca customer_id atau device_id.
+  - Hal yang tidak dapat dibuktikan: duplikat samar, recall di dunia nyata, atau
+    data klien. Satu fakta yang dihitung dengan empat cara bukan empat konfirmasi.
 
-Recall against a channel that cannot disagree is therefore an UPPER bound, and
-is only meaningful when it is below 1.0. See src/stress_test.py for the run
-where corruption makes it informative.
+Recall terhadap kanal yang tidak mungkin berbeda karenanya merupakan BATAS
+ATAS, dan hanya bermakna jika nilainya di bawah 1,0. Lihat src/stress_test.py
+untuk proses uji yang membuatnya informatif dengan merusak data.
 
-This module also owns the pair SQL so the benchmark and the evaluation cannot
-drift apart: they must score the same pairs to be comparable.
+Modul ini juga menjadi sumber kueri SQL pasangan agar tolok ukur dan evaluasi
+tidak menyimpang: keduanya harus memberi skor pada pasangan yang sama agar
+hasilnya dapat dibandingkan.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ import json
 import duckdb
 import pandas as pd
 
-from .config import BENCHMARK_RULES, MATCH_THRESHOLD, OUTPUT_DIR, PROCESSED_DATA_PATH, predictions_path
+from .config import MATCH_THRESHOLD, OUTPUT_DIR, PROCESSED_DATA_PATH, predictions_path, active_path, load_benchmark_rules
 
 EVALUATION_PATH = OUTPUT_DIR / "evaluation_device_truth.json"
 
@@ -52,10 +54,11 @@ def pairs_sql(cols: list[str]) -> str:
 
 
 def device_truth_pairs(df: pd.DataFrame) -> pd.DataFrame:
-    """Pairs of records that share a device id.
+    """Pasangan catatan yang memiliki device id sama.
 
-    Records with no device id cannot be expressed as a pair, so they are out of
-    scope by construction. That is a property of this channel, not a model limit.
+    Catatan tanpa device id tidak dapat membentuk pasangan, sehingga secara
+    definisi berada di luar cakupan. Ini merupakan sifat kanal tersebut, bukan
+    keterbatasan model.
     """
     if "device_ids_std" not in df.columns:
         return pd.DataFrame(columns=["record_id_l", "record_id_r"])
@@ -72,7 +75,7 @@ def match_edges(preds: pd.DataFrame, threshold: float = MATCH_THRESHOLD) -> pd.D
 
 
 def records_with_device(df: pd.DataFrame) -> set[str]:
-    """record_ids that carry at least one non-empty device id."""
+    """record_id yang memiliki setidaknya satu device id yang tidak kosong."""
     if "device_ids_std" not in df.columns:
         return set()
     ids = df[["record_id", "device_ids_std"]].explode("device_ids_std").dropna(subset=["device_ids_std"])
@@ -86,13 +89,13 @@ def score(
     threshold: float,
     device_records: set[str] | None = None,
 ) -> dict:
-    """Score match edges against the device-truth pairs.
+    """Nilai sisi kecocokan terhadap pasangan acuan dari device.
 
-    A MATCH edge that is not a truth pair is only a FALSE MERGE when BOTH records
-    carry a device id. Records without one (batch_0005 arrived without
-    device_id(s)) cannot appear in the truth channel at all — calling those edges
-    "false merges" is a measurement mistake, not a model failure. Both numbers are
-    returned separately.
+    Sisi MATCH yang bukan pasangan acuan hanya merupakan SALAH GABUNG jika
+    KEDUA catatan memiliki device id. Catatan tanpanya (batch_0005 diterima tanpa
+    device_id) sama sekali tidak dapat muncul di kanal acuan. Menyebut sisi
+    tersebut "salah gabung" adalah kesalahan pengukuran, bukan kegagalan model.
+    Kedua angka dilaporkan secara terpisah.
     """
     found = truth.merge(edges, on=["record_id_l", "record_id_r"], how="inner")
     extra = edges.merge(truth, on=["record_id_l", "record_id_r"], how="left", indicator=True)
@@ -118,12 +121,13 @@ def score(
 
 
 def rule_coverage(df: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
-    """Per-rule recall against the device truth. Not tautological: no rule blocks
-    on device_id, so a rule cannot reach its own denominator by construction."""
+    """Recall tiap aturan terhadap acuan device. Ukuran ini tidak tautologis:
+    tidak ada aturan yang melakukan blocking pada device_id, sehingga aturan
+    tidak mungkin otomatis menjangkau seluruh penyebutnya sendiri."""
     con = duckdb.connect()
     con.register("src", df)
     rows = []
-    for name, cols in BENCHMARK_RULES:
+    for name, cols in load_benchmark_rules():
         pairs = con.execute(pairs_sql(cols)).fetchdf()
         con.register("pairs_temp", pairs)
         kept = con.execute(
@@ -156,8 +160,8 @@ def main() -> None:
     parser.add_argument("--full", action="store_true", help="Use full-run predictions.")
     args = parser.parse_args()
 
-    df = pd.read_parquet(PROCESSED_DATA_PATH)
-    preds_path = predictions_path(full=args.full)
+    df = pd.read_parquet(active_path(PROCESSED_DATA_PATH))
+    preds_path = active_path(predictions_path(full=args.full))
     if not preds_path.exists():
         raise FileNotFoundError(
             f"{preds_path.name} not found. Run: python -m src.splink_model"
@@ -167,8 +171,8 @@ def main() -> None:
 
     truth = device_truth_pairs(df)
     if truth.empty:
-        # Not an error: device_id is an optional channel that does not exist on
-        # every dataset. Say so rather than reporting 0 recall.
+        # Ini bukan kesalahan: device_id merupakan kanal opsional dan tidak ada
+        # pada setiap dataset. Nyatakan keterbatasannya, jangan laporkan recall 0.
         print("No device_id column (or no shared device ids) in this dataset.")
         print(
             "  device-truth evaluation is skipped. Recall and precision are then "

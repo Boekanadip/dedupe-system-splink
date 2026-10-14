@@ -9,10 +9,10 @@ import duckdb
 import pandas as pd
 
 from .config import (
-    BENCHMARK_RULES,
     ENTITY_MAP_PATH,
     OUTPUT_DIR,
     PROCESSED_DATA_PATH,
+    load_benchmark_rules,
     predictions_path,
     read_meta,
 )
@@ -224,7 +224,7 @@ def build(per_rule: int = 25) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
             "standardized_sha256": sha256_of(PROCESSED_DATA_PATH),
             "gold_labels": str(GOLD_PATH),
             "gold_sha256": gold_digest,
-            "blocking_rules": [name for name, _ in BENCHMARK_RULES],
+            "blocking_rules": [name for name, _ in load_benchmark_rules()],
             "input_records": len(records),
         },
         "labels": {
@@ -314,11 +314,11 @@ def save_review_pack(path: Path, frame: pd.DataFrame, label_column: str) -> bool
 
 
 def stage1_promote_command() -> str:
-    """Explain how a completed stage 0 pack reaches gold_labels.csv.
+    """Jelaskan bagaimana paket stage 0 yang selesai masuk ke gold_labels.csv.
 
-    src.labels.promote_gold only reads the strata queue and the FP sample,
-    so a stage 0 pack is not promoted by that command. Reviewers must
-    promote the pair key and adjudicated label by hand.
+    src.labels.promote_gold hanya membaca antrean strata dan sampel FP, sehingga
+    paket stage 0 tidak dipromosikan oleh perintah tersebut. Peninjau harus
+    mempromosikan kunci pasangan dan label hasil adjudikasi secara manual.
     """
     return (
         "Promote manually: copy record_id_l, record_id_r and "

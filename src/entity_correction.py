@@ -1,22 +1,24 @@
-"""Manual entity membership correction: split / merge, with an audit trail.
+"""Koreksi keanggotaan entity secara manual: pisahkan/gabungkan dengan catatan audit.
 
-Triage flags (membership_flags.csv) only REPORT a wrong merge; this module
-ACTS on it. Every operation is append-only logged to
-outputs/entity_history.jsonl so an entity's formation can be reconstructed.
+Penanda triase (membership_flags.csv) hanya MELAPORKAN salah gabung; modul ini
+MENANGANINYA. Setiap operasi hanya ditambahkan ke
+outputs/entity_history.jsonl agar pembentukan entity dapat direkonstruksi.
 
-Guards (mirrors the smoke-test invariants — a manual edit must not silently
-break what the test suite asserts):
-  * merge — refused when both entities carry different device ids (false-merge
-    signal on this dataset) unless --force.
-  * split — refused when it would separate a pair decided MATCH unless --force.
+Pengamanan (menjaga invariant pada smoke test — suntingan manual tidak boleh
+diam-diam melanggar hal yang ditegaskan oleh rangkaian tes):
+  * merge — ditolak jika kedua entity memiliki device id berbeda (sinyal salah
+    gabung pada dataset ini), kecuali jika menggunakan --force.
+  * split — ditolak jika tindakan tersebut memisahkan pasangan berkeputusan
+    MATCH, kecuali jika menggunakan --force.
 
-After a successful op, master rows of the touched entities are rebuilt with the
-same function incremental.py uses, so lineage/conflicts stay consistent.
+Setelah operasi berhasil, baris master untuk entity yang terdampak dibangun
+ulang dengan fungsi yang sama seperti di incremental.py agar lineage dan
+konflik tetap konsisten.
 
 Run:
     python -m src.entity_correction --split ent_000123 rec_0001 rec_0002 --reason "salah gabung"
     python -m src.entity_correction --merge ent_000123 ent_000456 --reason "satu orang"
-    python -m src.entity_correction --history            # print the audit log
+    python -m src.entity_correction --history            # cetak log audit
 """
 from __future__ import annotations
 
@@ -64,11 +66,11 @@ def _match_edges() -> pd.DataFrame:
 
 
 def _rebuild_master(entity_ids: set[str]) -> int:
-    """Recompute master rows for touched entities (shared logic w/ incremental).
+    """Hitung ulang baris master untuk entity yang berubah (logika bersama incremental).
 
-    Also drops master rows whose entity_id no longer exists in the entity map.
-    A merge removes the source entity entirely; without this its master row
-    would survive and the file would claim an entity that has no records.
+    Hapus juga baris master yang entity_id-nya tidak lagi ada di peta entity.
+    Penggabungan menghapus entity sumber sepenuhnya; tanpa langkah ini, baris
+    masternya akan tersisa dan berkas seolah-olah memuat entity tanpa catatan.
     """
     from .incremental import recompute_master_rows
 

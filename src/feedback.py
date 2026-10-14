@@ -1,21 +1,23 @@
-"""Persist human review as reusable feedback data (PRD FR-09, FR-15, DESIGN section 12).
+"""Simpan hasil peninjauan manusia sebagai data umpan balik yang dapat digunakan kembali
+(PRD FR-09, FR-15, bagian 12 DESIGN).
 
-DESIGN section 12 names the fields this must carry:
+Bagian 12 DESIGN menetapkan kolom yang harus dibawa:
 
     pair_id, record_id_l, record_id_r, score, decision,
     human_label, reviewer, timestamp, model_version
 
-Three of those are not recorded anywhere today. `timestamp` and `model_version`
-are what make a label attributable: without them, a reviewer decision cannot be
-traced to the model that produced the score, and MASTER_CONTEXT section 15
-lists "large accumulation of reviewed cases" as a retraining trigger — which
-requires knowing which model each case came from.
+Tiga kolom tersebut saat ini belum dicatat di mana pun. `timestamp` dan
+`model_version` memungkinkan label dilacak: tanpanya, keputusan peninjau tidak
+dapat ditautkan ke model yang menghasilkan skor. Bagian 15 MASTER_CONTEXT
+mencantumkan "akumulasi besar kasus yang telah ditinjau" sebagai pemicu
+pelatihan ulang, sehingga model asal setiap kasus harus diketahui.
 
-APPEND-ONLY, deliberately. data/labels/feedback.csv is the accumulating
-feedback store described in MASTER_CONTEXT section 14. Promotion from a queue is
-idempotent on (record_id_l, record_id_r, model_version): re-promoting the same
-queue after adding a reviewer note updates that row instead of duplicating it,
-because the reviewer's judgement should not be counted twice.
+Hanya menambahkan, sesuai rancangan. data/labels/feedback.csv adalah tempat
+penyimpanan umpan balik yang terus bertambah, sebagaimana dijelaskan pada bagian
+14 MASTER_CONTEXT. Promosi dari antrean bersifat idempoten berdasarkan
+(record_id_l, record_id_r, model_version): mempromosikan ulang antrean yang sama
+setelah menambahkan catatan peninjau akan memperbarui baris tersebut, bukan
+menduplikasinya, agar penilaian peninjau tidak dihitung dua kali.
 """
 
 from __future__ import annotations
@@ -59,13 +61,13 @@ def _pair_id(left: str, right: str) -> str:
 
 
 def _model_version() -> str | None:
-    """The model that produced the scores being reviewed."""
+    """Model yang menghasilkan skor yang sedang ditinjau."""
     latest = model_lifecycle.latest()
     return latest.name if latest else None
 
 
 def _decisions_for() -> pd.DataFrame:
-    """record_id pair -> (score, decision) from whichever prediction file exists."""
+    """Pasangan record_id -> (skor, keputusan) dari berkas prediksi yang tersedia."""
     empty = pd.DataFrame(columns=["pair_id", "match_probability", "decision"])
     for path in (PREDICTIONS_FULL_PATH, PREDICTIONS_SAMPLE_PATH):
         if not path.exists():
@@ -87,11 +89,11 @@ def _decisions_for() -> pd.DataFrame:
 
 
 def collect() -> pd.DataFrame:
-    """Read every review source and emit the feedback rows they contribute.
+    """Baca semua sumber peninjauan dan hasilkan baris umpan balik dari masing-masing sumber.
 
-    gold_labels.csv is a source, not just an output: it is the durable copy of a
-    review once the queue that held it has been regenerated. Without it, feedback
-    would empty out every time the pipeline rebuilt the queue.
+    gold_labels.csv adalah sumber data, bukan sekadar keluaran: berkas ini
+    menyimpan hasil tinjauan secara permanen setelah antrean asalnya dibuat ulang.
+    Tanpanya, umpan balik akan hilang setiap kali pipeline membangun ulang antrean.
     """
     sources = [*REVIEW_SOURCES, GOLD_PATH]
     reviewed = []
@@ -102,7 +104,7 @@ def collect() -> pd.DataFrame:
         if "label" not in frame.columns:
             continue
         frame = frame.copy()
-        # gold already stores the normalised vocabulary; the queues store raw.
+        # Label acuan sudah memakai istilah baku, sedangkan antrean menyimpan nilai mentah.
         frame["human_label"] = frame["label"].map(normalise_label)
         frame = frame[frame["human_label"].notna()]
         if frame.empty:
@@ -123,11 +125,11 @@ def collect() -> pd.DataFrame:
         _pair_id(x, y) for x, y in zip(labels.record_id_l, labels.record_id_r)
     ]
 
-    # Scores and decisions always come from the predictions parquet, never from
-    # the review file: Excel rewrote those columns to comma-decimal notation on
-    # the way in, so the review file's copy is unreliable. The review file's own
-    # match_probability column is dropped first so the merge cannot produce a
-    # suffixed duplicate.
+    # Skor dan keputusan selalu diambil dari parquet prediksi, bukan dari berkas
+    # peninjauan: Excel mengubah angka menjadi format desimal berkoma saat berkas
+    # dibuka dan disimpan, sehingga salinannya tidak dapat dipercaya. Hapus dulu
+    # kolom match_probability dari berkas peninjauan agar penggabungan tidak
+    # menghasilkan kolom duplikat dengan akhiran.
     labels = labels.drop(columns=["match_probability"], errors="ignore")
     scores = _decisions_for()
     labels = labels.merge(scores, on="pair_id", how="left")
@@ -143,10 +145,10 @@ def collect() -> pd.DataFrame:
 
 
 def merge(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
-    """Append new feedback; update rows that already exist for the same model.
+    """Tambahkan umpan balik baru; perbarui baris yang sudah ada untuk model yang sama.
 
-    Key is (pair_id, model_version): the same pair reviewed under v1 and under v2
-    are two different observations about two different models.
+    Kuncinya adalah (pair_id, model_version): pasangan yang sama saat ditinjau
+    menggunakan v1 dan v2 merupakan dua pengamatan berbeda terhadap dua model.
     """
     if existing.empty:
         return incoming
@@ -154,7 +156,8 @@ def merge(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
         return existing
 
     key = ["pair_id", "model_version"]
-    # A reviewer's later judgement replaces the earlier one, so `incoming` last.
+    # Penilaian terbaru dari peninjau menggantikan penilaian sebelumnya; karena
+    # itu, letakkan `incoming` di urutan terakhir.
     merged = pd.concat([existing, incoming], ignore_index=True)
     merged = merged.drop_duplicates(subset=key, keep="last")
     return merged.sort_values(key).reset_index(drop=True)

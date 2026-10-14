@@ -1,28 +1,25 @@
-"""Validate an uploaded batch before it is registered (PRD FR-01, MASTER_CONTEXT §7).
+"""Validasi batch yang diunggah sebelum didaftarkan.
 
-An upload that reaches standardize() half-valid produces a dataset that cannot be
-blocked, and the failure surfaces later as a MISSING COLUMN from Splink — after
-the bad data has already been written and registered. This refuses it first.
+Tahap ini menolak batch lebih awal jika strukturnya tidak sesuai untuk pipeline
+linkage. Tujuannya adalah mencegah berkas ditulis dan didaftarkan jika Splink
+nantinya akan gagal karena kolom yang diperlukan tidak tersedia.
 
-Rules
-Required : first_name, last_name, and at least one of email / phone_number.
-Also required: every source column behind an ACTIVE blocking rule in
-           BENCHMARK_RULES. Derived from config, not hardcoded, because
-           standardize() refuses a dataset whose blocking keys are missing — a
-           validator that only warned would promise acceptance the pipeline then
-           revokes after the batch was already registered.
-Helpful  : columns that improve recall but block nothing (dob, address and city
-           are blocking keys today; signup_date and country are not).
-Optional : everything else in COLUMN_MAP.
+Aturan:
+- Wajib: first_name, last_name, dan setidaknya salah satu dari email/phone.
+- Wajib: setiap kolom sumber yang digunakan aturan blocking aktif di
+  BENCHMARK_RULES. Daftar ini diturunkan dari config, bukan ditulis tetap,
+  sehingga validator dan standardize() selalu selaras.
+- Membantu: kolom yang meningkatkan recall tetapi tidak digunakan untuk blocking.
+- Opsional: kolom lain yang tercantum di COLUMN_MAP.
 
-Column names come from COLUMN_MAP and nowhere else. Guessing a name here would
-make the validator agree with a typo in the pipeline.
+Nama kolom harus diambil hanya dari COLUMN_MAP. Menebak nama sumber di sini
+dapat menyembunyikan kesalahan pengetikan pipeline dan menyebabkan batch
+diterima secara keliru.
 
-Two things it also reports, because they are decisions and not errors:
-- delimiter and encoding actually used (the development files are ';' while an
-  export from a comma-decimal locale is also ';' with comma decimals in numbers)
-- date-format evidence per date column, so a UI can ask the day/month question
-  with the detected order already offered as the default
+Laporan juga menyertakan metadata operasional, bukan hanya kesalahan validasi:
+- pemisah dan pengodean yang benar-benar digunakan pada berkas unggahan;
+- bukti urutan tanggal agar UI dapat menampilkan urutan yang terdeteksi sebagai
+  pilihan awal saat menanyakan format dd/mm atau mm/dd.
 """
 
 from __future__ import annotations
@@ -34,7 +31,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .config import BENCHMARK_RULES, COLUMN_MAP, OUTPUT_DIR
+from .config import COLUMN_MAP, OUTPUT_DIR, load_benchmark_rules
 
 REPORT_PATH = OUTPUT_DIR / "upload_validation_report.json"
 
@@ -42,22 +39,19 @@ REQUIRED_COLUMNS = ["first_name", "last_name"]
 ONE_OF = [("email", "phone")]
 
 
-def blocking_source_columns() -> set[str]:
-    """Source columns whose _std form is used by an active blocking rule.
+def blocking_source_columns(config_path: str | Path | None = None) -> set[str]:
+    """Kolom sumber yang bentuk _std-nya digunakan oleh aturan blocking aktif.
 
-    Derived from BENCHMARK_RULES so this validator and src.standardize can never
-    disagree about what a batch must contain.
+    Diturunkan dari BENCHMARK_RULES agar validator dan src.standardize selalu
+    sepakat mengenai kolom yang harus tersedia di dalam batch.
     """
-    keys = {col for _, cols in BENCHMARK_RULES for col in cols}
-    # A blocking key such as 'first_name_std' or the derived 'first_name_std_pre3'
-    # both point back at the source column 'first_name'.
+    rules = load_benchmark_rules(config_path)
+    keys = {col for _, cols in rules for col in cols}
     derived = {k[:-4] for k in keys if k.endswith("_std")}
     derived |= {k.split("_std_")[0] for k in keys if "_std_" in k}
     return {COLUMN_MAP[c] for c in COLUMN_MAP if c in derived}
 
 
-# Columns that improve linking but break nothing if absent. Deliberately derived
-# from the full column map, not a hand-written list.
 def optional_source_columns() -> set[str]:
     return set(COLUMN_MAP.values()) - blocking_source_columns() - {
         COLUMN_MAP[c] for c in REQUIRED_COLUMNS
@@ -67,11 +61,11 @@ DELIMITERS = {";": ";", ",": ",", "\t": "\t", "|": "|"}
 
 
 def read_csv_any(path: Path) -> tuple[pd.DataFrame, dict]:
-    """Read a CSV whose delimiter and encoding are not guaranteed.
+    """Baca CSV yang pemisah dan pengodeannya belum diketahui.
 
-    load_raw() assumes ';'. A client export is just as likely to be comma
-    separated, and reading the wrong one silently folds every column into a
-    single header.
+    load_raw() mengasumsikan pemisah ';'. Berkas ekspor klien bisa saja memakai
+    koma, dan penggunaan pemisah yang keliru akan diam-diam menggabungkan semua
+    kolom menjadi satu judul.
     """
     raw = None
     encoding_used = None
@@ -86,10 +80,10 @@ def read_csv_any(path: Path) -> tuple[pd.DataFrame, dict]:
         raise SystemExit(f"{path.name}: could not decode as utf-8 or latin-1")
 
     first_line = raw.split("\n", 1)[0]
-    # Prefer a delimiter that actually splits the header into several fields.
+
     best = max(DELIMITERS, key=lambda d: first_line.count(d))
     if first_line.count(best) == 0:
-        # Last resort: let pandas sniff.
+        # biarkan pandas mendeteksi pemisah.
         frame = pd.read_csv(path, sep=None, engine="python", low_memory=False)
         return frame, {
             "delimiter": "sniffed",
@@ -102,7 +96,7 @@ def read_csv_any(path: Path) -> tuple[pd.DataFrame, dict]:
 
 
 def date_format_evidence(df: pd.DataFrame) -> dict:
-    """Day/month evidence per date column, using the standardization parser."""
+    """Bukti urutan hari/bulan untuk tiap kolom tanggal menggunakan parser standardisasi."""
     from .standardize import detect_date_order
 
     out = {}
@@ -122,9 +116,8 @@ def date_format_evidence(df: pd.DataFrame) -> dict:
         }
     return out
 
-
 def validate(df: pd.DataFrame) -> dict:
-    """Return a report. `blocking` is a list of reasons the batch must be refused."""
+    """Kembalikan laporan. `blocking` memuat alasan batch harus ditolak."""
     available = set(df.columns)
     blocking: list[str] = []
     warnings: list[str] = []
@@ -144,8 +137,6 @@ def validate(df: pd.DataFrame) -> dict:
             + " — without email or phone there is no key the linker can use"
         )
 
-    # Blocking keys must exist, or standardize() refuses the batch anyway. Caught
-    # here so the upload is rejected before it is written and registered.
     needed = blocking_source_columns()
     missing_keys = sorted(needed - available)
     if missing_keys:
@@ -153,7 +144,7 @@ def validate(df: pd.DataFrame) -> dict:
             "column(s) required by the active blocking rules are absent: "
             + ", ".join(missing_keys)
             + " — the batch would standardize but never link. Add them, or drop the "
-            "rules that need them in BENCHMARK_RULES (src/config.py)."
+            "rules that need them in the blocking config (src/config.py)."
         )
 
     missing_helpful = [c for c in sorted(optional_source_columns()) if c not in available]
@@ -179,8 +170,6 @@ def validate(df: pd.DataFrame) -> dict:
             if nulls == len(df) and len(df):
                 blocking.append(f"column '{source}' is empty in every row")
 
-    # device_ids_std holds a list per row, so hashing it for the duplicate check
-    # raises "unhashable type". Duplicate detection runs on scalar columns only.
     scalar_columns = [c for c in df.columns if not _has_list_values(df[c])]
 
     return {
@@ -200,7 +189,7 @@ def validate(df: pd.DataFrame) -> dict:
 
 
 def _has_list_values(series: pd.Series, sample: int = 50) -> bool:
-    """True when the first few values are list/array rather than scalars."""
+    """Bernilai True jika beberapa nilai pertama berupa list/array, bukan skalar."""
     for value in series.head(sample):
         if isinstance(value, (list, tuple, set, np.ndarray)):
             return True

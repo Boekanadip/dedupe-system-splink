@@ -1,9 +1,10 @@
-"""Retrain & model management page.
+"""Halaman pelatihan ulang dan pengelolaan model.
 
-Retraining is deliberately NOT bundled with data entry: it is a separate,
-explicit action on its own page. This page also holds model rollback, retrain
-history, drift indicators, feedback status, threshold evaluation, A/B
-comparison, training provenance, and a promotion checklist.
+Pelatihan ulang sengaja TIDAK digabungkan dengan pemasukan data: tindakan ini
+dilakukan secara terpisah dan eksplisit di halamannya sendiri. Halaman ini juga
+memuat pemulihan model, riwayat pelatihan ulang, indikator pergeseran, status
+umpan balik, evaluasi ambang, perbandingan A/B, asal-usul pelatihan, dan daftar
+periksa promosi.
 """
 
 from __future__ import annotations
@@ -20,9 +21,11 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT
+from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT, pipeline_locked
+from src.evaluation_freshness import compare_provenance, current_provenance
 from src.run_all import RUN_SUMMARY_PATH
 from src.ui import (
+    workflow_step,
     format_count,
     format_duration,
     format_history_table,
@@ -44,6 +47,7 @@ page_header(
 )
 monitoring_sidebar()
 page_guide(__file__)
+workflow_step(__file__)
 
 MODELS_DIR = PROJECT_ROOT / "models"
 LOCK = OUTPUT_DIR / ".retraining"
@@ -87,7 +91,7 @@ if versions:
     c2.metric("Pasangan dibandingkan", format_count(latest_meta.get("pairs_scored", 0)),
               help="Berapa pasangan record yang dinilai model ini.")
 
-# ---- retrain
+# ---- pelatihan ulang
 RETRAIN_LOG = OUTPUT_DIR / "retrain.log"
 STALE_SEC = 600
 
@@ -114,13 +118,14 @@ st.caption(
 
 @st.fragment(run_every=2)
 def retrain_runner() -> None:
-    """Pantau retrain lewat file log, bukan pipe stdout.
+    """Pantau pelatihan ulang melalui berkas log, bukan pipe stdout.
 
     Sebelumnya subprocess di-pipe ke `for line in process.stdout` di dalam
     fragment ber-`run_every`. Rerun fragment memutus loop itu, menutup pipe,
-    membunuh proses training di tengah jalan, dan `LOCK.unlink()` tidak pernah
-    tercapai — lock basi selamanya. Proses terpisah + log di disk tidak bisa
-    dipotong begitu; liveness dicek via PID di lock file.
+    menghentikan proses pelatihan di tengah jalan, dan `LOCK.unlink()` tidak
+    pernah tercapai — kunci basi selamanya. Proses terpisah dengan log di disk
+    tidak dapat terputus dengan cara itu; keaktifan proses diperiksa melalui PID
+    pada berkas kunci.
     """
     locked, idle, alive = lock_status()
 
@@ -180,7 +185,7 @@ def retrain_runner() -> None:
 
 retrain_runner()
 
-# ---- drift
+# ---- pergeseran data
 st.subheader("Perubahan sejak model sebelumnya")
 ordered = sorted((v for v in versions if v.get("scope") == "full"),
                  key=lambda v: v.get("created_at") or "")
@@ -243,6 +248,46 @@ else:
     report = json.loads(VS_GOLD_PATH.read_text(encoding="utf-8"))
     prov = report.get("provenance", {})
     vs = report.get("versions", [])
+    missing_provenance, changed_provenance = compare_provenance(
+        prov, current_provenance()
+    )
+    provenance_labels = {
+        "gold_sha256": "label gold",
+        "processed_data_sha256": "data standar",
+        "prediction_sha256": "prediksi kandidat",
+        "model_inventory_sha256": "versi model atau threshold",
+    }
+    if LOCK.exists() or pipeline_locked() is not None:
+        st.info(
+            "Pipeline/retrain sedang berjalan. Status provenance baru bisa "
+            "dipastikan setelah proses selesai."
+        )
+    elif missing_provenance or changed_provenance:
+        st.warning(
+            "Grafik evaluasi **belum mutakhir**. "
+            "Hitung ulang dengan `python -m src.version_gold_scores` sebelum "
+            "menggunakan angka ini untuk membandingkan model."
+        )
+        if changed_provenance:
+            changed_names = [
+                provenance_labels.get(name, name) for name in changed_provenance
+            ]
+            st.caption("Berubah sejak laporan dibuat: " + ", ".join(changed_names) + ".")
+        if missing_provenance:
+            missing_names = [
+                provenance_labels.get(name, name) for name in missing_provenance
+            ]
+            st.caption(
+                "Laporan tidak menyimpan provenance untuk: "
+                + ", ".join(missing_names)
+                + ". Laporan ini perlu dihitung ulang."
+            )
+    else:
+        generated_at = report.get("generated_at")
+        st.success(
+            "Provenance grafik cocok dengan data dan versi model saat ini"
+            + (f" · dihitung {generated_at}" if generated_at else ".")
+        )
     st.caption(report.get("limitation", ""))
     st.caption(
         "Semua versi diukur ulang pada revisi gold dan data bersih yang sama, kandidat sama, "
@@ -258,13 +303,11 @@ else:
                 f"pada {current_rows:,} baris — sebanding untuk model, bukan "
                 "untuk snapshot"
             )
-    # Same gold, same candidates, same 0.9, one dot per version.
+    # Label acuan, kandidat, dan ambang 0,9 yang sama; satu titik untuk tiap versi.
     ref = vs[0]["own_match_threshold"] if vs else 0.9
     f1 = []
     for entry in vs:
         m = entry["clean"][f"at_{ref}"]
-        # A model that scores more positives only proves growth if false
-        # positives do not rise. Keep both mistake directions visible.
         f1.append({"f1": m["f1"], "tp": m["tp"], "fp": m["fp"], "fn": m["fn"]})
     trend = pd.DataFrame(
         {"waktu": [datetime.fromisoformat(entry["created_at"]) if entry.get("created_at") else None for entry in vs],
@@ -300,7 +343,7 @@ else:
         )
         st.dataframe(detail, width="stretch", hide_index=True)
 
-# ---- feedback
+# ---- umpan balik
 st.subheader("Catatan dari pemeriksaan manual")
 fb_path = LABELS_DIR / "feedback.csv"
 if fb_path.exists():
@@ -346,7 +389,9 @@ if flags_path.exists():
     st.caption(
         f"{len(flags):,} laporan · {open_count:,} belum ditangani. "
         "Laporan ini masuk dari halaman **Daftar Customer** ketika ada yang "
-        "menyebut sekelompok customer ini salah digabung atau salah dipecah."
+        "menyebut sekelompok customer ini salah digabung atau salah dipecah. "
+        "Laporan berbeda dari label pasangan; pilih tindak lanjut koreksi di "
+        "halaman Daftar Customer. Status selesai hanya dicatat setelah split/merge diterapkan."
     )
     issue_label = {
         "wrong_merge": "Salah digabung",
@@ -357,10 +402,6 @@ if flags_path.exists():
         "resolved": "Sudah ditangani",
         "ignored": "Diabaikan",
     }
-    # Nilai issue TIDAK diterjemahkan di kolom: file ini dibaca lagi oleh
-    # triage dan entity_correction yang mencari 'wrong_merge'/'wrong_split'
-    # persis. Yang diterjemahkan hanya judul kolomnya, dan nama kolom
-    # dikembalikan ke bentuk asli sebelum disimpan.
     flags_titles = {
         "timestamp": "Dilaporkan",
         "entity_id": "Kode customer",
@@ -395,15 +436,25 @@ if flags_path.exists():
             "customer di sistem."
         )
     if st.button("Simpan tindak lanjut"):
-        edited_view.rename(columns={v: k for k, v in flags_titles.items()}).to_csv(
-            flags_path, index=False
+        updated_flags = edited_view.rename(
+            columns={v: k for k, v in flags_titles.items()}
         )
-        st.success("Tindak lanjut disimpan.")
-        st.rerun()
+        requested_status = updated_flags["status"].astype(str)
+        newly_resolved = (flags["status"] != "resolved") & (requested_status == "resolved")
+        if newly_resolved.any():
+            st.error(
+                "Status 'Sudah ditangani' hanya diberikan setelah koreksi split/merge "
+                "benar-benar diterapkan dari halaman Daftar Customer. Gunakan 'Diabaikan' "
+                "bila laporan tidak akan ditindaklanjuti."
+            )
+        else:
+            updated_flags.to_csv(flags_path, index=False)
+            st.success("Tindak lanjut disimpan.")
+            st.rerun()
 else:
     st.caption("Belum ada laporan. Tandai dari halaman Daftar Customer.")
 
-# ---- threshold exploration
+# ---- penelusuran ambang
 st.subheader("Coba Batas Kepastian")
 st.caption(
     "Di bawah ini ditunjukkan apa yang terjadi kalau batas kepastian digeser. "
@@ -416,157 +467,181 @@ silver_path = LABELS_DIR / "silver_pairs.csv"
 if preds_path.exists() and silver_path.exists():
     from src.threshold_eval import THRESHOLDS, evaluate_at
 
-    preds = pd.read_parquet(
-        preds_path, columns=["record_id_l", "record_id_r", "match_probability"]
-    )
-    silver = pd.read_csv(silver_path)[["record_id_l", "record_id_r", "label"]]
-    merged = silver.merge(preds, on=["record_id_l", "record_id_r"], how="inner")
-    coverage = len(merged) / len(silver) if len(silver) else 0.0
-    st.caption(
-        f"Dasar perhitungan: {len(silver):,} pasangan yang diperiksa. "
-        f"{len(merged):,} di antaranya pernah jadi kandidat perbandingan "
-        f"({format_rate(coverage)}). Sisanya terlewat karena datanya tidak mirip "
-        "sama sekali, jadi angka aslinya bisa lebih baik dari yang tertulis."
-    )
-    sweep = pd.DataFrame(
-        [evaluate_at(merged, "label", "match_probability", t) for t in THRESHOLDS]
-    )
-    shown = sweep[["threshold", "tp", "fp", "fn", "tn", "precision", "recall", "f1"]].copy()
-    shown["threshold"] = shown["threshold"].map(lambda v: format_threshold(v))
-    shown = shown.rename(columns={
-        "threshold": "Batas",
-        "tp": "Benar sama",
-        "fp": "Salah gabung",
-        "fn": "Terlewat",
-        "tn": "Benar beda",
-        "precision": "Ketepatan",
-        "recall": "Kelengkapan",
-        "f1": "Nilai gabungan",
-    })
-    for col in ("Benar sama", "Salah gabung", "Terlewat", "Benar beda"):
-        shown[col] = shown[col].map(format_count)
-    for col in ("Ketepatan", "Kelengkapan", "Nilai gabungan"):
-        shown[col] = shown[col].map(lambda v: format_rate(v))
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.dataframe(shown, width="stretch", hide_index=True, height=340)
-    with c2:
-        st.line_chart(
-            sweep.set_index("threshold")[["precision", "recall", "f1"]]
+    try:
+        preds = pd.read_parquet(
+            preds_path, columns=["record_id_l", "record_id_r", "match_probability"]
         )
-    with st.expander("Apa arti kolomnya?"):
-        st.markdown(
-            "- **Benar sama** — pasangan yang sistem bilang sama, dan memang sama.\n"
-            "- **Salah gabung** — sistem bilang sama, padahal berbeda orang. "
-            "Ini yang paling merusak: data jadi tercemar.\n"
-            "- **Terlewat** — sebenarnya sama, tapi tidak terambil. Lebih baik "
-            "daripada salah gabung.\n"
-            "- **Ketepatan / Kelengkapan / Nilai gabungan** — 100% berarti tidak ada "
-            "kesalahan sama sekali."
+    except Exception as exc:
+        st.error(
+            "File hasil perbandingan tidak bisa dibaca (kemungkinan korup karena "
+            "proses sebelumnya terputus di tengah). Jalankan ulang pipeline dulu: "
+            f"`python -m src.splink_model --full`. Detail: {exc}"
+        )
+        preds = None
+    if preds is not None:
+        silver = pd.read_csv(silver_path)[["record_id_l", "record_id_r", "label"]]
+        merged = silver.merge(preds, on=["record_id_l", "record_id_r"], how="inner")
+        coverage = len(merged) / len(silver) if len(silver) else 0.0
+        st.caption(
+            f"Dasar perhitungan: {len(silver):,} pasangan yang diperiksa. "
+            f"{len(merged):,} di antaranya pernah jadi kandidat perbandingan "
+            f"({format_rate(coverage)}). Sisanya terlewat karena datanya tidak mirip "
+            "sama sekali, jadi angka aslinya bisa lebih baik dari yang tertulis."
+        )
+        sweep = pd.DataFrame(
+            [evaluate_at(merged, "label", "match_probability", t) for t in THRESHOLDS]
+        )
+        shown = sweep[["threshold", "tp", "fp", "fn", "tn", "precision", "recall", "f1"]].copy()
+        shown["threshold"] = shown["threshold"].map(lambda v: format_threshold(v))
+        shown = shown.rename(columns={
+            "threshold": "Batas",
+            "tp": "Benar sama",
+            "fp": "Salah gabung",
+            "fn": "Terlewat",
+            "tn": "Benar beda",
+            "precision": "Ketepatan",
+            "recall": "Kelengkapan",
+            "f1": "Nilai gabungan",
+        })
+        for col in ("Benar sama", "Salah gabung", "Terlewat", "Benar beda"):
+            shown[col] = shown[col].map(format_count)
+        for col in ("Ketepatan", "Kelengkapan", "Nilai gabungan"):
+            shown[col] = shown[col].map(lambda v: format_rate(v))
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.dataframe(shown, width="stretch", hide_index=True, height=340)
+        with c2:
+            st.line_chart(
+                sweep.set_index("threshold")[["precision", "recall", "f1"]]
+            )
+        with st.expander("Apa arti kolomnya?"):
+            st.markdown(
+                "- **Benar sama** — pasangan yang sistem bilang sama, dan memang sama.\n"
+                "- **Salah gabung** — sistem bilang sama, padahal berbeda orang. "
+                "Ini yang paling merusak: data jadi tercemar.\n"
+                "- **Terlewat** — sebenarnya sama, tapi tidak terambil. Lebih baik "
+                "daripada salah gabung.\n"
+                "- **Ketepatan / Kelengkapan / Nilai gabungan** — 100% berarti tidak ada "
+                "kesalahan sama sekali."
+            )
+
+        # Terapkan threshold — aksi eksplisit, bukan otomatis.
+        st.markdown("**Ubah batas kepastian**")
+        st.caption(
+            "Batas ini yang menentukan kapan sistem menggabungkan sendiri. "
+            "Semakin tinggi batas atas, semakin sedikit yang digabung otomatis — "
+            "dan semakin banyak yang menunggu Anda periksa."
+        )
+        model_dir = MODELS_DIR / cur if cur else None
+        cur_match, cur_review = 0.9, 1e-10
+        if model_dir and (model_dir / "thresholds.json").exists():
+            tfile = json.loads((model_dir / "thresholds.json").read_text(encoding="utf-8"))
+            cur_match = tfile.get("match_threshold", cur_match)
+            cur_review = tfile.get("review_threshold", cur_review)
+
+        c0, c1 = st.columns([1, 1])
+        c0.metric(
+            "Batas gabung otomatis",
+            format_threshold(cur_match),
+            help="Peluang minimal agar sistem langsung menggabungkan tanpa bertanya.",
+        )
+        c1.metric(
+            "Batas bawah",
+            format_threshold(cur_review),
+            help="Di bawah peluang ini, pasangan dianggap pasti dua orang berbeda.",
         )
 
-    # Terapkan threshold — aksi eksplisit, bukan otomatis.
-    st.markdown("**Ubah batas kepastian**")
-    st.caption(
-        "Batas ini yang menentukan kapan sistem menggabungkan sendiri. "
-        "Semakin tinggi batas atas, semakin sedikit yang digabung otomatis — "
-        "dan semakin banyak yang menunggu Anda periksa."
-    )
-    model_dir = MODELS_DIR / cur if cur else None
-    cur_match, cur_review = 0.9, 1e-10
-    if model_dir and (model_dir / "thresholds.json").exists():
-        tfile = json.loads((model_dir / "thresholds.json").read_text(encoding="utf-8"))
-        cur_match = tfile.get("match_threshold", cur_match)
-        cur_review = tfile.get("review_threshold", cur_review)
-
-    c0, c1 = st.columns([1, 1])
-    c0.metric(
-        "Batas gabung otomatis",
-        format_threshold(cur_match),
-        help="Peluang minimal agar sistem langsung menggabungkan tanpa bertanya.",
-    )
-    c1.metric(
-        "Batas bawah",
-        format_threshold(cur_review),
-        help="Di bawah peluang ini, pasangan dianggap pasti dua orang berbeda.",
-    )
-
-    t1, t2, t3 = st.columns([2, 2, 3])
-    new_match = t1.number_input(
-        "Gabung otomatis bila peluang ≥",
-        min_value=0.0, max_value=1.0, value=float(cur_match),
-        step=0.01, format="%.2f",
-        help="Contoh: 0,90 berarti pasangan dengan peluang 90% ke atas "
-             f"langsung digabung. Sekarang: {format_threshold(cur_match)}.",
-    )
-    new_review = t2.number_input(
-        "Anggap pasti beda bila peluang <",
-        min_value=0.0, max_value=1.0, value=float(cur_review),
-        step=0.0000001, format="%.10f",
-        help="Nilai aslinya sengaja dibuat sangat kecil "
-             f"({format_threshold(cur_review)}) supaya tidak ada yang salah gabung. "
-             "Boleh diketik 0 bila tidak ada batas bawah.",
-    )
-    reviewer_name = t3.text_input("Nama Anda", value="reviewer")
-    st.caption(
-        "Setelah menekan tombol di bawah: (1) semua keputusan dihitung ulang, "
-        "(2) pengelompokan dan daftar customer dijalankan ulang (±10 detik), "
-        "(3) angka baru dicatat di model aktif. "
-        "Semua angka customer bisa berubah — pastikan sudah yakin."
-    )
-    confirm_threshold = st.checkbox(
-        "Saya paham semua angka customer akan berubah",
-        key="threshold_confirm",
-        value=False,
-    )
-    if st.button("Terapkan threshold", type="primary", disabled=not confirm_threshold):
-        if not (0.0 <= new_review < new_match <= 1.0):
-            st.error("Harus: 0 ≤ REVIEW < MATCH ≤ 1.")
-        else:
-            override = {
-                "match_threshold": float(new_match),
-                "review_threshold": float(new_review),
-                "applied_at": datetime.now().isoformat(timespec="seconds"),
-                "reviewer": reviewer_name,
-                "previous": {"match_threshold": cur_match, "review_threshold": cur_review},
-            }
-            (OUTPUT_DIR / "thresholds_override.json").write_text(
-                json.dumps(override, indent=2), encoding="utf-8"
-            )
-            if model_dir and (model_dir / "thresholds.json").exists():
-                tfile.update(override)
-                (model_dir / "thresholds.json").write_text(
-                    json.dumps(tfile, indent=2), encoding="utf-8"
+        t1, t2, t3 = st.columns([2, 2, 3])
+        new_match = t1.number_input(
+            "Gabung otomatis bila peluang ≥",
+            min_value=0.0, max_value=1.0, value=float(cur_match),
+            step=0.01, format="%.2f",
+            help="Contoh: 0,90 berarti pasangan dengan peluang 90% ke atas "
+                 f"langsung digabung. Sekarang: {format_threshold(cur_match)}.",
+        )
+        new_review = t2.number_input(
+            "Anggap pasti beda bila peluang <",
+            min_value=0.0, max_value=1.0, value=float(cur_review),
+            step=0.0000001, format="%.10f",
+            help="Nilai aslinya sengaja dibuat sangat kecil "
+                 f"({format_threshold(cur_review)}) supaya tidak ada yang salah gabung. "
+                 "Boleh diketik 0 bila tidak ada batas bawah.",
+        )
+        reviewer_name = t3.text_input("Nama Anda", value="reviewer")
+        st.caption(
+            "Setelah menekan tombol di bawah: (1) semua keputusan dihitung ulang, "
+            "(2) pengelompokan dan daftar customer dijalankan ulang (±10 detik), "
+            "(3) angka baru dicatat di model aktif. "
+            "Semua angka customer bisa berubah — pastikan sudah yakin."
+        )
+        confirm_threshold = st.checkbox(
+            "Saya paham semua angka customer akan berubah",
+            key="threshold_confirm",
+            value=False,
+        )
+        if st.button("Terapkan threshold", type="primary", disabled=not confirm_threshold):
+            if not (0.0 <= new_review < new_match <= 1.0):
+                st.error("Harus: 0 ≤ REVIEW < MATCH ≤ 1.")
+            else:
+                override = {
+                    "match_threshold": float(new_match),
+                    "review_threshold": float(new_review),
+                    "applied_at": datetime.now().isoformat(timespec="seconds"),
+                    "reviewer": reviewer_name,
+                    "previous": {"match_threshold": cur_match, "review_threshold": cur_review},
+                }
+                (OUTPUT_DIR / "thresholds_override.json").write_text(
+                    json.dumps(override, indent=2), encoding="utf-8"
                 )
+                if model_dir and (model_dir / "thresholds.json").exists():
+                    tfile.update(override)
+                    (model_dir / "thresholds.json").write_text(
+                        json.dumps(tfile, indent=2), encoding="utf-8"
+                    )
 
-            import numpy as np
+                import os
+                import tempfile
 
-            full = pd.read_parquet(preds_path)
-            full["decision"] = np.where(
-                full["match_probability"] >= float(new_match), "MATCH",
-                np.where(full["match_probability"] >= float(new_review), "REVIEW", "NON_MATCH"),
-            )
-            full.to_parquet(preds_path, index=False)
+                import numpy as np
 
-            log_box = st.empty()
-            lines: list[str] = []
-            for module in ("clustering", "master_record", "evaluate"):
-                proc = subprocess.Popen(
-                    [sys.executable, "-m", f"src.{module}", "--full"]
-                    if module == "clustering" else
-                    [sys.executable, "-m", f"src.{module}"],
-                    cwd=PROJECT_ROOT, text=True,
-                    encoding="utf-8", errors="replace",
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1,
+                full = pd.read_parquet(preds_path)
+                full["decision"] = np.where(
+                    full["match_probability"] >= float(new_match), "MATCH",
+                    np.where(full["match_probability"] >= float(new_review), "REVIEW", "NON_MATCH"),
                 )
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    lines.append(line)
-                    log_box.code("".join(lines[-30:]), language="log")
-                if proc.wait() != 0:
-                    st.error(f"Langkah {module} gagal — lihat log.")
-                    st.stop()
+                # Tulis ke file sementara dulu, lalu ganti atomik. Menulis langsung
+                # ke preds_path membuat file korup permanen kalau proses terputus
+                # di tengah (pernah terjadi: parquet 119 MB tidak bisa dibaca lagi).
+                tmp_fd, tmp_name = tempfile.mkstemp(
+                    dir=preds_path.parent, suffix=".parquet.tmp"
+                )
+                os.close(tmp_fd)
+                try:
+                    full.to_parquet(tmp_name, index=False)
+                    os.replace(tmp_name, preds_path)
+                except BaseException:
+                    Path(tmp_name).unlink(missing_ok=True)
+                    raise
+
+                log_box = st.empty()
+                lines: list[str] = []
+                for module in ("clustering", "master_record", "evaluate"):
+                    proc = subprocess.Popen(
+                        [sys.executable, "-m", f"src.{module}", "--full"]
+                        if module == "clustering" else
+                        [sys.executable, "-m", f"src.{module}"],
+                        cwd=PROJECT_ROOT, text=True,
+                        encoding="utf-8", errors="replace",
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1,
+                    )
+                    assert proc.stdout is not None
+                    for line in proc.stdout:
+                        lines.append(line)
+                        log_box.code("".join(lines[-30:]), language="log")
+                    if proc.wait() != 0:
+                        st.error(f"Langkah {module} gagal — lihat log.")
+                        st.stop()
             st.success(
                 f"Threshold diterapkan: MATCH ≥ {new_match}, REVIEW ≥ {new_review}. "
                 "Clustering, master dan evaluasi sudah dijalankan ulang."
@@ -575,7 +650,7 @@ if preds_path.exists() and silver_path.exists():
 else:
     st.caption("Butuh predictions + silver_labels untuk sweep.")
 
-# ---- promotion checklist
+# ---- daftar periksa promosi model
 st.subheader("Cek Kelengkapan Sebelum Melatih Ulang")
 st.caption(
     "Melatih ulang model hanya berguna kalau datanya sudah bersih. "
@@ -603,11 +678,13 @@ for label, ok in checks:
     else:
         st.warning(f"Belum — {label}")
 
-# ---- rollback
+# ---- pemulihan ke versi sebelumnya
+ROLLBACK_LOG = OUTPUT_DIR / "rollback_log.jsonl"
 st.subheader("Kembalikan ke Model Sebelumnya")
 st.caption(
     "Kalau model baru hasilnya lebih buruk, kembalikan sistem ke versi yang "
-    "lama. Hanya model aktif yang berubah — data hasil processing tidak disentuh."
+    "lama. Hanya model aktif yang berubah — data hasil processing tidak disentuh. "
+    "Alasan wajib diisi, jadi pengguna berikutnya tahu kenapa versi ini dikembalikan."
 )
 if len(versions) >= 2:
     target = st.selectbox(
@@ -615,29 +692,119 @@ if len(versions) >= 2:
         [v["version"] for v in versions[:-1]],
         format_func=lambda v: f"{v}  ({v[1:9].replace('-', '/')})",
     )
+    rollback_reason = st.text_input(
+        "Alasan rollback",
+        placeholder="misal: v20261009_103151 false merge naik 19→95, kembalikan ke versi stabil",
+        key="rollback_reason",
+    )
+    rollback_reviewer = st.text_input("Nama Anda", value="reviewer", key="rollback_reviewer")
     confirm_rollback = st.checkbox(
-        f"Saya paham model aktif akan diganti ke {target}",
+        f"Saya paham model aktif akan diganti ke",
         key="rollback_confirm",
         value=False,
     )
     if st.button("Kembalikan sekarang", disabled=not confirm_rollback):
-        LATEST.write_text(
-            json.dumps(
-                {
-                    "version": target,
-                    "path": str(MODELS_DIR / target),
-                    "created_at": datetime.now().isoformat(timespec="seconds"),
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        st.success(f"Model aktif sekarang: {target}")
-        st.rerun()
+        if not rollback_reason.strip():
+            st.error("Isi alasan rollback dulu — tanpa alasan, pengguna berikutnya tidak tahu kendalanya.")
+        else:
+            entry = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "from": cur,
+                "to": target,
+                "reviewer": rollback_reviewer,
+                "reason": rollback_reason.strip(),
+            }
+            with open(ROLLBACK_LOG, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+            LATEST.write_text(
+                json.dumps(
+                    {
+                        "version": target,
+                        "path": str(MODELS_DIR / target),
+                        "created_at": datetime.now().isoformat(timespec="seconds"),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            st.success(f"Model aktif sekarang: {target}")
+            st.rerun()
 else:
     st.caption("Butuh 2 versi model untuk bisa mengembalikan.")
+if ROLLBACK_LOG.exists():
+    st.caption("Riwayat rollback (siapa, kapan, kenapa):")
+    rollbacks = [
+        json.loads(line)
+        for line in ROLLBACK_LOG.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if rollbacks:
+        st.dataframe(
+            pd.DataFrame(rollbacks).rename(columns={
+                "timestamp": "Waktu",
+                "from": "Dari",
+                "to": "Ke",
+                "reviewer": "Oleh",
+                "reason": "Alasan",
+            }),
+            width="stretch",
+            hide_index=True,
+        )
 
-# ---- retrain history
+# ---- catatan model
+MODEL_NOTES_PATH = OUTPUT_DIR / "model_notes.json"
+st.subheader("Model Notes")
+st.caption(
+    "Catatan ringan kelebihan, kekurangan, dan stabilitas tiap versi model. "
+    "Bisa diubah kapan saja, tidak permanen, tidak menghapus riwayat rollback."
+)
+notes = json.loads(MODEL_NOTES_PATH.read_text(encoding="utf-8")) if MODEL_NOTES_PATH.exists() else {}
+
+# Pastikan setiap versi punya entry kosong
+for v in versions:
+    if v["version"] not in notes:
+        notes[v["version"]] = {"strengths": "", "weaknesses": "", "stability_notes": "", "last_updated": ""}
+
+note_rows = [
+    {
+        "versi": vid,
+        "kelebihan": notes[vid].get("strengths", ""),
+        "kekurangan": notes[vid].get("weaknesses", ""),
+        "stabilitas": notes[vid].get("stability_notes", ""),
+        "last_updated": notes[vid].get("last_updated", ""),
+    }
+    for vid in sorted((v["version"] for v in versions), reverse=True)
+]
+
+edited_df = st.data_editor(
+    note_rows,
+    width="stretch",
+    hide_index=True,
+    num_rows="fixed",
+    column_config={
+        "versi": st.column_config.TextColumn("Versi", disabled=True),
+        "kelebihan": st.column_config.TextColumn("Kelebihan"),
+        "kekurangan": st.column_config.TextColumn("Kekurangan"),
+        "stabilitas": st.column_config.TextColumn("Stabilitas"),
+        "last_updated": st.column_config.TextColumn("Last Updated", disabled=True),
+    },
+)
+
+if st.button("Simpan Model Notes", type="secondary"):
+    new_notes = {}
+    for _, row in edited_df.iterrows():
+        vid = str(row["versi"])
+        new_notes[vid] = {
+            "strengths": str(row.get("kelebihan", "") or ""),
+            "weaknesses": str(row.get("kekurangan", "") or ""),
+            "stability_notes": str(row.get("stabilitas", "") or ""),
+            "last_updated": datetime.now().isoformat(timespec="seconds"),
+        }
+    MODEL_NOTES_PATH.write_text(json.dumps(new_notes, indent=2, ensure_ascii=False), encoding="utf-8")
+    st.success("Model Notes disimpan.")
+    st.rerun()
+
+# ---- riwayat pelatihan ulang
 st.subheader("Riwayat Pemrosesan")
 st.caption(
     "Setiap kali data baru diproses, jejaknya tercatat di sini: berapa record "
@@ -671,7 +838,7 @@ if history_path.exists():
 else:
     st.caption("Belum ada riwayat.")
 
-# ---- provenance
+# ---- asal-usul data
 st.subheader("Asal Data Model Ini")
 if versions:
     v = versions[-1]

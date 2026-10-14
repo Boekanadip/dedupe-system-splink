@@ -1,20 +1,21 @@
-"""Which raw files make up the current dataset, and which record_ids they own.
+"""Berkas mentah penyusun dataset saat ini dan record_id yang dimiliki tiap berkas.
 
-The failure this prevents
-`standardize --input new_batch.csv` rebuilt the parquet from that file ALONE, so
-record_ids restarted at rec_000001 and collided with rows already stored. The
-warning printed after the fact ("output has N rows but the previous parquet had
-M") was real, but the damage was already done.
+Kegagalan yang dicegah
+Perintah `standardize --input new_batch.csv` membangun ulang parquet hanya dari
+berkas tersebut, sehingga record_id dimulai
+kembali dari rec_000001 dan bertabrakan dengan baris yang sudah tersimpan.
+Peringatan yang dicetak setelahnya ("keluaran memiliki N baris, sedangkan
+parquet sebelumnya memiliki M") memang benar, tetapi kerusakan telanjur terjadi.
 
-The registry makes the index arithmetic impossible to get wrong: a batch is
-registered once, and `next_start_index` is derived from what is already there.
-Re-registering the same file is refused by content hash, not by filename, because
-the same data under a different name is the more likely mistake.
+Registri mencegah kesalahan perhitungan indeks: setiap batch didaftarkan satu
+kali, dan `next_start_index` dihitung dari data yang sudah ada. Pendaftaran
+ulang berkas yang sama ditolak berdasarkan hash isi, bukan nama berkas, karena
+data yang sama dengan nama berbeda lebih mungkin terjadi.
 
-Durability, stated plainly
-`record_id` is positional within a batch. Editing a registered file changes the
-ids of everything after it in that file. The sha256 is stored so that change is
-detectable rather than silent — it is not prevented.
+Ketahanan data
+`record_id` ditetapkan berdasarkan posisi dalam batch. Mengubah berkas yang
+sudah didaftarkan akan mengubah ID semua catatan setelah posisi tersebut.
+sha256 disimpan agar perubahan itu dapat diketahui, bukan dicegah.
 """
 
 from __future__ import annotations
@@ -61,11 +62,11 @@ def registered_paths() -> list[Path]:
 
 
 def source_paths() -> list[Path]:
-    """The files that make up the dataset right now.
+    """Daftar berkas penyusun dataset saat ini.
 
-    Single definition so profiling and standardize cannot read different data.
-    Before a registry exists this is the configured RAW_DATA_PATH, which keeps
-    the pre-registry behaviour working.
+    Definisi tunggal agar profiling dan standardize membaca data yang sama.
+    Sebelum registri tersedia, nilai ini adalah RAW_DATA_PATH yang dikonfigurasi
+    agar perilaku sebelum penggunaan registri tetap berfungsi.
     """
     from .config import RAW_DATA_PATH
 
@@ -74,12 +75,12 @@ def source_paths() -> list[Path]:
 
 
 def next_start_index() -> int:
-    """Where the next batch's records begin. Derived, never supplied by a user."""
+    """Titik awal record_id untuk batch berikutnya. Dihitung, bukan dimasukkan pengguna."""
     return int(load()["next_start_index"])
 
 
 def register(path: Path, rows: int) -> dict:
-    """Add a batch, refusing anything that would double-count or overlap."""
+    """Tambahkan batch; tolak batch yang akan dihitung dua kali atau tumpang tindih."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"{path} not found")
@@ -119,11 +120,26 @@ def register(path: Path, rows: int) -> dict:
     return batch
 
 
-def seed(names: list[str]) -> dict:
-    """Register an initial set of batches in order, from scratch.
+def unregister(file: str) -> bool:
+    """Remove a batch by file name, freeing its record_ids. Returns True if removed."""
+    registry = load()
+    before = len(registry["batches"])
+    registry["batches"] = [b for b in registry["batches"] if b["file"] != file]
+    if len(registry["batches"]) == before:
+        return False
+    # next_start_index is derived from the remaining batches, so the freed range
+    # can be reused by the next batch without colliding.
+    registry["next_start_index"] = sum(b["rows"] for b in registry["batches"])
+    save(registry)
+    return True
 
-    Row counts are read from the files, not passed in: a wrong count here would
-    hand the next batch a start_index in the middle of an existing one.
+
+def seed(names: list[str]) -> dict:
+    """Daftarkan sekumpulan batch awal secara berurutan dari awal.
+
+    Jumlah baris dibaca dari berkas, bukan diteruskan sebagai argumen: jumlah
+    yang salah akan membuat batch berikutnya memulai indeks di tengah batch
+    yang sudah ada.
     """
     save(_empty())
     for name in names:
@@ -144,7 +160,7 @@ def _row_count(path: Path) -> int:
 
 
 def verify_against(standardized_path: Path) -> dict:
-    """Do the registered record_ids actually cover the standardized parquet?"""
+    """Apakah record_id yang terdaftar benar-benar mencakup parquet terstandardisasi?"""
     registry = load()
     if not registry["batches"]:
         return {"status": "unavailable", "reason": "no batches registered"}
@@ -183,7 +199,20 @@ def main() -> None:
         ),
     )
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--unregister",
+        metavar="CSV",
+        default=None,
+        help="Remove a batch by file name, freeing its record_ids for reuse.",
+    )
     args = parser.parse_args()
+
+    if args.unregister:
+        if unregister(args.unregister):
+            print(f"Unregistered {args.unregister}.")
+        else:
+            raise SystemExit(f"{args.unregister} is not in the registry.")
+        return
 
     if args.seed:
         registry = seed(args.seed)

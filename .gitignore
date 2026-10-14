@@ -4,6 +4,15 @@ __pycache__/
 .ipynb_checkpoints/
 .vscode/
 
+# Local database files and credentials
+*.duckdb
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+
 # safety net: data files never belong in git, wherever they land
 *.parquet
 *.csv
@@ -32,7 +41,6 @@ outputs/*
 .opencode/MEMORY.md
 
 # secrets
-.env
 *.pem
 
 # local-only: dokumentasi & konteks agent. Ada di disk, tidak dikirim ke GitHub.

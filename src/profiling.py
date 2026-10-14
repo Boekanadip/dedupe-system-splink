@@ -10,14 +10,14 @@ from .config import COLUMN_MAP, OUTPUT_DIR, RAW_DATA_PATH
 
 
 def load_raw(path: Path = RAW_DATA_PATH) -> pd.DataFrame:
-    """Read a raw CSV whose delimiter and encoding are not guaranteed.
+    """Baca CSV mentah yang pemisah dan pengodeannya belum diketahui.
 
-    The validator accepts ',' as well as ';' — a client export is just as
-    likely to be comma separated. Reading a comma file with the old hardcoded
-    `sep=";"` folded the whole header into ONE column, so the batch validated
-    as ACCEPTED and then died in standardize, after registration. One
-    definition of the reading rule lives in validate_upload.read_csv_any, so
-    the validator and the pipeline cannot disagree about what a file contains.
+    Validator menerima pemisah ',' maupun ';' — berkas ekspor klien bisa saja
+    menggunakan koma. Membaca berkas berkoma dengan `sep=";"` yang sebelumnya
+    ditetapkan tetap akan menggabungkan seluruh judul kolom menjadi SATU kolom.
+    Akibatnya, batch dinyatakan DITERIMA lalu gagal pada standardize setelah
+    didaftarkan. Aturan pembacaan ditetapkan di validate_upload.read_csv_any
+    agar validator dan pipeline selalu sepakat mengenai isi berkas.
     """
     from .validate_upload import read_csv_any
 
@@ -31,11 +31,12 @@ def load_raw(path: Path = RAW_DATA_PATH) -> pd.DataFrame:
 
 
 def load_dataset() -> pd.DataFrame:
-    """Every file the batch registry currently names, concatenated.
+    """Gabungkan semua berkas yang saat ini tercantum dalam registri batch.
 
-    Profiling must read the same rows standardize will link. When profiling read
-    the monolith while the registry pointed at two batches, the profile silently
-    described a different dataset than the one being deduplicated.
+    Profiling harus membaca baris yang sama dengan yang akan ditautkan oleh
+    standardize. Saat profiling membaca berkas gabungan sementara registri
+    menunjuk ke dua batch, profil tanpa pemberitahuan menggambarkan dataset yang
+    berbeda dari dataset yang sedang dideduplikasi.
     """
     from . import registry
 
@@ -135,12 +136,13 @@ def duplicate_id_report(df: pd.DataFrame, customer_id: str) -> dict:
 
 
 def identifier_coverage(df: pd.DataFrame) -> dict:
-    """Quantify how far the exact-equi-join blocking rules can possibly reach.
+    """Ukur jangkauan maksimum yang mungkin dicapai aturan blocking exact-equi-join.
 
-    Every rule in BENCHMARK_RULES is an exact match on a standardized field, so a
-    record missing those fields cannot be linked to anything by construction.
-    Without this number, "no candidates found" is indistinguishable from "no
-    duplicates exist", and recall claims stay unfounded.
+    Setiap aturan dalam BENCHMARK_RULES mencocokkan kolom terstandardisasi secara
+    persis, sehingga catatan yang tidak memiliki kolom tersebut tidak mungkin
+    ditautkan dengan catatan lain. Tanpa angka ini, "tidak ditemukan kandidat"
+    tidak dapat dibedakan dari "tidak ada duplikat", dan klaim recall tidak
+    memiliki dasar.
     """
     def null_count(canonical: str) -> int:
         source = COLUMN_MAP[canonical]
@@ -153,8 +155,8 @@ def identifier_coverage(df: pd.DataFrame) -> dict:
             & df[COLUMN_MAP["phone"]].isna()
         ).sum()
     )
-    # The two strongest rules are email_exact and phone_exact. A record missing
-    # both can never be produced as a candidate by any current rule.
+    # Dua aturan terkuat adalah email_exact dan phone_exact. Catatan tanpa
+    # keduanya tidak mungkin menjadi kandidat dengan aturan yang ada saat ini.
     return {
         "records": len(df),
         "missing_email": email,
@@ -184,7 +186,7 @@ def build_profile(df: pd.DataFrame) -> dict:
         "phone_anomalies": phone_anomalies(df, COLUMN_MAP["phone"]),
         "identifier_coverage": identifier_coverage(df),
         "top_values": {
-            # data-profiling skill step 7: names, phone, email, address, device IDs.
+            # Langkah 7 profiling data: nama, telepon, email, alamat, dan ID device.
             canonical: top_values(df, source).to_dict(orient="records")
             for canonical, source in COLUMN_MAP.items()
             if canonical in ("first_name", "last_name", "email", "phone", "address", "device_ids")

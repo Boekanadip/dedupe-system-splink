@@ -1,21 +1,23 @@
-"""Draw a random sample of candidate pairs for human review.
+"""Ambil sampel acak pasangan kandidat untuk ditinjau manusia.
 
-THREE SAMPLE TARGETS (--band)
-  review     the REVIEW band: pairs the model explicitly declined to decide.
-             This is the human queue the three-way policy actually produces.
-  non_match  pairs the model rejected. Nothing checks them today, so they hold
-             the missed-match (false negative) estimate.
-  match      pairs the model called MATCH. On this dataset device_id covers this
-             side, but device_id does not exist on every future dataset, so the
-             manual path must be able to stand alone.
+TIGA SASARAN SAMPEL (--band)
+  review     kelompok REVIEW: pasangan yang secara eksplisit tidak diputuskan
+             oleh model. Inilah antrean peninjauan manusia dari kebijakan tiga arah.
+  non_match  pasangan yang ditolak model. Belum ada pemeriksaan untuk kelompok
+             ini, sehingga sampelnya digunakan untuk memperkirakan pasangan
+             cocok yang terlewat (false negative).
+  match      pasangan yang dinyatakan MATCH oleh model. Dataset ini memiliki
+             device_id untuk kelompok tersebut, tetapi dataset mendatang belum
+             tentu memilikinya, sehingga alur manual harus dapat berjalan sendiri.
 
-WHY ONE-SIDED SAMPLING
-Sampling uniformly over all 293,883 pairs would return roughly 1.9 matches in
-200 — the match side is 0.6% of the population. Stratifying by decision is what
-makes each estimate affordable.
+ALASAN PENGAMBILAN SAMPEL BERDASARKAN KELOMPOK
+Pengambilan sampel merata dari 293.883 pasangan hanya menghasilkan sekitar 1,9
+pasangan cocok dari 200 — kelompok match hanya 0,6% dari populasi. Pemisahan
+berdasarkan keputusan membuat setiap estimasi dapat diperoleh dengan jumlah
+sampel yang wajar.
 
-The file is written with `label` empty. Filling it IS the review; it is promoted
-by python -m src.labels --promote.
+Berkas ditulis dengan `label` kosong. Mengisinya berarti melakukan peninjauan;
+label tersebut kemudian dipromosikan dengan python -m src.labels --promote.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from .config import (
     RANDOM_SEED,
     REVIEW_THRESHOLD,
     predictions_path,
+    active_path,
 )
 from .labels import REVIEW_FIELDS
 
@@ -48,7 +51,7 @@ BANDS = ("review", "non_match", "match")
 
 
 def build_sample(full: bool, n: int, seed: int, band: str = "review") -> pd.DataFrame:
-    preds_path = predictions_path(full=full)
+    preds_path = active_path(predictions_path(full=full))
     if not preds_path.exists():
         raise FileNotFoundError(
             f"{preds_path.name} not found. Run: python -m src.splink_model"
@@ -61,7 +64,8 @@ def build_sample(full: bool, n: int, seed: int, band: str = "review") -> pd.Data
             ["record_id_l", "record_id_r", "match_probability"]
         ]
     else:
-        # Older artifact: no decision column, so derive the band from thresholds.
+        # Artefak lama tidak memiliki kolom keputusan, jadi tentukan kategorinya
+        # dari nilai ambang.
         if band == "match":
             selected = preds[preds["match_probability"] >= MATCH_THRESHOLD]
         elif band == "non_match":
@@ -80,7 +84,7 @@ def build_sample(full: bool, n: int, seed: int, band: str = "review") -> pd.Data
             "not by error — see outputs/stress_test.json for why."
         )
 
-    records = pd.read_parquet(PROCESSED_DATA_PATH)
+    records = pd.read_parquet(active_path(PROCESSED_DATA_PATH))
     left = records[["record_id", *REVIEW_FIELDS]].rename(
         columns={**{"record_id": "record_id_l"}, **{c: f"{c}_l" for c in REVIEW_FIELDS}}
     )
@@ -91,7 +95,7 @@ def build_sample(full: bool, n: int, seed: int, band: str = "review") -> pd.Data
     sample = selected.sample(n=min(n, len(selected)), random_state=seed).reset_index(drop=True)
     sample = sample.merge(left, on="record_id_l").merge(right, on="record_id_r")
 
-    # Which fields agree decides whether a reviewer can judge the pair at all.
+    # Kolom yang cocok menentukan apakah peninjau dapat menilai pasangan ini.
     for flag, field in (
         ("agree_email", "email_std"),
         ("agree_phone", "phone_std"),

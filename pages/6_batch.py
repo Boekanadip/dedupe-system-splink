@@ -1,14 +1,14 @@
-"""Batch review page: what the system proposes for a new batch, before it merges.
+"""Halaman peninjauan batch: usulan sistem untuk batch baru sebelum penggabungan.
 
-Incremental --stage computes a proposal for every new record and applies
-nothing. This page is the human gate:
+Incremental --stage menghitung usulan untuk setiap catatan baru dan tidak
+menerapkan apa pun. Halaman ini menjadi gerbang pemeriksaan manusia:
 
-  * see the proposed entity for each record and the model score
-  * uncheck records you dispute (disputed records enter the dataset as their own
-    entity — they are never dropped)
-  * Apply the proposal, or Reject it and drop the batch's staging entirely
-  * the date-format answer used for this batch is shown, and re-stage is offered
-    when the column gave no evidence of its own
+  * lihat entity usulan untuk setiap catatan beserta skor model
+  * batalkan pilihan catatan yang tidak disetujui (catatan tersebut masuk ke
+    dataset sebagai entity tersendiri dan tidak pernah dibuang)
+  * terapkan usulan atau tolak usulan dan hapus seluruh staging batch
+  * jawaban format tanggal untuk batch ini ditampilkan; staging ulang tersedia
+    jika kolom tanggal tidak memberikan bukti yang cukup
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import MASTER_PATH, OUTPUT_DIR, PROJECT_ROOT
 from src.profiling import load_raw
-from src.ui import format_probability, monitoring_sidebar, page_guide, page_header
+from src.ui import format_probability, monitoring_sidebar, page_guide, page_header, workflow_step
 from src.validate_upload import validate_file
 
 st.set_page_config(page_title="Batch - Entity Resolution", page_icon="📦", layout="wide")
@@ -35,6 +35,7 @@ page_header(
 )
 monitoring_sidebar()
 page_guide(__file__)
+workflow_step(__file__)
 
 STAGING_DIR = OUTPUT_DIR / "staging"
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
@@ -127,7 +128,7 @@ if "model_version" in staging.columns:
                 "Reject lalu stage ulang."
             )
 
-# ---- approval per record
+# ---- persetujuan per catatan
 st.subheader("Detail — centang record yang disetujui")
 st.caption(
     "Default: semua record disetujui. Record yang di-uncheck TIDAK digabung ke "
@@ -167,7 +168,7 @@ st.caption(f"{n_approved:,} dari {len(edited):,} record disetujui.")
 st.subheader("Aksi")
 a1, a2 = st.columns(2)
 if a1.button("Simpan persetujuan", type="secondary"):
-    # Tulis kolom approved kembali ke staging file (record_id urut sama).
+    # Tulis kolom approved kembali ke berkas staging.
     fresh = pd.read_parquet(STAGING_DIR / selected)
     approved_map = dict(zip(edited["record_id"], edited["approved"]))
     fresh["approved"] = fresh["record_id"].map(approved_map).fillna(False).astype(bool)

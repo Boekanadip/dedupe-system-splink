@@ -1,21 +1,21 @@
-"""Measure what happens to old entities when a new batch is added.
+"""Ukur perubahan pada entity lama saat batch baru ditambahkan.
 
-Four numbers, and what each one actually answers:
+Empat angka beserta hal yang dijawab masing-masing:
 
-1. cross_batch_match_pairs   - did the model link records across batches at all?
-                               A value of 0 would mean "new rows are a separate
-                               island", i.e. the linkage is not incremental.
-2. new_batch_internal_pairs   - duplicates found inside the new batch only.
-3. wrong_merges               - cross-batch edges the silver labels call
-                               negative (contradicting dob/name evidence). The
-                               measure of damage done to old entities.
-4. old_entity_ids_changed     - records from the old batch whose entity_id moved
-                               between the baseline run and the combined run.
+1. cross_batch_match_pairs   - apakah model menautkan catatan dari batch berbeda?
+                               Nilai 0 berarti baris baru menjadi "pulau" terpisah,
+                               yaitu linkage tidak berjalan secara inkremental.
+2. new_batch_internal_pairs - duplikat yang hanya ditemukan di dalam batch baru.
+3. wrong_merges             - sisi lintas batch yang dinilai negatif oleh label
+                               silver (bertentangan dengan bukti dob/nama).
+                               Ukuran dampak terhadap entity lama.
+4. old_entity_ids_changed   - catatan dari batch lama yang entity_id-nya berubah
+                               antara proses dasar dan proses gabungan.
 
-The 4th one is the real risk: `connected_components` numbers entities from the
-lowest record_id in each component, so appending records *can* renumber the
-old ones. That is a structural property of the clustering step, not a modelling
-result, so it is measured here rather than assumed.
+Angka keempat menunjukkan risiko utamanya: `connected_components` memberi nomor
+entity berdasarkan record_id terendah di setiap komponen, sehingga penambahan
+catatan *dapat* mengubah nomor yang lama. Ini merupakan sifat struktural tahap
+clustering, bukan hasil pemodelan, sehingga diukur dan tidak diasumsikan.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from .config import ENTITY_MAP_PATH, LABELS_DIR, MATCH_THRESHOLD, OUTPUT_DIR, pr
 BASELINE_PATH = OUTPUT_DIR / "entity_map_batch1.parquet"
 REPORT_PATH = OUTPUT_DIR / "batch_linkage_report.json"
 
-NEW_BATCH_FIRST_RECORD_ID = "rec_040001"  # first row of batch_0002.csv
+NEW_BATCH_FIRST_RECORD_ID = "rec_040001"  # baris pertama batch_0002.csv
 
 
 def _load(path, columns=None):
@@ -72,9 +72,7 @@ def main() -> None:
         (comparison["entity_id_baseline"] != comparison["entity_id_combined"]).sum()
     )
 
-    # Does membership drift even when the label keeps its name? A record leaving
-    # one old entity for another old entity would keep both counts stable while
-    # destroying an entity, so compare the sets, not just the ids.
+
     base_membership = baseline.set_index("record_id")["entity_id"].to_dict()
     comb_membership = combined.set_index("record_id")["entity_id"].to_dict()
     drifted = sum(

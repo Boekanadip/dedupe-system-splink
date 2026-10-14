@@ -1,22 +1,24 @@
-"""Measure recovery on deliberately corrupted duplicates.
+"""Ukur pemulihan duplikat yang sengaja dirusak.
 
-WHY
-On the clean file every duplicate group agrees on email, phone, dob, address and
-device id, so match probability is bimodal (1.0 or 1e-300), the REVIEW band is
-empty and device-truth recall is 100%. That is a property of the data, not proof
-that the linker handles corruption. README says so; this module produces the
-number that is missing.
+ALASAN
+Pada berkas bersih, setiap kelompok duplikat memiliki email, telepon, tanggal
+lahir, alamat, dan device id yang sama. Karena itu, probabilitas kecocokan
+terbagi menjadi dua nilai ekstrem (1.0 atau 1e-300), rentang REVIEW kosong, dan
+recall berdasarkan device mencapai 100%. Ini merupakan sifat data, bukan bukti
+bahwa linker mampu menangani kerusakan. README menjelaskan hal tersebut; modul
+ini menghasilkan pengukuran yang belum tersedia.
 
-WHAT IT DOES
-Take pairs that share a device id, corrupt ONE side of each with documented
-errors, re-run the production model unchanged, and report how many corrupted
-copies are still linked to their original partner, plus how many pairs land in
-the review band instead of being confidently wrong.
+FUNGSI
+Ambil pasangan dengan device id sama, rusak SATU sisi pada setiap pasangan
+menggunakan jenis kesalahan yang terdokumentasi, jalankan ulang model produksi
+tanpa perubahan, lalu laporkan jumlah salinan rusak yang masih tertaut ke
+pasangan asalnya serta jumlah pasangan yang masuk rentang review, alih-alih
+memperoleh keputusan keliru dengan keyakinan tinggi.
 
-HONESTY
-The corruption is synthetic and written in memory only — no dataset file is
-created or modified. These numbers describe the model on deliberately damaged
-records, not on a client's dirty data.
+BATASAN
+Kerusakan dibuat secara sintetis dan hanya berada di memori — tidak ada berkas
+dataset yang dibuat atau diubah. Angka ini menggambarkan model pada catatan yang
+sengaja dirusak, bukan pada data kotor milik klien.
 """
 
 from __future__ import annotations
@@ -34,13 +36,13 @@ from .splink_model import train_and_predict
 
 STRESS_PATH = OUTPUT_DIR / "stress_test.json"
 
-# 9xxxxx keeps corrupted rows after every real record_id, so entity numbering of
-# the untouched records cannot shift under them.
+# 9xxxxx menempatkan baris rusak setelah semua record_id nyata, sehingga nomor
+# entity untuk catatan yang tidak diubah tetap sama.
 CORRUPTED_PREFIX = "rec_9"
 
-# Corrupted rows must not be able to merge two genuine duplicates with each
-# other: they keep the original device id, so they can only join the cluster they
-# were copied from.
+# Baris yang dirusak tidak boleh menggabungkan dua duplikat nyata satu sama lain.
+# Device id asli tetap dipakai, sehingga baris hanya dapat bergabung dengan
+# kelompok asal salinannya.
 CORRUPT_FIELDS = [
     "first_name_std",
     "last_name_std",
@@ -57,7 +59,7 @@ def _corrupt_value(rng: random.Random, value: str, kind: str) -> str:
         return text
 
     if kind == "double_letter":
-        # Profiling measured 10,666 records with a repeated adjacent character.
+        # Profiling menemukan 10.666 catatan dengan karakter berulang bersebelahan.
         i = rng.randrange(1, len(text))
         return text[:i] + text[i - 1] + text[i:]
     if kind == "drop_letter":
@@ -71,7 +73,7 @@ def _corrupt_value(rng: random.Random, value: str, kind: str) -> str:
         i = rng.randrange(1, len(text) - 1)
         return text[:i] + text[i + 1] + text[i] + text[i + 2:]
     if kind == "uppercase":
-        # Profiling measured 48,473 records with mixed case.
+        # Profiling menemukan 48.473 catatan dengan campuran huruf besar-kecil.
         return text.upper()
     if kind == "phone_drop_digit":
         if len(text) < 7:
@@ -92,22 +94,22 @@ def _corrupt_value(rng: random.Random, value: str, kind: str) -> str:
             year, month, day = (int(p) for p in text.split("-"))
         except ValueError:
             return text
-        # Only the ambiguous subset can be swapped into a different valid date.
+        # Hanya bagian yang ambigu yang dapat diubah menjadi tanggal valid lain.
         if month > 12 or day > 12:
             return text
         return f"{year:04d}-{day:02d}-{month:02d}"
     return text
 
 
-# Corrupt one side across the identity fields, each with its own probability.
-# Corrupting a single field proved nothing: measured on the clean file, one broken
-# field still leaves city/address/state agreeing exactly and every copy came back
-# at p=1.0 with an empty review band. The informative case is a duplicate that
-# looks different in SEVERAL fields at once, so recovery is reported per number
-# of corrupted fields.
+# Rusak salah satu sisi pada kolom identitas dengan peluang masing-masing.
+# Merusak satu kolom saja tidak memberi informasi: pada berkas bersih, kolom
+# city/address/state tetap cocok persis dan semua salinan kembali dengan p=1,0
+# tanpa pasangan dalam rentang pemeriksaan. Kasus yang informatif adalah
+# duplikat yang berbeda pada BEBERAPA kolom sekaligus, sehingga pemulihan
+# dilaporkan berdasarkan jumlah kolom yang dirusak.
 #
-# dob is not always corrupted: it is the strongest surviving signal, and if it
-# survives every time the test cannot fail.
+# dob tidak selalu dirusak: ini sinyal terkuat yang tersisa. Jika selalu utuh,
+# pengujian tidak mungkin gagal.
 FIELD_OPS: list[tuple[str, list[str], float]] = [
     ("last_name_std", ["double_letter", "drop_letter", "swap_letters"], 1.0),
     ("first_name_std", ["uppercase", "drop_letter"], 1.0),
@@ -119,7 +121,7 @@ FIELD_OPS: list[tuple[str, list[str], float]] = [
 
 
 def corrupt(df: pd.DataFrame, n_pairs: int, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return (frame_with_corrupted_copies, manifest)."""
+    """Kembalikan (kerangka_dengan_salinan_rusak, manifest)."""
     truth = device_truth_pairs(df)
     if truth.empty:
         raise SystemExit("No device-truth pairs: nothing to corrupt.")
@@ -133,8 +135,9 @@ def corrupt(df: pd.DataFrame, n_pairs: int, seed: int) -> tuple[pd.DataFrame, pd
     manifest = []
 
     for i, (left, right) in enumerate(zip(take["record_id_l"], take["record_id_r"]), start=1):
-        # Corrupt the right-hand side only: the left stays clean so recovery means
-        # "still linked to an untouched record", not "linked to another typo".
+        # Rusak sisi kanan saja; sisi kiri tetap bersih. Dengan begitu, pemulihan
+        # berarti "tetap terhubung ke catatan yang tidak diubah", bukan "terhubung
+        # ke salah ketik lain".
         original = right
         row = by_id.loc[original].copy()
         record_id = f"{CORRUPTED_PREFIX}{i:05d}"
@@ -149,8 +152,8 @@ def corrupt(df: pd.DataFrame, n_pairs: int, seed: int) -> tuple[pd.DataFrame, pd
                 row[field] = new_value
                 applied.append(f"{field}:{kind}")
             elif field == "dob_std" and kind == "dob_swap_day_month":
-                # Unambiguous date: not corruptible by that rule, and saying so is
-                # part of the measurement.
+                # Tanggal tidak ambigu: aturan ini tidak dapat merusaknya, dan
+                # kondisi tersebut merupakan bagian dari pengukuran.
                 applied.append("dob_std:swap_skipped_unambiguous")
 
         row["record_id"] = record_id
@@ -185,9 +188,9 @@ def main() -> None:
     print(f"Clean rows: {len(df):,} | corrupted copies: {len(manifest)} | modelling rows: {n:,}")
     print("Corruption is synthetic and in memory only; no dataset file is written.")
 
-    # The corrupted frame gets its own trained model on purpose: the corrupted
-    # rows are extra observations, and reusing the production model would
-    # measure how a model trained without corruption copes with it.
+    # Kerangka data yang dirusak sengaja mendapat model terlatih sendiri: baris
+    # rusak merupakan observasi tambahan. Memakai ulang model produksi hanya
+    # mengukur kemampuan model yang dilatih tanpa kerusakan dalam menghadapinya.
     pred_df, _ = train_and_predict(frame)
 
     key = ["record_id_l", "record_id_r"]
@@ -199,7 +202,8 @@ def main() -> None:
     wanted["record_id_r"] = hi
 
     joined = wanted.merge(pred_df[[*key, "match_probability", "match_weight"]], on=key, how="left")
-    # A pair the blocking rules never produced is not a low score, it is no score.
+    # Pasangan yang tidak pernah dihasilkan oleh aturan blocking bukan berskor
+    # rendah; pasangan itu sama sekali tidak memiliki skor.
     joined["scored"] = joined["match_probability"].notna()
     joined["recovered"] = joined["match_probability"] >= args.threshold
 

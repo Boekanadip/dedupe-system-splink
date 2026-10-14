@@ -1,46 +1,49 @@
-"""Generate a synthetic CRM batch whose correct answers are known in advance.
+"""Buat batch CRM sintetis dengan jawaban benar yang diketahui sejak awal.
 
-Why this exists
-    The 51,555-row development file cannot answer "did it catch the typo, or did
-    it wrongly merge two people who share an email", because no file records
-    which rows are supposed to be the same person. `device_id(s)` is 1:1 with
-    customer_id there, so the existing evaluation can only prove the pipeline
-    reproduces the source grouping — never that it is right.
+Alasan pembuatan
+    Berkas pengembangan berisi 51.555 baris tidak dapat menjawab apakah sistem
+    menangani salah ketik atau keliru menggabungkan dua orang yang berbagi email,
+    karena tidak ada berkas yang mencatat baris mana yang seharusnya mewakili
+    orang yang sama. Di berkas itu, `device_id(s)` berpasangan satu-ke-satu
+    dengan customer_id, sehingga evaluasi yang ada hanya membuktikan bahwa
+    pipeline meniru pengelompokan sumber, bukan bahwa pengelompokan itu benar.
 
-    This file is the answer key. Every category is planted on purpose, so the
-    run can be scored instead of eyeballed.
+    Berkas ini berisi jawaban acuan. Setiap kategori sengaja dibuat agar hasil
+    proses dapat dihitung, bukan hanya diperiksa sekilas.
 
-Composition (200 rows)
-    150  unique, clean customers                  baseline
-     10  5%  rows carried over from the real file   5 pairs: original + typo copy
-     10  5%  rows with missing values              incl. 3 with no contact at all
-     20 10%  duplicates
-           4  2 pairs  identical in every field        must merge
-           6  3 pairs  one field with a keyboard typo  must merge
-           4  2 pairs  SAME email, two different people must NOT merge
-           6  3 pairs  same person, contact or name changed
-                                                      must merge, and flag a conflict
-     10  5%  deliberately ambiguous pairs
-           same name + dob + city, every contact field different.
-           Two different people: must NOT merge, and should be reviewable.
+Komposisi (200 baris)
+    150     pelanggan unik tanpa kerusakan                 data dasar
+     10  5% baris dari berkas asli                         5 pasang: asli + salinan salah ketik
+     10  5% baris dengan nilai kosong                      termasuk 3 tanpa kontak
+     20 10% duplikat
+           4  2 pasang identik pada semua kolom              harus digabung
+           6  3 pasang dengan salah ketik papan ketik        harus digabung
+           4  2 pasang dengan email SAMA, orang berbeda      TIDAK boleh digabung
+           6  3 pasang orang sama, kontak atau nama berubah
+                                                             harus digabung dan konfliknya ditandai
+     10  5% pasang yang sengaja dibuat ambigu
+           nama + dob + city sama, semua kolom kontak berbeda.
+           Orangnya berbeda: TIDAK boleh digabung dan perlu dapat ditinjau.
 
-Ground truth
-    `device_id(s)` carries the answer key: the same device id means the same real
-    person. Every "these are different people" category gets its OWN device id,
-    so a merge between them is a measured false merge rather than an opinion.
+Label acuan
+    `device_id(s)` menyimpan kunci jawaban: device id yang sama berarti orang
+    nyata yang sama. Setiap kategori "orang berbeda" mendapat device id
+    tersendiri, sehingga penggabungan mereka terukur sebagai salah gabung,
+    bukan sekadar penilaian subjektif.
 
-    Exactly two rows may share a device id per planted duplicate, so the file is
-    self-checking: if more pairs share a device than were planted, the generator
-    is broken and the run must not be scored.
+    Setiap duplikat yang dibuat hanya boleh memiliki dua baris dengan device id
+    yang sama. Dengan demikian berkas dapat memeriksa dirinya sendiri: jika
+    jumlah pasangan dengan device yang sama melebihi duplikat yang ditanam,
+    generator bermasalah dan hasil proses tidak boleh dinilai.
 
-Writes
-    data/raw/synthetic_200.csv         the batch the pipeline reads
-    data/raw/synthetic_200_truth.csv   category + device per row, for scoring
+Berkas keluaran
+    data/raw/synthetic_200.csv         batch yang dibaca pipeline
+    data/raw/synthetic_200_truth.csv   kategori + device per baris untuk penilaian
 
-Both land in data/raw/ WITHOUT being registered, so the real dataset in
-data/processed/ is untouched until someone runs an upload on purpose.
+Keduanya disimpan di data/raw/ TANPA didaftarkan, sehingga dataset asli di
+data/processed/ tidak berubah sampai seseorang sengaja menjalankan unggahan.
 
-Run:  python notebooks/make_synthetic_batch.py
+Jalankan:  python notebooks/make_synthetic_batch.py
 """
 
 from __future__ import annotations
@@ -53,26 +56,28 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEST = PROJECT_ROOT / "data" / "raw" / "synthetic_200.csv"
 TRUTH = PROJECT_ROOT / "data" / "raw" / "synthetic_200_truth.csv"
-# Optional: rows copied verbatim out of the real development file. Missing file
-# simply drops that category instead of failing the run.
+# Opsional: baris yang disalin persis dari berkas pengembangan asli. Jika berkas
+# tidak ditemukan, kategori ini dilewati dan proses tetap berjalan.
 REAL_RAW = PROJECT_ROOT / "data" / "raw" / "crm_50000_customers_dirty_v3.csv"
 
 SEED = 20260905
 UNIQUE = 150
-OLD_DATA_PAIRS = 5          # x2 rows = 10  (5%)
-MISSING_ROWS = 10            #      10      (5%)
-DUP_EXACT_PAIRS = 2          # x2 rows = 4
-DUP_TYPO_PAIRS = 3           # x2 rows = 6
-EMAIL_SHARE_PAIRS = 2        # x2 rows = 4
-CONFLICT_PAIRS = 2           # x2 rows = 4   (contact changed)
-CONFLICT_MAIDEN = 1          # x2 rows = 2   (first name changed)
-AMBIGUOUS_PAIRS = 5          # x2 rows = 10   (5%)
+# Tiap pasangan terdiri atas dua baris.
+OLD_DATA_PAIRS = 5
+MISSING_ROWS = 10
+DUP_EXACT_PAIRS = 2
+DUP_TYPO_PAIRS = 3
+EMAIL_SHARE_PAIRS = 2
+CONFLICT_PAIRS = 2
+CONFLICT_MAIDEN = 1
+AMBIGUOUS_PAIRS = 5
 TOTAL = UNIQUE + OLD_DATA_PAIRS * 2 + MISSING_ROWS + (
     (DUP_EXACT_PAIRS + DUP_TYPO_PAIRS + EMAIL_SHARE_PAIRS + CONFLICT_PAIRS + CONFLICT_MAIDEN) * 2
 ) + AMBIGUOUS_PAIRS * 2
 
-# Names are deliberately uncommon, so an accidental block collision means a real
-# near-duplicate and not two common surnames sharing three letters.
+# Nama sengaja dipilih agar tidak umum. Dengan begitu, tabrakan blocking yang
+# tidak disengaja menunjukkan kemiripan nyata, bukan dua nama keluarga umum
+# dengan tiga huruf awal yang sama.
 FIRST_NAMES = [
     "Balthazar", "Clementine", "Dieter", "Esperanza", "Fyodor", "Genoveva",
     "Halvard", "Isolde", "Joachim", "Katarzyna", "Leopoldo", "Marguerite",
@@ -97,14 +102,17 @@ STREETS = ["Kerkstraat", "Rue Lafayette", "Via Roma", "High Street", "Nørregade
 EMAIL_DOMAINS = ["protonmail.com", "yandex.com", "gmx.net", "zoho.com"]
 SOURCES = ["branch_form", "call_center", "mobile_app", "partner_api"]
 
-# Digit for the letter on the same key with Shift released. This is the failure
-# mode the prefix blocking keys exist to survive.
+# Angka yang tercetak pada tombol yang sama saat Shift tidak ditekan. Kunci
+# blocking prefiks dirancang agar tetap menemukan catatan dengan salah ketik ini.
 KEYBOARD_TYPO = {"o": "5", "i": "1", "s": "5", "n": "8", "l": "1", "e": "3", "a": "4"}
 
 
 def typo_word(text: str, rng: random.Random) -> str:
-    """Replace one letter with the digit typed on its key. Falls back to a
-    suffix when the word contains none of them, so a typo is always applied."""
+    """Ganti satu huruf dengan angka pada tombol yang sama.
+
+    Jika tidak ada huruf yang cocok, tambahkan akhiran agar selalu ada salah
+    ketik yang diterapkan.
+    """
     spots = [i for i, ch in enumerate(text) if ch.lower() in KEYBOARD_TYPO]
     if not spots:
         return text + rng.choice("qxzv")
@@ -134,8 +142,9 @@ def build() -> pd.DataFrame:
                 return candidate
         raise RuntimeError("phone space exhausted")
 
-    # One counter, advanced exactly once per row. Deriving ids from len(rows)
-    # collides whenever two rows are built before either is appended.
+    # Satu penghitung dinaikkan tepat sekali per baris. Membuat ID dari len(rows)
+    # akan menghasilkan tabrakan jika dua baris dibuat sebelum salah satunya
+    # ditambahkan.
     serial = {"n": 0}
 
     def next_id() -> int:
@@ -178,12 +187,12 @@ def build() -> pd.DataFrame:
             mutate(row)
         return row
 
-    # ---- 150 unique, clean customers
+    # ---- 150 pelanggan unik tanpa kerusakan
     for _ in range(UNIQUE):
         rows.append(base_row(fresh_device("uni"), "unique"))
 
-    # ---- 10 rows (5%) carried over from the real file: 5 pairs, original + typo.
-    # One real record per pair, so the device id is genuinely shared.
+    # ---- 10 baris (5%) dari berkas asli: 5 pasang, asli + salah ketik.
+    # Satu catatan asli per pasangan; device id memang sama.
     planted_old = 0
     if REAL_RAW.exists():
         real = pd.read_csv(REAL_RAW, sep=";", low_memory=False)
@@ -200,10 +209,11 @@ def build() -> pd.DataFrame:
                                                       typo_word(str(r["first_name"]), rng))))
             planted_old += 1
     if not planted_old:
-        print(f"NOTE: {REAL_RAW.name} not found, skipping the carried-over category.")
+        print(f"CATATAN: {REAL_RAW.name} tidak ditemukan; kategori dari berkas asli dilewati.")
 
-    # ---- 10 rows (5%) with missing values.
-    # 3 lose BOTH email and phone: no contact key can ever reach them.
+    # ---- 10 baris (5%) dengan nilai kosong.
+    # Tiga baris kehilangan email DAN telepon: tidak ada kunci kontak yang dapat
+    # menjadikannya pasangan kandidat.
     missing_specs = [
         ("missing-email", ("email",)),
         ("missing-email", ("email",)),
@@ -222,7 +232,7 @@ def build() -> pd.DataFrame:
             row[column] = None
         rows.append(row)
 
-    # ---- 20 rows (10%) duplicates. Each pair shares ONE device id.
+    # ---- 20 baris (10%) duplikat. Setiap pasangan berbagi SATU device id.
     def mut_exact(row: dict) -> None:
         pass
 
@@ -248,8 +258,8 @@ def build() -> pd.DataFrame:
         rows.append(base_row(device, f"{note}-a"))
         rows.append(clone(rows[-1], device, f"{note}-b", mutate))
 
-    # ---- 4 rows: SAME email, two DIFFERENT people, two device ids.
-    # Merging these would be a real false merge, not a judgement call.
+    # ---- 4 baris: email SAMA, orang BERBEDA, device id berbeda.
+    # Menggabungkannya adalah salah gabung yang terukur, bukan perkara pendapat.
     for _ in range(EMAIL_SHARE_PAIRS):
         shared_email = new_email("household", "shared")
         person_a = base_row(fresh_device("shr"), "email-shared-a")
@@ -258,8 +268,8 @@ def build() -> pd.DataFrame:
         rows.append(person_a)
         rows.append(person_b)
 
-    # ---- 10 rows (5%) deliberately ambiguous: same name + dob + city, every
-    # contact field different. Two device ids: they must not merge.
+    # ---- 10 baris (5%) sengaja dibuat ambigu: nama + dob + city sama, tetapi
+    # semua kolom kontak berbeda. Device id berbeda: keduanya tidak boleh digabung.
     for _ in range(AMBIGUOUS_PAIRS):
         person_a = base_row(fresh_device("amb"), "ambiguous-a")
         person_b = base_row(fresh_device("amb"), "ambiguous-b")

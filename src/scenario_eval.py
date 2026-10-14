@@ -1,17 +1,19 @@
-"""Scenario-based evaluation: the cases a reviewer/mentor actually asks about.
+"""Evaluasi berbasis skenario: kasus yang biasanya ditanyakan peninjau atau pembimbing.
 
-The four-layer report (src/evaluate) answers "is the pipeline correct overall".
-It does not answer case questions like "what does the system do when the email
-is identical but the name differs?". This module answers those with measured
-decision counts from the full predictions, plus the two external references that
-already exist (blocking coverage of known duplicates, stress-test typo recovery).
+Laporan empat lapisan (src/evaluate) menjawab "apakah pipeline benar secara
+keseluruhan". Laporan tersebut tidak menjawab pertanyaan kasus seperti "apa
+yang dilakukan sistem saat email sama tetapi nama berbeda?". Modul ini
+menjawabnya dengan menghitung keputusan secara terukur dari seluruh prediksi,
+serta menggunakan dua acuan eksternal yang sudah tersedia (cakupan blocking
+atas duplikat yang diketahui dan pemulihan salah ketik pada uji tekanan).
 
-Every scenario reports decision counts (MATCH/REVIEW/NON_MATCH) and states what
-it does NOT prove. Numbers are counts, not accuracy claims: without a truth
-label per pair, a decision distribution shows BEHAVIOUR, not correctness.
+Setiap skenario melaporkan jumlah keputusan (MATCH/REVIEW/NON_MATCH) dan
+menjelaskan hal yang TIDAK dibuktikannya. Angka tersebut adalah hitungan, bukan
+klaim akurasi: tanpa label acuan untuk setiap pasangan, distribusi keputusan
+menunjukkan PERILAKU, bukan kebenaran.
 
-Run: python -m src.scenario_eval
-Output: outputs/scenario_evaluation.json (+ printed table)
+Jalankan: python -m src.scenario_eval
+Keluaran: outputs/scenario_evaluation.json (serta tabel yang dicetak)
 """
 from __future__ import annotations
 
@@ -44,13 +46,13 @@ def build() -> dict:
     agree = agree_fields(records, preds[["record_id_l", "record_id_r"]])
     preds = preds.merge(agree, on=["record_id_l", "record_id_r"], how="left")
 
-    # Splink's predict() already carries the side-by-side values (dob_std_l/r).
+    # predict() milik Splink sudah menyertakan nilai berdampingan (dob_std_l/r).
     dob_both = preds["dob_std_l"].notna() & preds["dob_std_r"].notna()
 
     scenarios: dict[str, dict] = {}
 
-    # S1 — identical email, different name: shared inbox, nicknames, data entry
-    # by a spouse/assistant. The risky direction is auto-MATCH.
+    # S1 — email sama, nama berbeda: kotak masuk bersama, nama panggilan, atau
+    # data yang dimasukkan pasangan/asisten. Risiko utamanya adalah auto-MATCH.
     s1 = preds[preds["agree_email"] & ~preds["agree_name"]]
     scenarios["email_sama_nama_beda"] = {
         "question": "email sama tapi nama beda — apakah dianggap match?",
@@ -58,8 +60,8 @@ def build() -> dict:
         "does_not_prove": "whether each decision is correct; needs human labels (review pack stratum)",
     }
 
-    # S2 — records with no email AND no phone can never be blocked on those two
-    # keys: a structural recall ceiling, not a model decision.
+    # S2 — catatan tanpa email DAN telepon tidak dapat diblokir dengan kedua
+    # kunci tersebut. Ini batas recall struktural, bukan keputusan model.
     no_contact = records["email_std"].isna() & records["phone_std"].isna()
     ids_no_contact = set(records.loc[no_contact, "record_id"])
     entities = pd.read_parquet("outputs/entity_map.parquet")
@@ -74,8 +76,8 @@ def build() -> dict:
         "does_not_prove": "that they ARE unique — blocking never generates them as candidates",
     }
 
-    # S3 — same full name but a real dob conflict: the classic "different people"
-    # case. Auto-MATCH here would be a false merge signal.
+    # S3 — nama lengkap sama, tetapi tanggal lahir bertentangan: contoh umum
+    # "orang berbeda". Auto-MATCH di sini menandakan salah gabung.
     s3 = preds[preds["agree_name"] & dob_both & ~preds["agree_dob"]]
     scenarios["nama_sama_tanggal_lahir_beda"] = {
         "question": "nama sama tapi dob beda — sistem tetap merge?",
@@ -83,8 +85,8 @@ def build() -> dict:
         "does_not_prove": "correctness per pair; a shared dob alone is also a collision risk (see evaluation_report blocking layer)",
     }
 
-    # S4 — known duplicates (device answer key) that never became candidates:
-    # the hard recall ceiling of blocking.
+    # S4 — duplikat yang diketahui dari kunci jawaban device tetapi tidak pernah
+    # menjadi kandidat: batas maksimum recall akibat blocking.
     truth = device_truth_pairs(records)
     if truth.empty:
         scenarios["duplikat_lolos_blocking"] = {
@@ -101,7 +103,7 @@ def build() -> dict:
             "does_not_prove": "fuzzy duplicates beyond the device answer key",
         }
 
-    # S5 — typo recovery is measured by the stress test, not re-derived here.
+    # S5 — pemulihan salah ketik diukur oleh uji tekanan, bukan dihitung ulang di sini.
     stress_path = OUTPUT_DIR / "stress_test.json"
     if stress_path.exists():
         stress = json.loads(stress_path.read_text(encoding="utf-8"))
@@ -117,7 +119,7 @@ def build() -> dict:
             "does_not_prove": "n/a",
         }
 
-    # S6 — all four strong identifiers agree: sanity direction of the policy.
+    # S6 — keempat pengenal kuat cocok: pemeriksaan kewajaran arah kebijakan.
     s6 = preds[preds["agree_name"] & preds["agree_email"] & preds["agree_dob"] & preds["agree_phone"]]
     scenarios["nama_email_dob_telepon_sama"] = {
         "question": "4 identitas kuat sama — seharusnya MATCH?",
@@ -138,7 +140,7 @@ def build() -> dict:
 
 
 def main() -> None:
-    # Windows consoles default to cp1252, which mangles UTF-8 question strings.
+    # Konsol Windows memakai cp1252 secara bawaan, yang merusak teks pertanyaan UTF-8.
     import sys
 
     if hasattr(sys.stdout, "reconfigure"):

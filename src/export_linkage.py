@@ -1,16 +1,18 @@
-"""Export the evidence behind a decision band, one row per pair.
+"""Ekspor bukti di balik rentang keputusan, satu baris untuk setiap pasangan.
 
-Explainability (PRD, Non-Functional Requirements): "The system should retain
-enough evidence to explain why a pair/entity relationship received its score and
-decision." The predictions parquet keeps that, but it is a binary blob nobody
-can read in a review meeting. This writes the same evidence as a spreadsheet.
+Kemudahan penjelasan (PRD, Persyaratan Nonfungsional): "Sistem harus menyimpan
+bukti yang cukup untuk menjelaskan alasan pasangan/entity memperoleh skor dan
+keputusan tertentu." Parquet prediksi menyimpan bukti tersebut, tetapi isinya
+berupa data biner yang tidak dapat dibaca saat rapat peninjauan. Modul ini
+mengekspor bukti yang sama sebagai lembar kerja.
 
-`device_match` is per-row on purpose. "0 false merges" is a claim; putting the
-check in the file makes it filterable instead of something a report asserts.
+`device_match` sengaja dicatat per baris. "Tidak ada salah gabung" adalah
+sebuah klaim; menyertakan pemeriksaannya dalam berkas memungkinkan data
+disaring, bukan sekadar dinyatakan dalam laporan.
 
-Splink 4.0.17 names the comparison levels `gamma_gamma_<column>` — the prefix is
-applied twice. Renamed to `cmp_<column>` here so the exported file reads as
-intended rather than looking like a bug.
+Splink 4.0.17 memberi nama tingkat pembanding `gamma_gamma_<column>` — awalan
+diterapkan dua kali. Nama tersebut diubah menjadi `cmp_<column>` agar kolom
+hasil ekspor mudah dibaca dan tidak tampak seperti kesalahan.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ DEFAULT_OUT = OUTPUT_DIR / "linkage_matches.csv"
 BANDS = ("match", "review", "non_match", "all")
 DECISION_OF = {"match": "MATCH", "review": "REVIEW", "non_match": "NON_MATCH"}
 
-# Both sides, so a reader can see the actual values without opening another file.
+# Sertakan kedua sisi agar pembaca dapat melihat nilai sebenarnya tanpa membuka berkas lain.
 PAIR_FIELDS = [
     "first_name_std",
     "last_name_std",
@@ -42,7 +44,7 @@ PAIR_FIELDS = [
 
 
 def device_sets() -> dict[str, frozenset]:
-    """record_id -> its device ids, for the per-row truth check."""
+    """Pemetaan record_id ke device id untuk pemeriksaan acuan per baris."""
     records = pd.read_parquet(
         PROCESSED_DATA_PATH, columns=["record_id", "device_ids_std"]
     )
@@ -101,8 +103,8 @@ def build(band: str = "match") -> pd.DataFrame:
         ]
         frame[f"customer_id_{side}"] = ids.map(records.set_index("record_id")["customer_id"])
 
-    # None, not False: a record with no device id cannot be checked, and calling
-    # that "no match" would read as evidence of a false merge.
+    # Gunakan None, bukan False: catatan tanpa device id tidak dapat diperiksa.
+    # Menyebutnya "tidak cocok" akan disalahartikan sebagai bukti salah gabung.
     left_devices = frame["record_id_l"].map(devices)
     right_devices = frame["record_id_r"].map(devices)
     frame["device_match"] = [

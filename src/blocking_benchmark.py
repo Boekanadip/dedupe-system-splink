@@ -6,33 +6,32 @@ import time
 import duckdb
 import pandas as pd
 
-from .config import BENCHMARK_RULES, OUTPUT_DIR, PROCESSED_DATA_PATH, SMOKE_SAMPLE_SIZE
+from .config import OUTPUT_DIR, PROCESSED_DATA_PATH, SMOKE_SAMPLE_SIZE, active_path, load_benchmark_rules
 from .eval_truth import device_truth_pairs, pairs_sql
 from .labels import load_labels
 
 OUTPUT_PATH = OUTPUT_DIR / "blocking_benchmark.csv"
 
-# Starter rules only. Equi-join keys: fuzzy similarity belongs after candidate
-# generation (DESIGN.md), so it is never used here for blocking.
-RULES = BENCHMARK_RULES
+
+RULES = load_benchmark_rules()
 
 
 def load_data(full: bool = False) -> pd.DataFrame:
-    if not PROCESSED_DATA_PATH.exists():
+    if not active_path(PROCESSED_DATA_PATH).exists():
         raise FileNotFoundError(
             "Standardized parquet belum ada. Jalankan: python -m src.standardize"
         )
-    df = pd.read_parquet(PROCESSED_DATA_PATH)
+    df = pd.read_parquet(active_path(PROCESSED_DATA_PATH))
     if not full and len(df) > SMOKE_SAMPLE_SIZE:
         df = df.head(SMOKE_SAMPLE_SIZE).copy()
     return df
 
 
 def block_stats(con: duckdb.DuckDBPyConnection, cols: list[str]) -> dict:
-    """Skew: how big is the largest block, and which value created it.
+    """Ukur kemencengan blok: ukuran blok terbesar dan nilai penyebabnya.
 
-    Null keys are excluded because an equi-join never matches them, so they
-    would not generate candidates either.
+    Kunci NULL dikecualikan karena equi-join tidak pernah mencocokkannya,
+    sehingga kunci tersebut juga tidak akan menghasilkan kandidat.
     """
     keys = ", ".join(f'"{c}"' for c in cols)
     not_null = " AND ".join(f'"{c}" IS NOT NULL' for c in cols)
@@ -64,8 +63,7 @@ def coverage(
 ) -> tuple[int | None, float | None]:
     if positives.empty:
         return None, None
-    # Labels are built on the full dataset but this run may benchmark a sample.
-    # Dividing by positives outside the sample would report fake low coverage.
+
     present = set(frame["record_id"])
     in_scope = positives[
         positives["record_id_l"].isin(present) & positives["record_id_r"].isin(present)
@@ -103,7 +101,7 @@ def main() -> None:
     if labels is None:
         print("Labels: none found -> coverage TIDAK dihitung")
     else:
-        # Never let silver read as gold: gold is measured, silver is not reviewed.
+
         tag = "GOLD" if label_source == "gold" else "SILVER (belum direview)"
         print(f"Labels: {label_source} [{tag}] {len(labels):,} pasang, {len(positives):,} positif")
         present = set(df["record_id"])
@@ -118,11 +116,7 @@ def main() -> None:
     con = duckdb.connect()
     con.register("src", df)
 
-    # Device-truth coverage is the non-tautological counterpart of `coverage_pct`.
-    # `coverage_pct` divides by silver positives, which are defined on phone+dob —
-    # the same fields phone_exact and dob_exact block on, so 100% there is
-    # guaranteed arithmetic. No rule blocks on device_id, so this column carries
-    # real information about what each rule actually reaches.
+
     con.register("truth", device_truth_pairs(df))
     truth_total = con.execute("SELECT COUNT(*) FROM truth").fetchone()[0]
 
@@ -215,11 +209,7 @@ def main() -> None:
     )
 
     out = pd.DataFrame(rows)
-    # Record which labels coverage was measured against, so the CSV cannot be
-    # re-read later as if it came from a reviewed gold set.
     out["label_source"] = label_source
-    # Both denominators in one file, so a reader cannot mistake the tautological
-    # coverage_pct (silver positives == blocking key fields) for a real recall.
     out["truth_source"] = "device_ids_std (1:1 with customer_id on this dataset — upper bound)"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out.to_csv(OUTPUT_PATH, index=False)

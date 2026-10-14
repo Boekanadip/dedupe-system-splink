@@ -1,20 +1,4 @@
-"""Streamlit upload page: validate a new CSV, register it as a batch, re-run.
-
-Flow, in numbered sections on the page:
-
-    1 pilih file -> 2 validasi -> 3 jawab tanggal -> 4 daftarkan + jalankan -> 5 hasil
-
-Rules this page keeps (PRD §8):
-- Raw bytes reach data/raw/ ONLY when the register button is clicked. An
-  abandoned or re-selected upload leaves nothing on disk.
-- A payload whose sha256 is already registered skips registration and only
-  re-runs the pipeline, so retrying after a failed run cannot double-count.
-- The day/month question is asked when the column gives no evidence; it is
-  never guessed, because dob_exact and city_dob depend on the answer.
-- The pipeline reuses the last trained model by default (MASTER_CONTEXT §15:
-  new data must not silently retrain). Retrain is an explicit checkbox.
-
-Run:
+"""Run:
     .venv/Scripts/streamlit run app.py --server.address 0.0.0.0
 """
 

@@ -1,12 +1,13 @@
-"""Build a demo upload out of rows that already exist in data/raw/.
+"""Buat berkas unggahan demo dari baris yang sudah ada di data/raw/.
 
-Why generated this way: a brand new CSV has no known partner, so "did the
-pipeline link it correctly" cannot be answered. Every generated row is a copy
-of an existing record (same customer_id, same device id), so the correct
-outcome is known in advance and can be checked instead of guessed.
+Alasan dibuat seperti ini: CSV yang benar-benar baru tidak memiliki pasangan
+yang diketahui, sehingga kita tidak dapat menjawab apakah pipeline berhasil
+mencocokkannya. Setiap baris yang dihasilkan merupakan salinan catatan yang
+sudah ada (customer_id dan device id sama), sehingga hasil yang benar sudah
+diketahui dan dapat diperiksa, bukan sekadar diperkirakan.
 
-100 of the 1,000 rows get documented character-level typos, so fuzzy linking
-is exercised rather than assumed.
+Seratus dari seribu baris diberi salah ketik pada tingkat karakter yang
+tercatat, sehingga pencocokan kabur benar-benar diuji, bukan hanya diasumsikan.
 
     python notebooks/make_demo_batch.py
 """
@@ -29,7 +30,7 @@ TYPO_COLUMNS = ["first_name", "last_name", "email"]
 
 
 def typo(value, rng: random.Random) -> str | None:
-    """One character-level corruption: swap, drop, or duplicate a letter."""
+    """Buat satu kerusakan karakter: tukar, hapus, atau gandakan satu huruf."""
     if not isinstance(value, str) or len(value) < 4:
         return None
     kind = rng.choice(("swap", "drop", "double"))
@@ -44,7 +45,8 @@ def typo(value, rng: random.Random) -> str | None:
 def main() -> None:
     rng = random.Random(SEED)
     frame = pd.read_csv(SOURCE, sep=";", low_memory=False)
-    # One record per customer_id, or the demo itself carries a known duplicate.
+    # Ambil satu catatan per customer_id agar demo tidak membawa duplikat yang
+    # sudah diketahui sejak awal.
     owners = frame.drop_duplicates(subset=["customer_id"])
     sample = owners.sample(n=ROWS, random_state=SEED).reset_index(drop=True)
 

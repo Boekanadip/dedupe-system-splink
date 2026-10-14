@@ -6,14 +6,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import OUTPUT_DIR, predictions_path, read_meta
+from .config import OUTPUT_DIR, predictions_path, read_meta, active_path
 from .labels import load_labels
 
 THRESHOLDS = [0.5, 0.9, 0.95, 0.99, 0.995, 0.999, 0.9995, 0.9999]
 OUTPUT_DIR = Path(OUTPUT_DIR)
-# Named by label source so a gold evaluation cannot overwrite a silver one and
-# look like the same measurement. Reading threshold_evaluation_silver.json for a
-# gold run is how a silver artifact gets quoted as a gold result.
+# Nama keluaran dibedakan berdasarkan sumber label agar evaluasi label acuan
+# tidak menimpa hasil silver dan tampak sebagai pengukuran yang sama. Membaca
+# threshold_evaluation_silver.json untuk proses label acuan dapat membuat hasil
+# silver dikutip sebagai hasil label acuan.
 OUTPUT_BY_SOURCE = {
     "gold": OUTPUT_DIR / "threshold_evaluation_gold.json",
     "silver": OUTPUT_DIR / "threshold_evaluation_silver.json",
@@ -55,7 +56,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    preds_path = predictions_path(full=args.full)
+    preds_path = active_path(predictions_path(full=args.full))
     if not preds_path.exists():
         raise FileNotFoundError(
             f"{preds_path.name} not found. Run: python -m src.splink_model"
@@ -64,8 +65,8 @@ def main() -> None:
     preds = pd.read_parquet(preds_path)
 
     if not args.full:
-        # Same labels the evaluation will use, otherwise the coverage check
-        # below could pass on a set that is never scored.
+        # Gunakan label yang sama dengan evaluasi; jika tidak, pemeriksaan
+        # cakupan di bawah dapat lolos pada set yang tidak pernah diberi skor.
         labels, _ = load_labels(args.source)
         if labels is not None:
             modelled = set(preds["record_id_l"]) | set(preds["record_id_r"])
@@ -79,8 +80,9 @@ def main() -> None:
                     "subset while ignoring the rest. Use --full."
                 )
 
-    # "auto" keeps the old gold-first preference. Pinning a source is what makes
-    # --source silver reachable now that gold_labels.csv exists.
+    # "auto" mempertahankan prioritas lama terhadap label acuan. Menetapkan
+    # sumber secara eksplisit membuat --source silver tetap dapat digunakan
+    # setelah gold_labels.csv tersedia.
     labels, src = load_labels(args.source)
     if labels is None:
         raise SystemExit(
@@ -102,8 +104,8 @@ def main() -> None:
     else:
         print("GOLD labels: reviewed by a human.")
         if negatives == 0 or positives == 0:
-            # Without both classes present, one of the two metrics is 1.0 by
-            # construction and cannot be quoted as an achievement.
+            # Jika kedua kelas tidak tersedia, salah satu metrik akan bernilai
+            # 1,0 secara otomatis dan tidak dapat dikutip sebagai pencapaian.
             print(
                 f"  CAVEAT: {positives:,} positives / {negatives:,} negatives. A set with a "
                 "single class cannot measure both precision and recall: one of them is 1.0 "

@@ -1,9 +1,10 @@
-"""Decision history per kandidat: feedback + overrides + queue labels + entity corrections.
+"""Riwayat keputusan per kandidat: umpan balik, penimpaan, label antrean, dan koreksi entity.
 
-Cari pasangan atau record → tampilkan semua keputusan/model yang pernah
-menyentuhnya: feedback (human), overrides (apply_gold), queue (review),
-entity_correction (split/merge). Sebagai 'riwayat keputusan per kandidat'
-(Rank 3) dan 'entity lifecycle visibility' (Rank 4).
+Cari pasangan atau catatan untuk menampilkan semua keputusan/model yang pernah
+berkaitan dengannya: umpan balik dari manusia, penimpaan oleh apply_gold,
+antrean pemeriksaan, dan koreksi entity (pemisahan/penggabungan). Halaman ini
+menyediakan riwayat keputusan per kandidat (Peringkat 3) dan keterlihatan
+siklus hidup entity (Peringkat 4).
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR, predictions_path
 from src.labels import QUEUE_PATH, GOLD_PATH
-from src.ui import monitoring_sidebar, page_guide, page_header
+from src.ui import monitoring_sidebar, page_guide, page_header, workflow_step
 
 st.set_page_config(page_title="Riwayat - Entity Resolution", page_icon="📜", layout="wide")
 page_header(
@@ -28,14 +29,15 @@ page_header(
 )
 monitoring_sidebar()
 page_guide(__file__)
+workflow_step(__file__)
 
-# ---- search
+# ---- pencarian
 c1, c2 = st.columns(2)
 search_rid = c1.text_input("Kode record (misal rec_000123)", "")
 search_pair = c2.text_input("Kode pasangan (misal rec_000123__rec_000456)", "")
 
 def load_all():
-    """Load all audit sources once."""
+    """Muat semua sumber audit satu kali."""
     data = {}
     fb = LABELS_DIR / "feedback.csv"
     if fb.exists():
@@ -79,7 +81,7 @@ d = load_all()
 def pair_id(l, r):
     return f"{min(l, r)}__{max(l, r)}"
 
-# ---- per-pair timeline
+# ---- linimasa per pasangan
 if search_pair:
     pid = search_pair.strip()
     st.subheader(f"Jejak waktu untuk pasangan {pid}")
@@ -92,19 +94,19 @@ if search_pair:
                     st.write(f"**{name}**")
                     st.dataframe(hit.dropna(axis=1, how="all"), width="stretch", hide_index=True)
 
-# ---- per-record timeline (record appears in any pair)
+# ---- linimasa per catatan (catatan muncul dalam pasangan mana pun)
 if search_rid:
     rid = search_rid.strip()
     st.subheader(f"Jejak waktu untuk record {rid}")
     all_pairs = []
-    # feedback
+    # Umpan balik
     if "feedback" in d:
         fb = d["feedback"]
         hit = fb[(fb.record_id_l == rid) | (fb.record_id_r == rid)].copy()
         if not hit.empty:
             hit["source"] = "feedback"
             all_pairs.append(hit)
-    # overrides
+    # Penimpaan
     if "overrides" in d:
         ov = d["overrides"]
         hit = ov[
@@ -113,24 +115,24 @@ if search_rid:
         if not hit.empty:
             hit["source"] = "overrides"
             all_pairs.append(hit)
-    # queue
+    # Antrean
     if "queue" in d:
         q = d["queue"]
         hit = q[(q.record_id_l == rid) | (q.record_id_r == rid)].copy()
         if not hit.empty:
             hit["source"] = "queue"
             all_pairs.append(hit)
-    # gold
+    # Label acuan
     if "gold" in d:
         g = d["gold"]
         hit = g[(g.record_id_l == rid) | (g.record_id_r == rid)].copy()
         if not hit.empty:
             hit["source"] = "gold"
             all_pairs.append(hit)
-    # entity history
+    # Riwayat entity
     if "entity_hist" in d:
         eh = d["entity_hist"]
-        # entity_hist has records list
+        # entity_hist menyimpan daftar catatan pada kolom records.
         hit = eh[eh.records.apply(lambda r: rid in r if isinstance(r, list) else False)].copy()
         if not hit.empty:
             hit["source"] = "entity_hist"
@@ -147,7 +149,7 @@ if search_rid:
     else:
         st.info("Tidak ada jejak untuk record ini.")
 
-# ---- entity history filter
+# ---- penyaring riwayat entity
 st.divider()
 st.subheader("Riwayat Koreksi Entity")
 if "entity_hist" in d:

@@ -105,13 +105,9 @@ Versi lengkap mengikuti `requirements.txt`. Itu sumber yang benar — kalau ada
 library yang dipakai kode tapi tidak ada di sana, `requirements.txt` yang ketinggalan,
 bukan kodenya.
 
-Dua hal yang perlu diketahui:
-
-* `duckdb` tidak ditulis eksplisit di `requirements.txt`, tapi dipakai langsung oleh
-  beberapa modul dan juga dibawa oleh `splink`. Biasanya terpasang otomatis.
-* `pages/4_retrain.py` mengimpor `psutil`, dan `psutil` **tidak** ada di
-  `requirements.txt`. Kalau halaman Latih Ulang membuka `ModuleNotFoundError: psutil`,
-  jalankan `pip install psutil`. Ini keterbatasan repository, bukan kesalahan install Anda.
+`duckdb`, `psutil`, dan `plotly` tercantum langsung di `requirements.txt`
+karena dipakai langsung oleh konektor/pipeline database, halaman Latih Ulang,
+benchmark, dan dashboard.
 
 ---
 
@@ -125,13 +121,15 @@ python tests/test_smoke.py
 
 Smoke test digunakan untuk memeriksa invariant utama project.
 
-Output yang diharapkan pada versi repository saat ini:
+Semua pemeriksaan harus berstatus `PASS`, dan jumlah pada baris terakhir harus
+menunjukkan bahwa seluruh pemeriksaan lulus. Jumlah pemeriksaan dapat berubah.
+Pada working copy yang diuji pada 14 Oktober 2026, hasilnya **43/44**: satu
+pemeriksaan `incremental_candidate_prefilter_is_exact` menemukan satu edge
+`MATCH` berbeda antara scoring prefilter dan scoring seluruh dataset. Selidiki
+kegagalan itu sebelum menyatakan hasil pengujian bersih.
 
-```text
-23 / 23
-```
-
-Jika smoke test gagal, jangan langsung menjalankan proses training. Periksa error yang ditampilkan terlebih dahulu.
+Jika smoke test gagal, jangan langsung menjalankan proses training. Periksa
+error yang ditampilkan terlebih dahulu.
 
 > Smoke test memeriksa kondisi internal pipeline. Smoke test bukan pengganti pengecekan apakah aplikasi Streamlit dapat dibuka.
 
@@ -148,8 +146,8 @@ crm_50000_customers_dirty_v3.csv
 Dataset berasal dari Kaggle Customer 360 dan digunakan untuk pengembangan/evaluasi.
 
 **File ini TIDAK ikut di repository.** Pola `data/raw/*` ada di `.gitignore`, jadi setelah
-`git clone` folder `data/raw/` hanya berisi file `.gitkeep`. Pipeline `src.run_all`
-akan gagal di langkah `profiling` kalau file CSV tidak ditempatkan manual di:
+`git clone` folder `data/raw/` hanya berisi file `.gitkeep`. Untuk jalur dataset
+CSV, pipeline `src.run_all` memerlukan file ini di:
 
 ```text
 data/raw/crm_50000_customers_dirty_v3.csv
@@ -159,7 +157,8 @@ data/raw/crm_50000_customers_dirty_v3.csv
 
 Jika Anda sudah punya dataset CRM lain, letakkan di path itu (atau sesuaikan
 `src/config.py` jika memang perlu). Jangan mengubah config hanya agar file terbaca
-tanpa memahami pemetaan kolomnya.
+tanpa memahami pemetaan kolomnya. PostgreSQL/DuckDB dapat menjadi sumber alternatif;
+lihat bagian 15 sebelum menjalankan jalur database.
 
 Repository menggunakan struktur:
 
@@ -353,11 +352,16 @@ Tiga identifier utama tidak boleh disamakan.
 │   ├── profiling.py
 │   ├── standardize.py
 │   ├── registry.py
+│   ├── db_source.py
+│   ├── db_export.py
+│   ├── db_refresh.py
+│   ├── job_run.py
 │   ├── blocking_benchmark.py
 │   ├── splink_model.py
 │   ├── clustering.py
 │   ├── master_record.py
 │   ├── labels.py
+│   ├── label_audit.py
 │   ├── feedback.py
 │   ├── apply_gold.py
 │   ├── close_gold_loop.py
@@ -373,12 +377,14 @@ Tiga identifier utama tidak boleh disamakan.
 │   ├── incremental.py
 │   ├── model_lifecycle.py
 │   ├── ui.py
-│   └── run_all.py
+│   ├── run_all.py
+│   └── stage0_audit.py / stage1_abc.py
 │
 ├── data/
 │   ├── raw/
 │   ├── processed/
-│   └── labels/
+│   ├── labels/
+│   └── synthetic/  (database demo lokal; tidak dilacak Git)
 │
 ├── models/
 ├── outputs/
@@ -386,10 +392,14 @@ Tiga identifier utama tidak boleh disamakan.
 │   └── test_smoke.py
 │
 ├── notebooks/
+├── scripts/
+├── config/
 ├── .streamlit/
 │   └── config.toml
+├── .gitignore
 ├── requirements.txt
 ├── PANDUAN.md
+├── PRD.md
 └── README.md
 ```
 
@@ -527,6 +537,9 @@ pages/1_review.py  → putuskan match/no_match per pasangan
   ↓
 "Tersimpan ke daftar utama" → src.labels --promote → data/labels/gold_labels.csv
 
+pages/2_master.py  → koreksi nilai master atau laporkan masalah keanggotaan
+  → koreksi split/merge yang dikonfirmasi → outputs/entity_history.jsonl
+
 src.close_gold_loop --all  (bisa juga manual 1-2 langkah)
   → src.feedback  (append-only)
   → src.apply_gold --apply --recluster  (ubah decision, recluster, rebuild master)
@@ -544,6 +557,17 @@ keputusan retrain tetap **eksplisit** di pages/4_retrain.py.
 * Setelah "Apply" batch atau setelah `close_gold_loop`, kembali ke review/eksplorasi:
   `pages/3_dashboard.py`, `pages/2_master.py`, `pages/8_explain.py`, `pages/9_history.py`,
   bukan "restart" penuh.
+* Label pasangan (`match`/`no_match`) menilai apakah dua record satu orang. Koreksi
+  nilai master hanya mengubah atribut; laporan salah-gabung/salah-pecah memerlukan
+  tindakan split/merge eksplisit pada halaman Master. Setiap tindakan itu meminta
+  alasan, memiliki guard, dan dicatat terpisah di Riwayat Keputusan. Koreksi
+  keanggotaan berlaku pada hasil saat ini; full pipeline berikutnya membangun
+  ulang clustering dan belum memutar ulang koreksi manual dari log.
+* Grafik perbandingan versi retrain memakai gold berlabel manusia, bukan label
+  seluruh populasi. Halaman Latih Ulang membandingkan provenance laporan dengan
+  gold, data standar, prediksi, dan inventory versi model; jika berubah, grafik
+  ditandai kedaluwarsa dan perlu dihitung ulang dengan
+  `python -m src.version_gold_scores`.
 
 ---
 
@@ -642,37 +666,78 @@ Perintah-perintah tersebut lebih ditujukan untuk development, evaluasi, dan main
 
 ---
 
-# 15. Hasil Development Terakhir
+# 15. Input Database dan Hasil Uji (2026-10-14)
 
-Run development terakhir yang terdokumentasi:
+Sistem dapat membaca file DuckDB lokal atau tabel PostgreSQL melalui
+`src.db_source`, mengekspor baris menjadi CSV batch terdaftar, lalu melanjutkan
+ke standardisasi dan pemrosesan incremental. Konektor membaca sumber secara
+**read-only**. Repository tidak menyediakan Dockerfile/Compose untuk database;
+jalankan dan kelola container database secara terpisah.
 
-```text
-Run       : v20261005_145258
-Scope     : full
-Batch     : 9
-Runtime   : 216,62 detik
+Contoh PostgreSQL Docker dengan port yang dipetakan ke `127.0.0.1:5432`:
+
+```powershell
+# Isi dari environment/secret manager. Jangan commit atau menaruh password
+# langsung di connection string maupun argumen perintah.
+$env:PGUSER = "crm_owner"
+$env:PGPASSWORD = "<password>"
+
+python -m src.job_run `
+  --source "postgres://127.0.0.1:5432/crm" `
+  --table crm_customers `
+  --mode stage `
+  --date-order dmy
+
+Remove-Item Env:PGUSER, Env:PGPASSWORD
 ```
 
-| Metrik          |   Hasil |
-| --------------- | ------: |
-| Total record    |  51.555 |
-| Candidate pairs | 311.294 |
-| MATCH           |   3.401 |
-| REVIEW          |      27 |
-| NON_MATCH       | 307.866 |
-| Auto-match rate |   1,09% |
-| Review rate     | 0,0087% |
-| Entity          |  48.380 |
-| Merged records  |   3.175 |
-| Entity terbesar |       5 |
-| Unscored        |     417 |
-| Smoke test      | 23 / 23 |
+Pada penggunaan pertama, DuckDB mungkin perlu mengunduh extension PostgreSQL;
+akses jaringan dapat diperlukan. Watermark disimpan lokal di
+`data/processed/db_watermark.json` dan dikaitkan dengan URI sumber serta nama
+tabel. Gunakan URI yang sama pada run berikutnya; bila tidak ada watermark yang
+cocok, proses mengambil seluruh tabel. Filter memakai `updated_at > watermark`,
+sehingga perubahan yang memakai timestamp sama atau lebih lama tidak diambil
+oleh ekspor inkremental. Untuk perubahan pada record yang sudah pernah masuk,
+gunakan jalur `src.db_refresh`.
 
-Hasil tersebut merupakan hasil pada dataset development dan **bukan jaminan performa pada dataset pelanggan lain**.
+Mode `stage` hanya membuat proposal; tinjau di halaman **Batch** sebelum
+menerapkan perubahan ke entity/master. Periksa skema sumber dan konfigurasi
+`DB_COLUMN_MAP` di `src/config.py` sebelum menghubungkan tabel lain.
+
+## Hasil uji PostgreSQL Docker
+
+Pada pengujian lokal, tabel `crm_customers` bertambah 75 baris sintetis
+(customer_pk 2004–2078), dari total 2.003 menjadi 2.078 baris. `src.job_run`
+berhasil mengekspor **75 baris baru** dan men-stage 75 proposal match dalam
+6,82 detik. Dua pasangan yang sengaja dibuat sebagai duplikat persis dan
+near-duplicate masing-masing mendapat `MATCH` dengan probabilitas 1,0.
+Angka ini hanya membuktikan jalur uji sintetis tersebut, bukan kualitas pada
+data pelanggan nyata. Proposal belum diterapkan; keputusan masih perlu ditinjau.
+
+`python tests/test_smoke.py` menghasilkan **43/44** pada working copy yang
+diuji; kegagalan tunggal `incremental_candidate_prefilter_is_exact` melaporkan
+satu edge `MATCH` yang berbeda dibandingkan scoring seluruh dataset. Hasil ini
+belum merupakan smoke test yang seluruhnya lulus. Dataset uji lokal saat ini
+berisi 103.858 record terstandardisasi; jumlah tersebut bukan klaim kapasitas
+produksi.
+
+Untuk membuat ulang DB demo DuckDB lokal:
+
+```powershell
+python scripts/make_synthetic_db.py --rows 2000 --out data/synthetic/crm.duckdb
+python -m src.db_export --source data/synthetic/crm.duckdb --table crm_customers
+```
+
+Generator menimpa tabel demo dengan nama yang sama. Gunakan hanya pada file
+sintetis, bukan database sumber berisi data penting.
 
 ---
 
 # 16. Evaluasi
+
+Angka di bagian ini adalah snapshot eksperimen development yang lebih lama,
+bukan hasil PostgreSQL Docker tanggal 14 Oktober 2026. Jangan menyamakan kedua
+eksperimen atau menganggap angka historis sebagai jaminan kualitas model.
 
 Evaluasi dilakukan dalam beberapa lapisan:
 
@@ -746,7 +811,9 @@ Beberapa hal yang perlu diperhatikan:
 
 ### Dataset development terbatas
 
-Pengujian belum melampaui sekitar 51.500 record.
+Dataset lokal yang tercatat saat ini berisi 103.858 record terstandardisasi.
+Uji PostgreSQL Docker hanya mengambil batch sintetis 75 baris; pengujian skala
+besar dan produksi belum dilakukan.
 
 Kemampuan pada jutaan record masih perlu diuji.
 
@@ -946,6 +1013,8 @@ Teknologi utama:
 * DuckDB
 * Pandas
 * PyArrow
+* Plotly
+* psutil
 * Streamlit
 * Jupyter
 
@@ -994,6 +1063,6 @@ Jika seluruh langkah berhasil, aplikasi dapat digunakan melalui alamat lokal yan
 
 **Catatan singkat:**
 
-* `pytest` mungkin belum terpasang di laptop kosong. Kalau `python tests/test_smoke.py` gagal dengan "No module named pytest" tapi Anda pakai file test Python biasa, tetap bisa pakai `python tests/test_smoke.py` (tanpa pytest). Test ini bisa dijalankan langsung dengan Python.
-* `psutil` dibutuhkan `pages/4_retrain.py` tapi **tidak** ada di `requirements.txt`. Kalau muncul `ModuleNotFoundError: psutil`, jalankan: `pip install psutil`.
-* Dataset raw **tidak ikut repo**. Wajib diletakkan manual di `data/raw/crm_50000_customers_dirty_v3.csv`. Artifact (`models/outputs/data/*`) dibuat otomatis oleh pipeline.
+* Smoke test dijalankan langsung dengan Python; tidak perlu memanggil pytest.
+* Dataset raw CSV **tidak ikut repo**. Untuk jalur CSV, letakkan di `data/raw/crm_50000_customers_dirty_v3.csv`; alternatif sumber database dijelaskan di bagian 15.
+* Output pemrosesan disimpan lokal dan tidak dilacak Git. Versi model dapat dilacak terpisah; jangan menganggap seluruh isi `models/` otomatis dibuat atau tersedia pada setiap clone.

@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
-"""Shared Streamlit UI helpers: page header, sidebar context, pagination.
+"""Fungsi bantu UI Streamlit bersama: judul halaman, konteks bilah sisi, dan paginasi.
 
-Also holds the single source of truth for user-facing wording (field names,
-status names, similarity levels). Every page imports from here so the same
-concept is never labelled two different ways, and no reviewer has to learn
-that "gamma" is the word for "how similar".
+Modul ini juga menjadi sumber tunggal teks yang ditampilkan kepada pengguna
+(nama kolom, status, dan tingkat kemiripan). Semua halaman mengimpornya dari
+sini agar konsep yang sama selalu memiliki istilah yang konsisten dan peninjau
+tidak perlu mempelajari istilah teknis seperti "gamma".
 """
 from __future__ import annotations
 
@@ -16,16 +15,68 @@ import streamlit as st
 
 
 def page_header(title: str, description: str | None = None) -> None:
-    """Title + optional one-line description, same shape on every page."""
+    """Tampilkan judul dan deskripsi satu baris opsional dengan format seragam."""
     st.title(title)
     if description:
         st.caption(description)
 
 
+WORKFLOW_STEPS = [
+    ("Upload", "Masukkan data baru"),
+    ("Pemeriksaan", "Nilai pasangan yang meragukan"),
+    ("Daftar Customer", "Lihat hasil akhir"),
+]
+
+WORKFLOW_ROUTE = {
+    "app.py": "Upload",
+    "pages/1_review.py": "Pemeriksaan",
+    "pages/5_queue.py": "Pemeriksaan",
+    "pages/6_batch.py": "Upload",
+    "pages/2_master.py": "Daftar Customer",
+    "pages/3_dashboard.py": "Daftar Customer",
+    "pages/4_retrain.py": "Daftar Customer",
+    "pages/7_gaps.py": "Pemeriksaan",
+    "pages/8_explain.py": "Pemeriksaan",
+    "pages/9_history.py": "Daftar Customer",
+}
+
+
+def workflow_step(current_file: str | None) -> None:
+    """Tampilkan posisi pembaca dalam alur 3 langkah, dalam bahasa sehari-hari."""
+    import sys
+    from pathlib import Path
+
+    here = Path(current_file).name if current_file else Path(sys.argv[0]).name
+    current = WORKFLOW_ROUTE.get(here, here)
+    steps = [short for short, _ in WORKFLOW_STEPS]
+    if current not in steps:
+        return
+    idx = steps.index(current)
+    crumbs = []
+    for i, (short, desc) in enumerate(WORKFLOW_STEPS):
+        if i < idx:
+            crumbs.append(f"✅ ~~{short}~~")
+        elif i == idx:
+            crumbs.append(f"👉 **{short}**")
+        else:
+            crumbs.append(short)
+    st.caption(" → ".join(crumbs))
+    st.caption(
+        f"Anda sedang di: **{current}** — {dict(WORKFLOW_STEPS)[current]}. "
+        + (
+            "Selanjutnya: nilai pasangannya di halaman Pemeriksaan."
+            if current == "Upload"
+            else "Selanjutnya: hasilnya ada di Daftar Customer."
+            if current == "Pemeriksaan"
+            else "Alur selesai. Mau tambah data baru? Kembali ke halaman Upload."
+        )
+    )
+
+
 def monitoring_sidebar() -> None:
-    """Model aktif, jumlah batch, antrian review, run terakhir — di semua halaman."""
+    """Model aktif, jumlah batch, antrian review, dan status pipeline."""
     from src import registry
-    from src.config import PROJECT_ROOT
+    from src.config import PROJECT_ROOT, pipeline_locked
 
     import json
     import pandas as pd
@@ -33,10 +84,30 @@ def monitoring_sidebar() -> None:
     LATEST_MODEL = PROJECT_ROOT / "models" / "latest.json"
     REVIEW_QUEUE = PROJECT_ROOT / "data" / "labels" / "review_queue.csv"
 
+    # Periksa kunci pipeline SEBELUM menampilkan data apa pun. Jika pipeline
+    # sedang berjalan, berkas artefak mungkin baru tertulis sebagian — membacanya bisa
+    # menghasilkan data yang hanya konsisten sebagian atau menyebabkan kegagalan.
+    lock = pipeline_locked()
+    if lock:
+        import time
+
+        age_min = (time.time() - float(lock.get("started_at", 0))) / 60
+        st.warning(
+            f"⚠ **Pipeline sedang berjalan** ({age_min:.0f} menit). "
+            f"Data yang ditampilkan mungkin belum lengkap. "
+            f"Jangan tutup tab ini sampai proses selesai."
+        )
+
     with st.sidebar:
         st.markdown("#### Pencarian Customer Ganda")
         st.caption("Mencari data customer yang sama")
         st.divider()
+
+        if lock:
+            import time
+
+            age_min = (time.time() - float(lock.get("started_at", 0))) / 60
+            st.error(f"⏳ Pipeline berjalan ({age_min:.0f} mnt)")
 
         st.markdown("#### Model Aktif")
         if LATEST_MODEL.exists():
@@ -44,7 +115,7 @@ def monitoring_sidebar() -> None:
                 model = json.loads(LATEST_MODEL.read_text(encoding="utf-8"))
                 st.caption(f"Versi: `{model['version']}`")
                 if model.get("created_at"):
-                    st.caption(f"Dibuat: {model['created_at']}")
+                    st.caption(f"Diperbarui: {model['created_at']}")
             except (json.JSONDecodeError, OSError, KeyError, TypeError):
                 st.caption("Model aktif: (tidak dapat dibaca)")
         else:
@@ -173,7 +244,7 @@ def page_guide(page_file: str) -> None:
 
 
 def paginate(df, page_size: int = 50, key: str = "page") -> tuple[Any, int]:
-    """Halaman DataFrame. Returns (page_df, total_pages)."""
+    """Bagi DataFrame menjadi halaman. Kembalikan (page_df, total_pages)."""
     import pandas as pd
 
     if df is None or (isinstance(df, pd.DataFrame) and df.empty):
@@ -192,9 +263,10 @@ def paginate(df, page_size: int = 50, key: str = "page") -> tuple[Any, int]:
     return df.iloc[start : start + page_size].copy(), total_pages
 
 
-# --- User-facing wording -------------------------------------------------
-# One place, so a reviewer learns "Tingkat kesamaan" once and sees it
-# everywhere. Sourced from the real comparison set in src/splink_model.py.
+# --- Istilah yang ditampilkan kepada pengguna ---------------------------
+# Simpan di satu tempat agar peninjau mempelajari istilah "Tingkat kesamaan"
+# satu kali dan melihatnya secara konsisten. Istilah bersumber dari daftar
+# pembanding di src/splink_model.py.
 
 FIELD_LABEL: dict[str, str] = {
     "first_name_std": "Nama depan",
@@ -208,7 +280,7 @@ FIELD_LABEL: dict[str, str] = {
     "country_std": "Negara",
 }
 
-# Model verdicts, in the words a reviewer actually thinks in.
+# Keputusan model ditulis dengan istilah yang mudah dipahami peninjau.
 DECISION_LABEL: dict[str, str] = {
     "MATCH": "Digabung otomatis",
     "REVIEW": "Perlu diperiksa",
@@ -240,8 +312,8 @@ REVIEW_STATUS_LABEL: dict[str, str] = {
     "reviewed": "Sudah diperiksa",
 }
 
-# Where a queued pair came from. The raw stratum codes are meaningless to a
-# reviewer, so every one seen on disk gets a plain-language description.
+# Asal pasangan dalam antrean. Kode stratum mentah tidak bermakna bagi peninjau,
+# jadi setiap kode yang tersimpan diberi keterangan dengan bahasa sederhana.
 STRATUM_LABEL: dict[str, str] = {
     "match_precision_check": "Cek ketepatan hasil gabung otomatis",
     "device_truth_positive_topup": "Duplikat yang sudah diketahui pasti",
@@ -253,7 +325,7 @@ STRATUM_LABEL: dict[str, str] = {
 
 
 def field_label(field: str) -> str:
-    """Nama field dalam bahasa manusia. Unknown columns keep their own name."""
+    """Nama kolom dalam bahasa sederhana. Kolom yang tidak dikenal tetap memakai namanya."""
     return FIELD_LABEL.get(field, field.replace("_std", "").replace("_", " "))
 
 
@@ -293,10 +365,15 @@ def verdict_plain(decision: Any) -> str:
 
 
 def format_probability(prob: Any) -> str:
-    """Peluang sebagai persentase bulat tanpa notasi ilmiah.
+    """Peluang sebagai band bahasa manusia, BUKAN persentase presisi.
 
-    Skor di bawah ambang baca tetap ditulis dengan jumlah yang sama, tapi
-    dibulatkan agar tidak ada "1e-10" di layar.
+    Alasan band, bukan persen: Splink adalah naive Bayes dan overconfident —
+    bukti yang berkorelasi (email + telepon + nama) dihitung ganda, sehingga
+    pasangan yang jelas-jelas punya perbedaan (dob beda, telepon beda) tetap
+    mendapat p = 1.0.     Menulis "100%" membuat peninjau kehilangan kepercayaan
+    pada seluruh sistem ketika melihat kontradiksi di tabel "Kenapa?".
+    Band ("sangat tinggi" / "tinggi" / ...) menyampaikan tingkat tanpa
+    mengklaim presisi yang tidak dimiliki model.
     """
     try:
         p = float(prob)
@@ -305,14 +382,44 @@ def format_probability(prob: Any) -> str:
     if math.isnan(p):
         return "tidak tersedia"
     if p <= 0:
-        return "0%"
-    if p >= 0.99999:
-        return "100%"
+        return "hampir nol"
+    if p >= 0.99:
+        return "sangat tinggi"
+    if p >= 0.9:
+        return "tinggi"
+    if p >= 0.5:
+        return "sedang"
     if p >= 0.01:
-        return _pct(p, 0)
-    # Di bawah 0,01%: 1e-10 dan 1e-4 sama-sama tidak terbaca orang, jadi
-    # tulis batas baca, bukan angka presisi tinggi.
-    return "kurang dari 0,01%"
+        return "rendah"
+    if p >= 1e-6:
+        return "sangat rendah"
+    return "hampir nol"
+
+
+def probability_band_color(prob: Any) -> str:
+    """Warna badge untuk band peluang, supaya cepat dibaca sekilas."""
+    try:
+        p = float(prob)
+    except (TypeError, ValueError):
+        return "gray"
+    if math.isnan(p):
+        return "gray"
+    if p >= 0.99:
+        return "green"
+    if p >= 0.9:
+        return "orange"
+    if p >= 0.5:
+        return "blue"
+    return "gray"
+
+
+def probability_band_help() -> str:
+    """Penjelasan satu kalimat untuk help text di setiap metrik peluang."""
+    return (
+        "Ini tingkat keyakinan MODEL, bukan probabilitas kebenaran. Model kadang "
+        "terlalu yakin karena menghitung bukti serupa berkali-kali. Selalu cek "
+        "tabel perbandingan field sebelum memutuskan."
+    )
 
 
 def _pct(value: float, digits: int) -> str:
@@ -409,15 +516,21 @@ def format_bool(value: Any) -> str:
 
 
 def probability_verdict(prob: Any) -> str:
-    """Kesimpulan satu kalimat dari angka peluang, untuk yang bukan analis data."""
+    """Kesimpulan satu kalimat dari band peluang, untuk yang bukan analis data."""
     try:
         p = float(prob)
     except (TypeError, ValueError):
         return "Peluang tidak tersedia."
     if math.isnan(p):
         return "Peluang tidak tersedia."
+    if p >= 0.99:
+        return (
+            "Sistem menempatkan peluang di **tingkat sangat tinggi**. "
+            "Tapi periksa tabel field di bawah — kalau ada yang menolak, "
+            "angka ini bisa terlalu yakin."
+        )
     if p >= 0.9:
-        return "Sistem sangat yakin: **kemungkinan besar orang yang sama**."
+        return "Sistem cenderung yakin ini orang yang sama. Periksa field yang berbeda dulu."
     if p >= 0.5:
         return "Sistem cenderung yakin, tapi belum cukup untuk digabung sendiri."
     if p >= 0.01:
@@ -479,9 +592,9 @@ def _is_blank(value: Any) -> bool:
 
 
 def similarity_text(level_label: Any, level_code: Any) -> str:
-    """Terjemahkan label level model (bahasa Inggris) ke bahasa reviewer.
+    """Terjemahkan label tingkat model ke bahasa yang dipahami peninjau.
 
-    Level 0 adalah yang paling mirip; kode tertinggi = "tidak ada yang cocok".
+    Level 0 adalah yang paling mirip; kode tertinggi berarti "tidak ada yang cocok".
     """
     if level_code is None or _is_blank(level_code):
         return "tidak ada data di field ini"
@@ -540,7 +653,7 @@ sendiri tanpa perlu percaya pada angka.
         )
 
 
-# --- "Kenapa?" table, shared by the review page and the explain page -----
+# --- Tabel "Kenapa?", digunakan bersama oleh halaman pemeriksaan dan penjelasan -----
 
 def model_levels() -> dict[str, dict[int, tuple[str, float, float]]]:
     """Tingkat kesamaan per field dari model aktif: {gamma_col: {kode: (label, m, u)}}.
@@ -628,6 +741,25 @@ def show_evidence(row: dict, levels: dict) -> None:
 
     support = frame.loc[frame["bukti"].str.contains("mendukung"), "bukti"]
     against = frame.loc[frame["bukti"].str.contains("menolak"), "bukti"]
+
+    # Peringatan konflik: naive Bayes overconfident, jadi pasangan dengan >= 1
+    # field yang menolak tetap bisa mendapat peluang "sangat tinggi". Tanpa
+    # peringatan ini peninjau melihat "100%" lalu mempercayainya padahal ada
+    # kontradiksi di tabel. Ini adalah penyebab utama salah gabung yang lolos.
+    prob = row.get("match_probability")
+    try:
+        high = prob is not None and not _is_blank(prob) and float(prob) >= 0.9
+    except (TypeError, ValueError):
+        high = False
+    if high and not against.empty:
+        fields = ", ".join(frame.loc[frame["bukti"].str.contains("menolak"), "informasi"])
+        st.warning(
+            f"**Ada {len(against)} field yang menolak** ({fields}) meski peluang "
+            "tertinggi. Model kadang terlalu yakin karena menghitung bukti serupa "
+            "berkali-kali. **Periksa field yang menolak ini manual sebelum "
+            "menganggap pasangan ini benar-benar orang yang sama.**"
+        )
+
     if support.empty and against.empty:
         st.info("Tidak ada bukti kuat ke arah mana pun. Ini memang kasus abu-abu.")
     elif against.empty:
@@ -638,9 +770,9 @@ def show_evidence(row: dict, levels: dict) -> None:
         st.info("Bukti bercampur — itu sebabnya pasangan ini menunggu keputusan Anda.")
 
 
-# Catatan teknis di incremental_history.jsonl ditulis bahasa Inggris untuk mesin.
-# Dipetakan sebagai frasa utuh, bukan potongan kata: mengganti potongan
-# menyisakan koma menggantung dan kalimat setengah jadi.
+# Catatan teknis di incremental_history.jsonl ditulis dalam bahasa Inggris untuk
+# mesin. Petakan setiap frasa secara utuh, bukan sebagai potongan kata, agar
+# hasil terjemahan tidak menyisakan koma atau kalimat yang tidak lengkap.
 _NOTE_EXACT = {
     "wall-clock between stage and apply, not compute time; left as measured":
         "Durasi ini selisih waktu antara simpan dan terapkan, bukan waktu proses. "
@@ -651,7 +783,7 @@ _NOTE_EXACT = {
 
 
 def translate_note(note: Any) -> str:
-    """Catatan riwayat bahasa Inggris -> bahasa manusia.
+    """Ubah catatan riwayat berbahasa Inggris menjadi teks yang mudah dipahami.
 
     Frasa yang dikenal dipetakan utuh. Teks lain diteruskan apa adanya supaya
     catatan yang tidak dikenali tidak hilang diam-diam.
@@ -677,7 +809,7 @@ def format_history_table(frame: Any) -> Any:
 
     df = frame.copy()
 
-    # Catatan teknis disatukan jadi satu kolom, bukan sebar di 4 kolom.
+    # Satukan catatan teknis ke dalam satu kolom, bukan empat kolom terpisah.
     notes = []
     for col in ("_runtime_note", "_correction"):
         if col in df.columns:
@@ -727,4 +859,3 @@ def format_history_table(frame: Any) -> Any:
         df["Perlu diperiksa"] = df["Perlu diperiksa"].map(format_count)
 
     return df
-

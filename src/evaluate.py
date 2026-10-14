@@ -1,18 +1,19 @@
-"""Four separate evaluations, plus the operational rates of FR-12.
+"""Empat evaluasi terpisah beserta tingkat operasional dari FR-12.
 
-DESIGN section 17 is explicit: evaluation must separate blocking, linkage,
-decision and entity, and "Do not collapse all four into one metric". A single
-"accuracy" number hides which layer failed: 100% coverage with 0% recall looks
-identical to 100% coverage with perfect recall.
+Bagian 17 DESIGN menegaskan bahwa evaluasi harus memisahkan blocking, linkage,
+keputusan, dan entity, serta "tidak menggabungkan keempatnya menjadi satu
+metrik". Satu angka "akurasi" menyembunyikan lapisan yang gagal: cakupan 100%
+dengan recall 0% tampak sama dengan cakupan 100% dan recall sempurna.
 
-    blocking  did candidate generation CONTAIN the true pairs?
-    linkage   did the model SCORE those pairs correctly?
-    decision  did the thresholds produce an acceptable MATCH/REVIEW split?
-    entity    did records of one real entity end up in one entity?
+    blocking  apakah pembuatan kandidat MENCAKUP pasangan acuan?
+    linkage   apakah model memberi SKOR yang tepat untuk pasangan tersebut?
+    decision  apakah ambang menghasilkan pembagian MATCH/REVIEW yang dapat diterima?
+    entity    apakah catatan dari satu entity nyata berakhir dalam satu entity?
 
-Each section reports what it measured and, separately, what it does NOT prove.
-MASTER_CONTEXT section 20 requires FACT and ASSUMPTION to stay separated, so an
-unavailable truth channel is reported as `unavailable` and never as a number.
+Setiap bagian melaporkan hal yang diukur dan, secara terpisah, hal yang TIDAK
+dapat dibuktikan. Bagian 20 MASTER_CONTEXT mengharuskan FAKTA dan ASUMSI
+dipisahkan, sehingga kanal acuan yang tidak tersedia dilaporkan sebagai
+`unavailable`, bukan sebagai angka.
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ from pathlib import Path
 import pandas as pd
 
 from .config import (
-    BENCHMARK_RULES,
     ENTITY_MAP_PATH,
     MATCH_THRESHOLD,
     OUTPUT_DIR,
@@ -32,6 +32,9 @@ from .config import (
     REVIEW_THRESHOLD,
     predictions_path,
     read_meta,
+    atomic_write_parquet,
+    atomic_write_json,
+    active_path,
 )
 from .eval_truth import (
     device_truth_pairs,
@@ -56,10 +59,10 @@ def _unavailable(what: str, why: str) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Layer 1 — blocking
+# Lapisan 1 — blocking
 # --------------------------------------------------------------------------
 def evaluate_blocking(df: pd.DataFrame, truth: pd.DataFrame) -> dict:
-    preds_path = predictions_path(full=True)
+    preds_path = active_path(predictions_path(full=True))
     if truth.empty:
         return _unavailable(
             "blocking coverage of true duplicate pairs",
@@ -91,15 +94,16 @@ def evaluate_blocking(df: pd.DataFrame, truth: pd.DataFrame) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Layer 2 — linkage
+# Lapisan 2 — linkage
 # --------------------------------------------------------------------------
 def _score_distribution(preds: pd.DataFrame) -> dict:
-    """Does the model have any gradient at all?
+    """Apakah skor model memiliki rentang nilai?
 
-    Before the pinned m floor every non-match shared one identical score
-    (-996.578428, std 2.3e-13), so no review band could exist. One distinct
-    value across 292k pairs is the signature of that failure, and it is the one
-    linkage-layer fact that stays reportable without a truth channel.
+    Sebelum batas bawah m ditetapkan, semua pasangan non-match memiliki skor
+    identik (-996.578428, simpangan baku 2.3e-13), sehingga rentang review tidak
+    mungkin terbentuk. Satu nilai berbeda di antara 292 ribu pasangan menjadi
+    tanda kegagalan tersebut dan merupakan fakta lapisan linkage yang tetap
+    dapat dilaporkan tanpa kanal acuan.
     """
     non_match = preds[preds["match_probability"] < MATCH_THRESHOLD]
     return {
@@ -124,7 +128,7 @@ def _score_distribution(preds: pd.DataFrame) -> dict:
 
 
 def evaluate_linkage(truth: pd.DataFrame, threshold: float, device_records: set[str]) -> dict:
-    preds_path = predictions_path(full=True)
+    preds_path = active_path(predictions_path(full=True))
     if not preds_path.exists():
         return _unavailable("linkage scoring", f"{preds_path.name} not found")
 
@@ -137,8 +141,8 @@ def evaluate_linkage(truth: pd.DataFrame, threshold: float, device_records: set[
     preds = pd.read_parquet(preds_path, columns=wanted)
 
     if truth.empty:
-        # Without a truth channel the distribution itself is still reportable:
-        # it says whether the model can express uncertainty at all.
+        # Tanpa kanal acuan, sebaran skor tetap dapat dilaporkan: ini menunjukkan
+        # apakah model mampu menyatakan tingkat ketidakpastian.
         return {
             "status": "unavailable",
             "what": "does the model score true pairs correctly",
@@ -175,10 +179,10 @@ def evaluate_linkage(truth: pd.DataFrame, threshold: float, device_records: set[
 
 
 # --------------------------------------------------------------------------
-# Layer 3 — decision
+# Lapisan 3 — keputusan
 # --------------------------------------------------------------------------
 def evaluate_decision(full: bool) -> dict:
-    preds_path = predictions_path(full=full)
+    preds_path = active_path(predictions_path(full=full))
     if not preds_path.exists():
         return _unavailable("decision rates", f"{preds_path.name} not found")
 
@@ -247,13 +251,13 @@ def _gold_section() -> dict:
 
 
 # --------------------------------------------------------------------------
-# Layer 4 — entity
+# Lapisan 4 — entity
 # --------------------------------------------------------------------------
 def evaluate_entity(truth: pd.DataFrame) -> dict:
-    if not ENTITY_MAP_PATH.exists():
+    if not active_path(ENTITY_MAP_PATH).exists():
         return _unavailable("entity evaluation", "entity_map.parquet not found")
 
-    entities = pd.read_parquet(ENTITY_MAP_PATH)[["record_id", "entity_id"]]
+    entities = pd.read_parquet(active_path(ENTITY_MAP_PATH))[["record_id", "entity_id"]]
     lookup = entities.set_index("record_id")["entity_id"]
     sizes = entities.groupby("entity_id").size()
 
@@ -280,9 +284,10 @@ def evaluate_entity(truth: pd.DataFrame) -> dict:
     )
     together = int((joined["entity_l"] == joined["entity_r"]).sum())
 
-    # The other direction: an entity holding two different device ids is a false
-    # merge that the "did true pairs land together" check cannot see.
-    records = pd.read_parquet(PROCESSED_DATA_PATH, columns=["record_id", "device_ids_std"])
+    # Pemeriksaan arah sebaliknya: entity yang memuat dua device id berbeda
+    # merupakan salah gabung, yang tidak terdeteksi oleh pemeriksaan apakah
+    # pasangan sejati berada dalam kelompok yang sama.
+    records = pd.read_parquet(active_path(PROCESSED_DATA_PATH), columns=["record_id", "device_ids_std"])
     if records["device_ids_std"].dropna().empty:
         mixed = None
     else:
@@ -308,7 +313,7 @@ def evaluate_entity(truth: pd.DataFrame) -> dict:
 
 
 def build(full: bool = True) -> dict:
-    df = pd.read_parquet(PROCESSED_DATA_PATH)
+    df = pd.read_parquet(active_path(PROCESSED_DATA_PATH))
     truth = device_truth_pairs(df)
 
     meta = read_meta(predictions_path(full=full))
@@ -338,7 +343,7 @@ def build(full: bool = True) -> dict:
 
 
 def _show(value, width: int = 38) -> str:
-    """Render a value so nested dicts stay on one line instead of wrapping."""
+    """Tampilkan nilai dalam satu baris agar dict bertingkat tidak terbungkus."""
     if isinstance(value, dict):
         return ", ".join(f"{k}={v}" for k, v in list(value.items())[:4]) + (
             f", +{len(value) - 4} more" if len(value) > 4 else ""
@@ -398,7 +403,7 @@ def main() -> None:
         _print_layer(name, report[name])
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    atomic_write_json(report, REPORT_PATH)
     print(f"\nSaved: {REPORT_PATH}")
 
 

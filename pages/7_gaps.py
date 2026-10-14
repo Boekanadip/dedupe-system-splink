@@ -33,6 +33,7 @@ from src.ui import (
     page_header,
     paginate,
     probability_verdict,
+    workflow_step,
 )
 
 st.set_page_config(page_title="Celah - Entity Resolution", page_icon="🕳️", layout="wide")
@@ -43,6 +44,7 @@ page_header(
 )
 monitoring_sidebar()
 page_guide(__file__)
+workflow_step(__file__)
 how_to_read()
 
 for _p in (ENTITY_MAP_PATH, PROCESSED_DATA_PATH, predictions_path(full=True)):
@@ -70,7 +72,7 @@ def load_queue() -> pd.DataFrame:
 
 
 def enqueue(pairs: pd.DataFrame, stratum: str) -> int:
-    """Append pairs to the review queue with full side-by-side evidence."""
+    """Tambahkan pasangan ke antrean pemeriksaan beserta bukti kedua sisinya."""
     records = pd.read_parquet(PROCESSED_DATA_PATH)
     new = pairs[["record_id_l", "record_id_r", "match_probability"]].copy()
     new = agree_fields(records, new)
@@ -145,7 +147,7 @@ c4.metric(
 
 tab_s, tab_r = st.tabs(["Record sendirian", "Perlu diperiksa, belum di antrean"])
 
-# ================= record sendirian =================
+# ================= catatan yang berdiri sendiri =================
 with tab_s:
     st.caption(
         f"{len(singletons):,} record belum pernah bergabung dengan siapa pun. "
@@ -154,9 +156,7 @@ with tab_s:
         "tidak akan terlihat di halaman mana pun."
     )
     single_records = records[records["record_id"].isin(set(singletons))].copy()
-    # Record tanpa email DAN tanpa phone tidak akan pernah masuk kandidat:
-    # tidak ada kolom yang bisa dibandingkan. Ini batas kemampuan, bukan
-    # keputusan model.
+
     unlinkable = single_records["email"].isna() & single_records["phone_number"].isna()
     show = st.radio(
         "Tampilkan",

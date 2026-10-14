@@ -11,7 +11,6 @@ import splink.comparison_library as cl
 
 from . import model_lifecycle
 from .config import (
-    BENCHMARK_RULES,
     LAMBDA_RECALL_ASSUMPTION,
     MATCH_THRESHOLD,
     M_ELSE_LEVEL_FLOOR,
@@ -19,9 +18,13 @@ from .config import (
     RANDOM_SEED,
     REVIEW_THRESHOLD,
     SMOKE_SAMPLE_SIZE,
+    load_benchmark_rules,
+    m_else_floor_for,
     predictions_path,
     scope_of,
     write_meta,
+    atomic_write_parquet,
+    atomic_write_json,
 )
 
 DETERMINISTIC_RULES = [
@@ -29,6 +32,7 @@ DETERMINISTIC_RULES = [
     block_on("phone_std"),
 ]
 
+BENCHMARK_RULES = load_benchmark_rules()
 TRAINING_RULES = [(name, block_on(*cols)) for name, cols in BENCHMARK_RULES]
 
 
@@ -40,12 +44,17 @@ def load_data(full: bool = False) -> pd.DataFrame:
 
 
 def pin_else_level(comparison, output_column_name: str, floor: float):
-    """Rebuild a comparison with its "all other" level's m pinned to `floor`.
+    """Bangun ulang pembanding dengan nilai m tingkat "all other" ditetapkan ke `floor`.
 
-    Without this the level is trained to ~0 and clamped by Splink, which is what
-    collapsed every non-match onto one identical score. Rebuilt through
-    CustomComparison because mutating the objects returned by
-    `create_comparison_levels()` has no effect — they are rebuilt per call.
+    Tanpa ini, tingkat tersebut dilatih hingga ~0 lalu dibatasi oleh Splink,
+    sehingga semua pasangan bukan-kecocokan mendapat skor identik. Pembanding
+    dibangun ulang melalui CustomComparison karena perubahan pada objek hasil
+    `create_comparison_levels()` tidak berpengaruh; objek itu dibangun ulang
+    setiap kali dipanggil.
+
+    Kini `floor` ditetapkan per kolom (M_ELSE_LEVEL_FLOOR_BY_FIELD): batas rendah
+    pada dob dan phone memberi bobot besar pada ketidakcocokannya, sehingga lima
+    kolom yang cocok tidak menutupi dua kolom yang berbeda.
     """
     levels = comparison.create_comparison_levels()
     levels[-1].configure(m_probability=floor, fix_m_probability=True)
@@ -53,11 +62,22 @@ def pin_else_level(comparison, output_column_name: str, floor: float):
 
 
 def build_settings():
-    # (creator, output column, term-frequency adjustment?)
+    # (pembuat, kolom keluaran, penyesuaian frekuensi istilah?)
+    # Penyesuaian TF dipindahkan KE first_name / last_name / email pada
+    # 2026-10-12. Sebelumnya hanya diterapkan pada city / state / country, padahal
+    # nama depan umum ("randy") atau domain email gratis ("gmail.com") merupakan
+    # bukti lemah yang perlu dikurangi bobotnya. Sebaliknya, kecocokan kota yang
+    # persis di antara kota-kota Indonesia sudah kuat dengan sendirinya.
+    #
+    # gender dan signup_date ditambahkan lalu DIHAPUS pada hari yang sama.
+    # Pengukuran pada set 101 ribu baris menunjukkan keduanya tidak mengubah
+    # salah gabung (4.867 -> 4.867) atau jumlah entity campuran (2.603 -> 2.603).
+    # Dua pembanding tambahan yang memperlama pelatihan tanpa manfaat dihapus,
+    # bukan disimpan "untuk nanti".
     specs = [
-        (cl.NameComparison("first_name_std"), "gamma_first_name_std", False),
-        (cl.NameComparison("last_name_std"), "gamma_last_name_std", False),
-        (cl.EmailComparison("email_std"), "gamma_email_std", False),
+        (cl.NameComparison("first_name_std"), "gamma_first_name_std", True),
+        (cl.NameComparison("last_name_std"), "gamma_last_name_std", True),
+        (cl.EmailComparison("email_std"), "gamma_email_std", True),
         (
             cl.JaroWinklerAtThresholds("address_std", [0.95, 0.90, 0.80]),
             "gamma_address_std",
@@ -76,21 +96,30 @@ def build_settings():
 
     comparisons = []
     for creator, output_column, term_frequency in specs:
-        if M_ELSE_LEVEL_FLOOR is None:
+        # Batas per kolom menggunakan nama kolom SUMBER, bukan nama gamma:
+        # prefiks gamma tidak akan cocok dengan kunci
+        # M_ELSE_LEVEL_FLOOR_BY_FIELD.
+        source_col = output_column.removeprefix("gamma_")
+        floor = m_else_floor_for(source_col)
+        if floor is None:
             comparison = creator
         else:
-            comparison = pin_else_level(creator, output_column, M_ELSE_LEVEL_FLOOR)
-        # TF adjustments must be re-applied after the rebuild, so this branch is
-        # written once for both paths rather than duplicated.
+            comparison = pin_else_level(creator, output_column, floor)
+        # Penyesuaian TF harus diterapkan ulang setelah pembangun ulang, jadi
+        # cabang ini ditulis sekali untuk kedua jalur, bukan digandakan.
         if term_frequency:
             comparison = comparison.configure(term_frequency_adjustments=True)
         comparisons.append(comparison)
 
     if M_ELSE_LEVEL_FLOOR is not None:
-        print(f"Pinned 'all other' level m = {M_ELSE_LEVEL_FLOOR} on {len(comparisons)} comparisons")
+        print(
+            f"Pinned 'all other' m on {len(comparisons)} comparisons "
+            f"(default {M_ELSE_LEVEL_FLOOR}, per-field overrides applied)"
+        )
 
-    # Prediction blocking is the benchmarked union: a rule set chosen without
-    # measurement would mean scoring pairs nobody has costed.
+    # Blocking prediksi menggunakan gabungan aturan yang telah di-benchmark.
+    # Tanpa pengukuran, pemilihan aturan dapat membuat sistem memberi skor pada
+    # pasangan yang biayanya belum diketahui.
     prediction_blocks = [block_on(*cols) for _, cols in BENCHMARK_RULES]
 
     return SettingsCreator(
@@ -102,11 +131,12 @@ def build_settings():
 
 
 def add_decision(pred_df: pd.DataFrame) -> pd.DataFrame:
-    """Three-way policy (PRD §7). One column, one place to read it.
+    """Kebijakan tiga arah (PRD §7). Satu kolom sebagai sumber keputusan.
 
-    MATCH above the evaluated threshold, REVIEW in between, NON_MATCH below. The
-    clustering step takes MATCH only, so everything in the REVIEW band is a pair a
-    human must look at — it is deliberately NOT merged.
+    MATCH berada di atas ambang hasil evaluasi, REVIEW di antaranya, dan
+    NON_MATCH di bawahnya. Tahap clustering hanya memakai MATCH, sehingga semua
+    pasangan dalam rentang REVIEW harus diperiksa manusia dan sengaja TIDAK
+    digabungkan.
     """
     out = pred_df.copy()
     out["decision"] = "NON_MATCH"
@@ -115,59 +145,192 @@ def add_decision(pred_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# Kolom yang menjadi prasyarat aturan bisnis, dan satu kolom pemisah.
+BUSINESS_RULE_KEYS = ("email_std", "first_name_std", "last_name_std", "address_std")
+BUSINESS_RULE_DISCRIMINATOR = "dob_std"
+
+# Ambang selisih tanggal lahir yang dianggap "satu tahun" (masih orang yang
+# sama). TERUKUR lewat 153 keputusan peninjau: semua pasangan yang dilabeli
+# "match" punya selisih dob <= 368 hari (median TEPAT 365 hari — pola tahun
+# salah ketik, bulan dan hari tetap sama). 138 dari 143 jatuh di <= 366 hari.
+# > 366 = selisih TEBUS lebih dari satu tahun, terlalu besar untuk langsung
+# digabung.
+DOB_SAME_YEAR_DAYS = 366
+
+# Kolom yang dihitung sebagai "ada yang cocok" untuk aturan nol-bukti.
+# TERVALIDASI pada gold: dari 5 pasangan yang TIDAK ADA satu pun field cocok,
+# kelima-limanya dilabeli manusia sebagai "beda orang", nol sebagai "orang
+# sama". Pada 1 field cocok pun 1.630 vs 5 condong ke beda, tapi 5 kasus
+# "orang sama" di sana membuat aturan 1-field tidak aman — jadi hanya 0-field
+# yang dipaksa.
+ZERO_EVIDENCE_FIELDS = (
+    "email_std", "first_name_std", "last_name_std",
+    "address_std", "phone_std", "dob_std", "city_std",
+)
+
+
+def apply_business_rules(pred_df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
+    """Aturan bisnis domain, tiga arah, semuanya menimpa keputusan model.
+
+    ATURAN 1 — email + nama depan + nama belakang + alamat identik berarti
+    orang yang sama, asalkan tanggal lahirnya juga sama.
+
+    Splink adalah naive Bayes dan overconfident: pasangan dengan email+nama+
+    alamat identik tetap mendapat p = 1.0 walaupun dob berbeda, karena bobot
+    email yang sama persis (log2(m/u) ~ +18,7) menenggelamkan penalti dob.
+    TERUKUR pada 101k: 153 pasangan dengan dob berbeda ikut tergabung.
+
+      email+nama+alamat sama + dob sama     -> paksa MATCH
+      email+nama+alamat sama + dob BEDA
+          atau KOSONG di satu sisi           -> paksa REVIEW
+          DOB bisa saja salah ketik, jadi menolak otomatis sama
+          berbahayanya dengan menggabung salah. Biayanya timpang — salah
+          gabung merusak data selamanya, salah tolak hanya menunda.
+
+    ATURAN 2 — tidak ada satu pun field identitas yang cocok = bukan orang yang
+    sama.
+
+    TERVALIDASI pada gold: dari 5 pasangan yang TIDAK ADA satu pun field cocok
+    (email, nama, alamat, telepon, dob, kota), kelima-limanya dilabeli manusia
+    sebagai "beda orang" — nol yang salah. Pola di gold juga tegas: 0-1 field
+    cocok condong ke "beda orang" (1.635 vs 5), 2+ field condong ke "orang
+    sama" (592 vs 4). Hanya 0-field yang dipaksa, karena di 1-field masih ada
+    5 kasus "orang sama" yang akan hilang.
+
+    Pasangan yang TIDAK memenuhi ketiga kunci persis (mis. alamat beda typo)
+    dibiarkan pada keputusan model — aturan ini sengaja sempit supaya tidak
+    menarik orang yang benar-benar berbeda hanya karena satu field mirip.
+    """
+    out = pred_df.copy()
+    needed = [f"{c}_{s}" for c in (*BUSINESS_RULE_KEYS, BUSINESS_RULE_DISCRIMINATOR)
+              for s in ("l", "r")]
+    missing = [c for c in needed if c not in out.columns]
+    if missing:
+        # Kolom tidak ada (model lama / konfigurasi berbeda). Jangan menebak:
+        # lewati aturan dan katakan, supaya hasil tidak diam-diam berubah.
+        if verbose:
+            print(f"Business rules skipped — columns absent: {missing}")
+        out["business_rule"] = None
+        return out
+
+    keys_same = pd.Series(True, index=out.index)
+    for col in BUSINESS_RULE_KEYS:
+        left, right = out[f"{col}_l"], out[f"{col}_r"]
+        keys_same &= left.notna() & right.notna() & left.eq(right)
+
+    # Aturan 1: dob SAMA atau beda <= 1 tahun (366 hari) dianggap satu orang.
+    # Aturan ini berdasar pengukuran, bukan asumsi: peninjau melabeli 153
+    # pasangan email+nama+alamat identik sebagai "match", dan median selisih
+    # dob-nya TEPAT 365 hari. Beda hingga 1 tahun = salah ketik tahun, bukan
+    # orang kedua.
+    dob_left, dob_right = out[f"{BUSINESS_RULE_DISCRIMINATOR}_l"], out[f"{BUSINESS_RULE_DISCRIMINATOR}_r"]
+    dob_both = dob_left.notna() & dob_right.notna()
+    dob_same = dob_both & dob_left.eq(dob_right)
+
+    dob_within_year = pd.Series(False, index=out.index)
+    if dob_both.any():
+        try:
+            d1 = pd.to_datetime(dob_left[dob_both], errors="coerce")
+            d2 = pd.to_datetime(dob_right[dob_both], errors="coerce")
+            within = (d1 - d2).dt.days.abs() <= DOB_SAME_YEAR_DAYS
+            dob_within_year.loc[dob_both] = within.fillna(False).to_numpy()
+        except (ValueError, TypeError):
+            # Tanggal tidak bisa diparse — anggap tidak bisa diverifikasi.
+            dob_within_year = pd.Series(False, index=out.index)
+
+    # dob beda > 1 tahun ATAU kosong di satu sisi -> tidak bisa diverifikasi
+    # sebagai satu orang -> REVIEW.
+    dob_unverified = keys_same & ~dob_same & ~dob_within_year
+
+    force_match = keys_same & (dob_same | dob_within_year)
+    force_review = dob_unverified
+
+    # ATURAN 2: nol field identitas yang cocok. Perhitungannya dari kolom yang
+    # benar-benar ada, supaya aturan ini ikut bekerja meski satu field hilang.
+    any_agree = pd.Series(False, index=out.index)
+    for col in ZERO_EVIDENCE_FIELDS:
+        left, right = out.get(f"{col}_l"), out.get(f"{col}_r")
+        if left is None or right is None:
+            continue
+        any_agree |= left.notna() & right.notna() & left.eq(right)
+    force_non = ~any_agree
+
+    out["business_rule"] = None
+    out.loc[force_match, "business_rule"] = "same_person_email_name_address"
+    out.loc[force_review, "business_rule"] = "unverified_dob"
+    out.loc[force_non, "business_rule"] = "no_field_agrees"
+    out.loc[force_match, "decision"] = "MATCH"
+    # REVIEW, bukan NON_MATCH: tanpa dob yang bisa dibandingkan kita tidak
+    # punya bukti untuk menolak, dan menolak otomatis tidak bisa dibatalkan.
+    out.loc[force_review, "decision"] = "REVIEW"
+    out.loc[force_non, "decision"] = "NON_MATCH"
+
+    if verbose:
+        print(
+            f"Business rules: {int(force_match.sum()):,} dipaksa MATCH (dob sama), "
+            f"{int(force_review.sum()):,} dipaksa REVIEW (dob beda/kosong), "
+            f"{int(force_non.sum()):,} dipaksa NON_MATCH (nol field cocok)"
+        )
+    return out
+
+
 def train_and_predict(
     df: pd.DataFrame,
     verbose: bool = True,
     model: dict | None = None,
 ) -> tuple[pd.DataFrame, object]:
-    """Score every benchmarked candidate pair, training first unless a model is given.
+    """Beri skor pada semua pasangan kandidat tolok ukur; latih dahulu jika model tidak diberikan.
 
-    Returns (predictions, linker) so the caller can persist a freshly trained
-    model without a second training pass.
+    Kembalikan (predictions, linker) agar pemanggil dapat menyimpan model yang
+    baru dilatih tanpa menjalankan pelatihan untuk kedua kalinya.
 
-    `model` is a saved Splink model dict. Passing one skips all EM training
-    (MASTER_CONTEXT section 15: the model is not retrained every time a new CSV
-    arrives). The returned linker has no trained parameters of its own, so
-    save_model_to_json on it would write an untrained model — callers must only
-    persist the linker from a training run.
+    `model` adalah dict model Splink tersimpan. Jika diberikan, seluruh
+    pelatihan EM dilewati (MASTER_CONTEXT bagian 15: model tidak dilatih ulang
+    setiap kali CSV baru diterima). Linker yang dikembalikan tidak memiliki
+    parameter hasil pelatihan sendiri, sehingga save_model_to_json akan menulis
+    model yang belum dilatih. Pemanggil hanya boleh menyimpan linker dari proses
+    pelatihan.
 
-    Extracted so src/stress_test.py scores corrupted data through the exact same
-    model configuration. A second, hand-written training path there could
-    silently drift from the production one and report a recovery rate for a
-    pipeline that does not exist.
+    Fungsi ini dipisahkan agar src/stress_test.py memberi skor pada data rusak
+    dengan konfigurasi model yang sama persis. Jalur pelatihan kedua yang ditulis
+    manual dapat diam-diam berbeda dari jalur produksi dan melaporkan tingkat
+    pemulihan untuk pipeline yang sebenarnya tidak digunakan.
     """
     if model is not None:
         linker = Linker(df, model, db_api=DuckDBAPI())
         if verbose:
             print("Loaded saved model — skipping EM training (MC section 15).")
-        return add_decision(linker.inference.predict().as_pandas_dataframe()), linker
+        preds = add_decision(linker.inference.predict().as_pandas_dataframe())
+        return apply_business_rules(preds, verbose=verbose), linker
 
     linker = Linker(df, build_settings(), db_api=DuckDBAPI())
 
-    # NOTE: Splink 4.0.17's EM signature has no max_pairs; the training sample
-    # size is determined by the training blocking rule itself.
-    # max_pairs=1e8 is Splink's own recommendation to avoid a too-small u sample.
-    # On a 10k sample it clamps to a full census, i.e. exact u probabilities.
+    # CATATAN: fungsi EM Splink 4.0.17 tidak memiliki argumen max_pairs; ukuran
+    # sampel pelatihan ditentukan oleh aturan blocking pelatihan.
+    # Splink sendiri menyarankan max_pairs=1e8 agar sampel u tidak terlalu kecil.
+    # Pada sampel 10 ribu baris, batas ini mencakup seluruh data sehingga
+    # probabilitas u dihitung secara persis.
     if verbose:
         print("Estimating model parameters with EM...")
-    # Left at the default 1e-4, which is far too low for this data: it made every
-    # non-match collapse to probability 1e-300. Estimate it from the deterministic
-    # rules instead. The recall divisor is an assumption, see LAMBDA_RECALL_ASSUMPTION.
+    # Nilai bawaan 1e-4 terlalu rendah untuk data ini: semua pasangan bukan-
+    # kecocokan menyusut ke probabilitas 1e-300. Perkirakan nilai ini dari aturan
+    # deterministik. Pembagi recall merupakan asumsi; lihat LAMBDA_RECALL_ASSUMPTION.
     linker.training.estimate_probability_two_random_records_match(
         DETERMINISTIC_RULES, recall=LAMBDA_RECALL_ASSUMPTION
     )
     linker.training.estimate_u_using_random_sampling(max_pairs=100_000_000, seed=RANDOM_SEED)
 
-    # EM does not estimate the comparisons used in its own blocking rule, so a
-    # single rule leaves those m values untrained. Run every benchmarked rule so
-    # each comparison is trained by all the others.
+    # EM tidak memperkirakan pembanding yang digunakan oleh aturan blockingnya
+    # sendiri, sehingga satu aturan saja membuat nilai m pembanding tersebut
+    # tidak terlatih. Jalankan setiap aturan yang telah di-benchmark agar semua
+    # pembanding dilatih menggunakan aturan lainnya.
     for name, rule in TRAINING_RULES:
         if verbose:
             print(f"EM on {name}")
         linker.training.estimate_parameters_using_expectation_maximisation(rule)
 
     pred_df = add_decision(linker.inference.predict().as_pandas_dataframe())
-    return pred_df, linker
+    return apply_business_rules(pred_df, verbose=verbose), linker
 
 
 def main() -> None:
@@ -211,15 +374,15 @@ def main() -> None:
     elif args.reuse_model:
         saved = model_lifecycle.load_model_json(args.reuse_model)
         given = Path(args.reuse_model)
-        # A reuse run must still say WHICH model scored it: a null model_version
-        # made evaluate/dashboard report "n/a" for the artifact that produced the
-        # current entity_map.
+        # Proses penggunaan ulang tetap harus mencatat model MANA yang memberi
+        # skor. model_version kosong membuat evaluate/dashboard menampilkan "n/a"
+        # untuk artefak pembentuk entity_map saat ini.
         reused_from = given.name if given.is_dir() else given.parent.name
 
     pred_df, linker = train_and_predict(df, model=saved)
     out_path = predictions_path(full=args.full)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    pred_df.to_parquet(out_path, index=False)
+    atomic_write_parquet(pred_df, out_path)
 
     runtime = round(time.perf_counter() - started, 2)
     meta_extra = {
@@ -230,9 +393,10 @@ def main() -> None:
         "runtime_seconds": runtime,
     }
 
-    # Every training run gets an immutable version directory (MASTER_CONTEXT
-    # section 16). A reuse run has nothing new to persist: saving the untrained
-    # linker would overwrite the lineage with a model that has no parameters.
+    # Setiap pelatihan mendapat direktori versi yang tidak dapat diubah
+    # (bagian 16 MASTER_CONTEXT). Proses penggunaan ulang tidak menghasilkan
+    # apa pun yang perlu disimpan: menyimpan linker yang tidak dilatih akan
+    # menimpa catatan asal-usul dengan model tanpa parameter.
     version = None
     if saved is None:
         version = model_lifecycle.save_version(

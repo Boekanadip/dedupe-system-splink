@@ -1,16 +1,16 @@
-"""Close the gold-review loop: promote -> feedback -> apply -> recluster -> evaluate.
+"""Tuntaskan siklus peninjauan label acuan: promosikan -> umpan balik -> terapkan -> kelompokkan ulang -> evaluasi.
 
-Run this AFTER filling labels in pages/1_review.py. It chains the steps that
-otherwise have to be run one by one, in the order run_all uses, and stops at
-the first failure.
+Jalankan SETELAH mengisi label di pages/1_review.py. Modul ini menjalankan
+serangkaian langkah yang biasanya harus dijalankan satu per satu, mengikuti
+urutan run_all, dan berhenti jika terjadi kegagalan pertama.
 
-    python -m src.close_gold_loop                 # promote + feedback only
-    python -m src.close_gold_loop --apply         # + apply gold to decisions
-    python -m src.close_gold_loop --all           # apply + recluster + evaluate
-    python -m src.close_gold_loop --all --dry-run # print the commands only
+    python -m src.close_gold_loop                 # hanya promosikan + umpan balik
+    python -m src.close_gold_loop --apply         # + terapkan label gold ke keputusan
+    python -m src.close_gold_loop --all           # terapkan + kelompokkan ulang + evaluasi
+    python -m src.close_gold_loop --all --dry-run # hanya tampilkan perintah
 
-promote is safe on an empty queue: promote_gold() refuses to overwrite
-gold_labels.csv when nothing is labelled (src/labels.py).
+Perintah promosi aman untuk antrean kosong: promote_gold() menolak menimpa
+gold_labels.csv jika belum ada label (src/labels.py).
 """
 from __future__ import annotations
 
@@ -26,10 +26,6 @@ def run(cmd: list[str], dry_run: bool) -> None:
     print(f"\n== {' '.join(cmd)}")
     if dry_run:
         return
-    # encoding is required: without it this file captured scenario_eval's output,
-    # which prints "→", the decoder thread died, and `result.stdout` was None —
-    # so `sys.stdout.write(None)` raised TypeError and the loop stopped after
-    # evaluate instead of finishing. errors="replace" keeps it total.
     result = subprocess.run(
         cmd, cwd=ROOT, text=True, capture_output=True,
         encoding="utf-8", errors="replace",
@@ -56,17 +52,17 @@ def main() -> None:
     do_recluster = args.recluster or args.all or args.evaluate
     do_eval = args.evaluate or args.all
 
-    # 1. Reviewed queue/FP-sample -> gold_labels.csv (append semantics)
+    # 1. Antrean/sampel positif palsu yang ditinjau -> gold_labels.csv (ditambahkan)
     run([sys.executable, "-m", "src.labels", "--promote"], args.dry_run)
-    # 2. Reviewed pairs -> feedback.csv (append-only, keyed pair_id+model_version)
+    # 2. Pasangan yang ditinjau -> feedback.csv (hanya ditambahkan, kunci pair_id+model_version)
     run([sys.executable, "-m", "src.feedback"], args.dry_run)
-    # 3. Gold -> decisions (guarded; blocked pairs are reported, not forced)
+    # 3. Label acuan -> keputusan (dengan pengaman; pasangan terblokir dilaporkan, tidak dipaksakan)
     if do_apply:
         cmd = [sys.executable, "-m", "src.apply_gold", "--apply"]
         if do_recluster:
             cmd.append("--recluster")
         run(cmd, args.dry_run)
-    # 4. Evaluation layers after the decision changes
+    # 4. Lapisan evaluasi setelah keputusan berubah
     if do_eval:
         run([sys.executable, "-m", "src.evaluate"], args.dry_run)
         run([sys.executable, "-m", "src.scenario_eval"], args.dry_run)

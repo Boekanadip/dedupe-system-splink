@@ -1,22 +1,23 @@
-"""Model/configuration versioning (PRD FR-13, MASTER_CONTEXT section 16).
+"""Pembuatan versi model/konfigurasi (PRD FR-13, bagian 16 MASTER_CONTEXT).
 
-MASTER_CONTEXT fixes the layout, so this module writes exactly that:
+MASTER_CONTEXT menetapkan struktur berkas, sehingga modul ini menulis sesuai
+struktur tersebut:
 
     models/v20260930_141500/
-        model.json        trained Splink model
-        metadata.json     what it was trained on
-        thresholds.json   the decision policy it was evaluated under
-        evaluation.json   what it scored, on what labels
+        model.json        model Splink yang telah dilatih
+        metadata.json     data yang digunakan untuk melatihnya
+        thresholds.json   kebijakan keputusan yang dievaluasi
+        evaluation.json   hasil skor dan label yang digunakan
 
-MC section 15: "The model should NOT be retrained every time a new CSV
-arrives." A model that is never persisted cannot be reused, cannot be compared
-against a retrained version, and cannot be attributed when a reviewer's label is
-recorded. Saving is therefore the first half of that requirement; reusing it
-(FR-14) is the second and needs this to exist first.
+Bagian 15 MC: "Model TIDAK boleh dilatih ulang setiap kali CSV baru diterima."
+Model yang tidak pernah disimpan tidak dapat digunakan kembali, dibandingkan
+dengan versi hasil pelatihan ulang, atau dikaitkan dengan label peninjau yang
+dicatat. Karena itu, penyimpanan memenuhi bagian pertama persyaratan tersebut;
+penggunaan kembali (FR-14) adalah bagian kedua dan bergantung pada penyimpanan.
 
-MC section 16: "Never silently overwrite a previously validated production
-model." Every run therefore gets its own directory, and `latest.json` is a
-pointer, not a copy.
+Bagian 16 MC: "Jangan pernah menimpa model produksi yang telah divalidasi tanpa
+pemberitahuan." Karena itu, setiap proses mendapat direktorinya sendiri dan
+`latest.json` berfungsi sebagai penunjuk, bukan salinan.
 """
 
 from __future__ import annotations
@@ -28,22 +29,25 @@ from pathlib import Path
 import pandas as pd
 
 from .config import (
-    BENCHMARK_RULES,
     LAMBDA_RECALL_ASSUMPTION,
     M_ELSE_LEVEL_FLOOR,
+    M_ELSE_LEVEL_FLOOR_BY_FIELD,
     MATCH_THRESHOLD,
     OUTPUT_DIR,
     PROCESSED_DATA_PATH,
     PROJECT_ROOT,
     RANDOM_SEED,
     REVIEW_THRESHOLD,
+    atomic_write_parquet,
+    atomic_write_json,
+    load_benchmark_rules,
 )
 
 MODELS_DIR = PROJECT_ROOT / "models"
 LATEST_POINTER = MODELS_DIR / "latest.json"
 
-# The four artifacts MASTER_CONTEXT section 16 names. A version directory
-# missing any of them is not a reviewable model version.
+# Empat artefak yang disebut pada bagian 16 MASTER_CONTEXT. Direktori versi yang
+# tidak memiliki salah satunya belum layak ditinjau sebagai versi model.
 REQUIRED_FILES = ("model.json", "metadata.json", "thresholds.json", "evaluation.json")
 
 
@@ -62,12 +66,12 @@ def save_version(
     runtime_seconds: float,
     extra_metadata: dict | None = None,
 ) -> Path:
-    """Write one immutable model version and return its directory.
+    """Simpan satu versi model yang tidak dapat diubah dan kembalikan direktorinya.
 
-    A sample run is saved but never becomes the active model: `latest` is what
-    inference, the dashboard and incremental scoring read, and a 10k sample
-    version pointing at it would replace the full-scope model that 51,555
-    records were resolved with.
+    Proses sampel disimpan, tetapi tidak pernah menjadi model aktif: inferensi,
+    dasbor, dan pemberian skor inkremental membaca `latest`. Jika diarahkan ke
+    versi sampel 10 ribu baris, model cakupan penuh yang digunakan untuk
+    menyelesaikan 51.555 catatan akan tergantikan.
     """
     created = datetime.now()
     vid = version_id(created)
@@ -75,7 +79,7 @@ def save_version(
     target.mkdir(parents=True, exist_ok=True)
 
     model_json = linker.misc.save_model_to_json()
-    (target / "model.json").write_text(json.dumps(model_json, indent=2), encoding="utf-8")
+    atomic_write_json(model_json, target / "model.json")
 
     decisions = (
         pred_df["decision"].value_counts().to_dict()
@@ -89,25 +93,26 @@ def save_version(
         "scope": scope,
         "input_rows": extra_metadata.get("input_rows") if extra_metadata else None,
         "pairs_scored": total,
-        "blocking_rules": [name for name, _ in BENCHMARK_RULES],
+        "blocking_rules": [name for name, _ in load_benchmark_rules()],
         "lambda_recall_assumption": LAMBDA_RECALL_ASSUMPTION,
         "m_else_level_floor": M_ELSE_LEVEL_FLOOR,
+        "m_else_level_floor_by_field": M_ELSE_LEVEL_FLOOR_BY_FIELD,
         "random_seed": RANDOM_SEED,
         "splink_version": extra_metadata.get("splink_version") if extra_metadata else None,
         "runtime_seconds": runtime_seconds,
         **(extra_metadata or {}),
     }
-    (target / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    atomic_write_json(metadata, target / "metadata.json")
 
-    # Thresholds live beside the model because a score without its decision policy
-    # is not reproducible. Reviewing v1 under v2's thresholds would silently
-    # change what MATCH means.
+    # Ambang disimpan bersama model karena skor tanpa kebijakan keputusan tidak
+    # dapat direproduksi. Meninjau v1 dengan ambang v2 akan diam-diam mengubah
+    # arti MATCH.
     thresholds = {
         "match_threshold": MATCH_THRESHOLD,
         "review_threshold": REVIEW_THRESHOLD,
         "policy": "P >= match -> MATCH; review <= P < match -> REVIEW; P < review -> NON_MATCH",
     }
-    (target / "thresholds.json").write_text(json.dumps(thresholds, indent=2), encoding="utf-8")
+    atomic_write_json(thresholds, target / "thresholds.json")
 
     evaluation = {
         "version": vid,
@@ -122,7 +127,7 @@ def save_version(
             "against the label source that produced them."
         ),
     }
-    (target / "evaluation.json").write_text(json.dumps(evaluation, indent=2), encoding="utf-8")
+    atomic_write_json(evaluation, target / "evaluation.json")
 
     if scope != "sample":
         LATEST_POINTER.write_text(
@@ -140,7 +145,7 @@ def save_version(
 
 
 def load_model_json(path: Path | str) -> dict:
-    """Read a saved model for inference without retraining (FR-14)."""
+    """Muat model tersimpan untuk inferensi tanpa melatih ulang (FR-14)."""
     path = Path(path)
     if path.is_dir():
         path = path / "model.json"
