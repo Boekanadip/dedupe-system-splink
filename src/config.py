@@ -252,6 +252,7 @@ def pipeline_locked() -> dict | None:
 
 COLUMN_MAP = {
     "customer_id": "customer_id",
+    "client_id": "client_id",
     "first_name": "first_name",
     "last_name": "last_name",
     "email": "email",
@@ -332,7 +333,8 @@ M_ELSE_LEVEL_FLOOR_BY_FIELD: dict[str, float] = {
     "first_name_std": 0.02,  # nama bisa salah ketik / ganti
     "last_name_std": 0.02,
     "address_std": 0.02,     # alamat bisa pindah
-    # city/state/country sengaja TIDAK di-override: memang sering kosong/salah.
+    "state_std": 0.02,       # state bisa pindah; log2(m/u)=50 → bukan penolak kuat
+    # city/country sengaja TIDAK di-override: memang sering kosong/salah.
 }
 
 

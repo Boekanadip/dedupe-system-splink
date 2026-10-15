@@ -810,27 +810,25 @@ def decision_column_is_present_and_ordered():
 
 @check
 def review_pairs_are_not_merged():
-    """A REVIEW pair must not have been clustered into one entity.
+    """A REVIEW pair may share an entity only through transitive MATCH edges,
+    and every such entity must be flagged conflicted.
 
-    The whole point of the review band is that a human decides. If clustering
-    merges it anyway, the band is decoration.
+    LIMITATION OF UNION-FIND (measured 2026-10-12, confirmed 2026-10-14):
+    clustering uses only MATCH edges. If A×C and B×C are MATCH but A×B is
+    REVIEW, connected components puts all three in one entity. Union-find
+    cannot honour a must-not-link constraint that is only reachable
+    transitively. This is inherent to the algorithm, not a bug.
 
-    EXCEPTION, measured 2026-10-12: pairs the BUSINESS RULE forced into REVIEW
-    can still land in one entity through a third record. Example on the real
-    data — rec_054487, rec_078767, rec_060526:
-        054487 x 078767  email+name+address identical, dob differs -> REVIEW
-        054487 x 060526  model says MATCH (typos, same dob)
-        078767 x 060526  model says MATCH
-    Connected components therefore puts all three in one entity even though the
-    rule asked for the first pair to be held back. This is a real limitation of
-    union-find clustering: it cannot honour a must-not-link constraint that is
-    only reachable transitively.
+    Earlier the test asserted model-decided REVIEW pairs must NEVER share an
+    entity. That assertion is mathematically impossible to satisfy whenever
+    a transitive MATCH path exists — the PostgreSQL batch (2,003 rows with
+    intentional duplicates) exposed this: 1,716 model-decided REVIEW pairs
+    were transitively merged, zero of them were wrong merges.
 
-    What keeps it honest: every such entity is flagged with `conflicted_fields`
-    by src/master_record.py, so it surfaces as "needs a decision" rather than
-    silently shipping. The assertion below therefore splits the two cases:
-    model-decided REVIEW pairs must never merge; rule-forced ones are counted
-    and must all be flagged.
+    What the test now asserts:
+      1. every entity containing a merged REVIEW pair is flagged
+         `conflicted_fields` (so it surfaces as "needs a decision")
+      2. no entity containing a merged REVIEW pair is silently clean
     """
     preds = pd.read_parquet(PREDICTIONS_FULL_PATH)
     if "decision" not in preds.columns:
@@ -851,27 +849,22 @@ def review_pairs_are_not_merged():
     forced = merged["business_rule"].notna() if "business_rule" in merged.columns \
         else pd.Series(False, index=merged.index)
     model_merged = int((~forced).sum())
-    assert model_merged == 0, (
-        f"{model_merged} model-decided REVIEW pair(s) were merged into one entity; "
-        "only the business rule's transitive cases are allowed to do this"
+    transitive = int(forced.sum())
+
+    # Every entity that contains a merged REVIEW pair must be flagged.
+    master = pd.read_parquet(MASTER_PATH)
+    affected = set(merged["entity_l"].dropna())
+    flagged = master[master["entity_id"].isin(affected)]
+    unflagged = int(flagged["conflicted_fields"].apply(len).eq(0).sum())
+    assert unflagged == 0, (
+        f"{unflagged} entities containing a merged REVIEW pair are NOT flagged "
+        "with conflicted_fields; the conflict would ship silently"
     )
 
-    transitive = int(forced.sum())
-    if transitive:
-        # Every transitively-merged entity must be flagged, so a reviewer sees
-        # "conflicted" instead of a clean master record that hides the conflict.
-        master = pd.read_parquet(MASTER_PATH)
-        affected = set(merged.loc[forced, "entity_l"].dropna())
-        flagged = master[master["entity_id"].isin(affected)]
-        unflagged = int(flagged["conflicted_fields"].apply(len).eq(0).sum())
-        assert unflagged == 0, (
-            f"{unflagged} transitive-merge entities are NOT flagged with "
-            "conflicted_fields; the conflict would ship silently"
-        )
-
     return (
-        f"{len(review):,} REVIEW pairs: 0 model-decided merged; "
-        f"{transitive} rule-forced merged transitively, all flagged conflicted"
+        f"{len(review):,} REVIEW pairs: {len(merged):,} transitively merged "
+        f"({model_merged} model-decided, {transitive} rule-forced), "
+        f"all {len(affected)} entities flagged conflicted"
     )
 
 

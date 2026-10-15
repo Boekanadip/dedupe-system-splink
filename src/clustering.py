@@ -21,6 +21,7 @@ from .config import (
     active_path,
     atomic_write_csv,
 )
+from .model_lifecycle import latest as _model_latest
 
 CLUSTER_SUMMARY_PATH = OUTPUT_DIR / "cluster_summary.csv"
 
@@ -160,6 +161,14 @@ def main() -> None:
     entity_map["entity_id"] = entity_map["record_id"].map(entity_ids)
     atomic_write_parquet(entity_map, ENTITY_MAP_PATH)
 
+    # Provenance: record which model version produced these clusters so a
+    # stale entity_map can never masquerade behind a newer model.
+    model_version = None
+    preds_meta = read_meta(active_path(predictions_path(full=args.full)))
+    model_version = preds_meta.get("model_version") or (
+        _model_latest().name if _model_latest() else None
+    )
+
     sizes = entity_map.groupby("entity_id").size()
     summary = {
         "records": len(entity_map),
@@ -174,6 +183,7 @@ def main() -> None:
         "unscored_records": unscored,
         "threshold": MATCH_THRESHOLD,
         "scope": scope_of(args.full),
+        "model_version": model_version,
         "runtime_seconds": round(time.perf_counter() - started, 2),
     }
     atomic_write_csv(pd.DataFrame([summary]), CLUSTER_SUMMARY_PATH)

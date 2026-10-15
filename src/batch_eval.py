@@ -72,7 +72,6 @@ def main() -> None:
         (comparison["entity_id_baseline"] != comparison["entity_id_combined"]).sum()
     )
 
-
     base_membership = baseline.set_index("record_id")["entity_id"].to_dict()
     comb_membership = combined.set_index("record_id")["entity_id"].to_dict()
     drifted = sum(
