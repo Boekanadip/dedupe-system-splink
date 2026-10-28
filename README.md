@@ -11,7 +11,7 @@ Secara garis besar:
 ---
 ## Installation & Setup
 
-1. **Prerequisites**  
+1. **Persyaratan**  
    - Python 3.9 or newer  
    - Git (opsional, untuk clone repo)  
    - Docker (opsional, jika ingin jalankan PostgreSQL + API + UI sekaligus)
