@@ -8,8 +8,6 @@ Pipeline utama:
 
 <img width="1720" height="3660" alt="Image" src="https://github.com/user-attachments/assets/e1488efd-203f-44c1-a865-bfc1082ee8a9" />
 
-Dibangun menggunakan **Python, Splink, DuckDB, Pandas, PyArrow, dan Streamlit**.
-
 ---
 
 ## 0. Workflow Lengkap Sistem Entity Resolution
