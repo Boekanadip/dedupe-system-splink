@@ -41,65 +41,81 @@ make predict        # batch prediction
 make api            # FastAPI di http://localhost:8000
 make ui             # Streamlit di http://localhost:8501
 make test           # run all tests
-6. ** Struktur folder & kegunaan file**  
-/ (root repo)
-├── .gitignore                # mengabaikan .env, .venv, outputs, models, dsb.
-├── .env.example              # template variabel environment (tidak menyimpan password)
-├── Dockerfile.api            # Dockerfile untuk service FastAPI
-├── Dockerfile.ui             # Dockerfile untuk service Streamlit
-├── docker-compose.yml        # menjalankan PostgreSQL, API, UI dalam satu perintah
-├── Makefile                  # pintasan: make start, make train, make predict, make api, make ui, make test
-├── quickstart.ps1            # script Windows: setup venv + start semua service
-├── stop.ps1                  # script untuk menghentikan semua service
-├── README.md                 # file ini
+## 6. Struktur Folder dan Kegunaan File
+
+Berikut struktur direktori repository beserta fungsi setiap file dan folder utama.
+
+```text
+/
+├── .gitignore
+├── .env.example
+├── Dockerfile.api
+├── Dockerfile.ui
+├── docker-compose.yml
+├── Makefile
+├── quickstart.ps1
+├── stop.ps1
+├── README.md
 │
 ├── src/
 │   ├── __init__.py
-│   ├── config.py             # blocking rules, thresholds, & schema validation minimal
-│   ├── db.py                 # koneksi PostgreSQL (membaca .env)
-│   ├── standardize.py        # mapping kolom & standarisasi (lowercase, phone, email)
-│   ├── splink_model.py       # training & inference Splink (EM algorithm)
-│   └── validate_upload.py    # validasi kolom minimal: first_name + last_name + (email or phone)
+│   ├── config.py
+│   ├── db.py
+│   ├── standardize.py
+│   ├── splink_model.py
+│   └── validate_upload.py
 │
 ├── scripts/
-│   ├── batch_predict.py      # jalankan pipeline lengkap dari CSV ke output
-│   └── run_pipeline.py       # alternative entry point
+│   ├── batch_predict.py
+│   └── run_pipeline.py
 │
 ├── api/
-│   └── app.py                # FastAPI endpoint (/predict, /matches, /health)
+│   └── app.py
 │
 ├── ui/
-│   └── app.py                # Streamlit dashboard (overview, review queue, master records)
+│   └── app.py
 │
 ├── pages/
-│   ├── 1_review.py           # human review pasangan satu‑satu
-│   ├── 5_queue.py            # daftar pasangan REVIEW yang pending
-│   ├── 6_batch.py            # review batch sebelum digabung ke master
-│   └── upload.py             # UI upload CSV
+│   ├── 1_review.py
+│   ├── 5_queue.py
+│   ├── 6_batch.py
+│   └── upload.py
 │
 ├── tests/
 │   ├── __init__.py
-│   ├── conftest.py           # fixture database untuk test
-│   ├── test_schema_validation.py   # test kasus kolom wajib minimal
+│   ├── conftest.py
+│   ├── test_schema_validation.py
 │   ├── test_system.py
 │   └── test_verification.py
 │
 ├── data/
-│   ├── raw/                  # CSV mentah yang diupload user
-│   ├── processed/            # parquet setelah standardisasi
-│   └── labels/               # feedback.csv & gold_labels.csv
+│   ├── raw/
+│   ├── processed/
+│   └── labels/
 │
 ├── outputs/
-│   ├── master_customers.parquet   # master record (satu baris per entity)
-│   ├── entity_map.parquet         # mapping record_id → entity_id
-│   └── splink_predictions.parquet # semua pasangan dengan skor
+│   ├── master_customers.parquet
+│   ├── entity_map.parquet
+│   └── splink_predictions.parquet
 │
-├── docs/
-│   ├── prd.md                  # product requirements (asli)
-│   ├── design.md               # desain sistem
-│   └── agents.md               # dokumentasi skill AI
-│
-└── outputs/                  # (file hasil generate, biasanya di‑gitignore)
+└── docs/
+    ├── prd.md
+    ├── design.md
+    └── agents.md
+```
+
+### Fungsi File dan Direktori
+
+#### File konfigurasi dan operasional
+
+| File | Fungsi |
+|---|---|
+| `.gitignore` | Menentukan file dan direktori yang tidak dilacak Git, seperti `.env`, `.venv`, serta artefak hasil generate yang dikecualikan. |
+| `.env.example` | Template variabel environment untuk konfigurasi aplikasi tanpa menyertakan kredensial asli. |
+| `Dockerfile.api` | Instruksi untuk membangun image Docker service FastAPI. |
+| `Dockerfile.ui` | Instruksi untuk membangun image Docker service Streamlit. |
+| `docker-compose.yml` | Mengatur service PostgreSQL, API, dan UI melalui Docker Compose. |
+| `Makefile` | Menyediakan pintasan perintah untuk menjalankan
 7. **Point‑point penting (ringkas)**  
 - **Schema validation fleksibel**: hanya `first_name` & `last_name` wajib; harus ada **salah satu** dari `email` **atau** `phone`. Kolom lainnya opsional.  
 - **Blocking rules**: 14 aturan di `src/config.py` mengurangi kandidat dari O(N²) menjadi ratusan ribu.  
