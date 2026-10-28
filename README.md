@@ -1,6 +1,6 @@
 # System Dedupe with Splink
 
-### Probabilistic Record Linkage menggunakan Splink, DuckDB, dan Streamlit
+### Probabilistic Record Linkage menggunakan Splink
 
 Sistem **CRM Entity Resolution & Deduplication** untuk mendeteksi, mengevaluasi, dan mengelola duplikasi data pelanggan menggunakan pendekatan *probabilistic record linkage*.
 
