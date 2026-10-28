@@ -120,9 +120,9 @@ Berikut struktur direktori repository beserta fungsi setiap file dan folder utam
 - **Schema validation fleksibel**: hanya `first_name` & `last_name` wajib; harus ada **salah satu** dari `email` **atau** `phone`. Kolom lainnya opsional.  
 - **Blocking rules**: 14 aturan di `src/config.py` mengurangi kandidat dari O(N²) menjadi ratusan ribu.  
 - **Decision threshold**:  
-- `>= 0.95` → **AUTO MATCH** ( langsung dimasukkan cluster)  
-- `<= 0.01` → **AUTO NON_MATCH** (disimpan untuk audit, **tidak dibuang**)  
-- `0.01 – 0.95` → **REVIEW MANUAL** (butuh konfirmasi manusia)
+- `>= 0.84` → **AUTO MATCH** ( langsung dimasukkan cluster)  
+- `<= 0.35` → **AUTO NON_MATCH** (disimpan untuk audit, **tidak dibuang**)  
+- `0.35 – 0.84` → **REVIEW MANUAL** (butuh konfirmasi manusia)
 - **Human review**: opsional, hasil disimpan di `data/labels/feedback.csv` & `gold_labels.csv`.  
 - **Monitoring & retrain**: metrik match/review rate, alert saat threshold dilanggar, retrain harian/mingguan atau manual via `pages/4_retrain.py`.
 8. **Langkah selanjutnya**  
