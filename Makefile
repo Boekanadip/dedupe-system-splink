@@ -1,4 +1,4 @@
-.PHONY: help start stop clean train predict api ui monitor setup
+.PHONY: help setup start stop train predict api ui monitor test clean docker-build docker-up docker-down
 
 help:
 	@echo "CRM Entity Resolution System"
@@ -12,12 +12,16 @@ help:
 	@echo "  make api        - Start FastAPI server"
 	@echo "  make ui         - Start Streamlit UI"
 	@echo "  make monitor    - Run metrics collection"
+	@echo "  make test       - Run all tests"
 	@echo "  make clean      - Clean up temporary files"
+	@echo "  make docker-up  - Start all services with Docker Compose"
+	@echo "  make docker-down- Stop all Docker services"
 
 setup:
 	python -m venv .venv
 	.venv\Scripts\pip install --upgrade pip
 	.venv\Scripts\pip install -r requirements.txt
+	.venv\Scripts\pip install -r requirements-dev.txt
 
 start:
 	docker-compose up -d
@@ -40,7 +44,16 @@ ui:
 monitor:
 	.venv\Scripts\python monitor\metrics.py
 
+test:
+	.venv\Scripts\pytest tests\ -v
+
 clean:
 	rmdir /s /q __pycache__ .pytest_cache 2>nul
 	del /q outputs\*.tmp 2>nul
 	del /q outputs\.pipeline_running 2>nul
+
+docker-up:
+	docker-compose up -d
+
+docker-down:
+	docker-compose down

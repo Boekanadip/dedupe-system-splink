@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # CRM Entity Resolution System - Quick Start Script (Windows)
 # Usage: .\quickstart.ps1
 
@@ -13,27 +15,25 @@ try {
         Write-Host "ERROR: Docker not running. Please start Docker Desktop." -ForegroundColor Red
         exit 1
     }
-} catch {
-    Write-Host "ERROR: Docker not found. Please install Docker Desktop." -ForegroundColor Red
-    exit 1
 }
-
-Write-Host "[1/6] Checking Docker containers..." -ForegroundColor Yellow
 
 # Check if crm-pg exists
 $pgContainer = docker ps -a -f "name=crm-pg" --format "{{.Names}}"
 if ($pgContainer -ne "crm-pg") {
-    Write-Host "Creating crm-pg container..." -ForegroundColor Yellow
-    docker run -d `
-        --name crm-pg `
-        -e POSTGRES_DB=crm `
-        -e POSTGRES_USER=crm_user `
-        -e POSTGRES_PASSWORD=crm_password_2026 `
-        -p 5432:5432 `
-        postgres:17-alpine
-} elseif ($pgContainer -eq "crm-pg" -and (docker ps -f "name=crm-pg" --format "{{.Names}}") -ne "crm-pg") {
-    Write-Host "Starting existing crm-pg container..." -ForegroundColor Yellow
-    docker start crm-pg
+    if (docker ps -aq -f status=exited -f name=crm-pg) {
+        Write-Host "Starting existing crm-pg container..."
+        docker start crm-pg
+    } else {
+        Write-Host "Creating crm-pg container..." -ForegroundColor Yellow
+        docker run -d `
+            --name crm-pg `
+            -e POSTGRES_DB=crm `
+            -e POSTGRES_USER=crm_user `
+            -e POSTGRES_PASSWORD=crm_password_2026 `
+            -p 5432:5432 `
+            -v postgres_data:/var/lib/postgresql/data `
+            postgres:17-alpine
+    fi
 }
 
 # Wait for PostgreSQL to be ready
@@ -54,17 +54,9 @@ if (-not $pgReady) {
 Write-Host "PostgreSQL is ready!" -ForegroundColor Green
 
 Write-Host ""
-Write-Host "[2/6] Setting up Python environment..." -ForegroundColor Yellow
+Write-Host "[1/6] Setting up Python environment..." -ForegroundColor Yellow
 
-# Check Python version
-$pythonVersion = python --version 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Python not found." -ForegroundColor Red
-    exit 1
-}
-Write-Host "Found: $pythonVersion" -ForegroundColor Gray
-
-# Create virtual environment
+# Create virtual environment if needed
 if (-not (Test-Path ".venv")) {
     Write-Host "Creating virtual environment..." -ForegroundColor Yellow
     python -m venv .venv
@@ -74,7 +66,7 @@ if (-not (Test-Path ".venv")) {
 Write-Host "Installing dependencies..." -ForegroundColor Yellow
 .venv\Scripts\pip install --upgrade pip
 .venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\pip install python-dotenv requests
+.venv\Scripts\pip install -r requirements-dev.txt
 
 Write-Host ""
 Write-Host "[3/6] Training Splink model..." -ForegroundColor Yellow
@@ -102,12 +94,15 @@ Start-Sleep -Seconds 3
 
 # Verify API is running
 try {
-    $response = Invoke-WebRequest -Uri "http://localhost:8000/health" -UseBasicParsing -TimeoutSec 5
-    if ($response.StatusCode -eq 200) {
+    curl -s http://localhost:8000/health > $null
+    if ($LASTEXITCODE -eq 0) {
         Write-Host "API is running on http://localhost:8000" -ForegroundColor Green
+    } else {
+        Write-Host "WARNING: API may not be running. Check /tmp/api.log" -ForegroundColor Yellow
     }
 } catch {
-    Write-Host "WARNING: API may not be running. Check /tmp/api.log" -ForegroundColor Yellow
+    Write-Host "ERROR: Failed to start API" -ForegroundColor Red
+    exit 1
 }
 
 Write-Host ""
