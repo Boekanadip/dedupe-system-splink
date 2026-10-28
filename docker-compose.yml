@@ -13,11 +13,14 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U crm_user -d crm"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - crm-network
 
   crm-api:
     build:
@@ -33,11 +36,14 @@ services:
       - POSTGRES_DB=crm
       - POSTGRES_USER=crm_user
       - POSTGRES_PASSWORD=crm_password_2026
+      - API_URL=http://localhost:8000
     depends_on:
       crm-pg:
         condition: service_healthy
     volumes:
       - ./outputs:/app/outputs
+    networks:
+      - crm-network
 
   crm-ui:
     build:
@@ -51,8 +57,12 @@ services:
       - API_URL=http://crm-api:8000
     depends_on:
       - crm-api
-    volumes:
-      - ./ui:/app/ui
+    networks:
+      - crm-network
 
 volumes:
   postgres_data:
+
+networks:
+  crm-network:
+    driver: bridge
