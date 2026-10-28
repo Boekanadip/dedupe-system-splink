@@ -1,9 +1,4 @@
-"""Halaman cakupan antrean pemeriksaan.
-
-Antrean pemeriksaan hanya sampel dari ribuan pasangan yang perlu diperiksa.
-Halaman ini menampilkan seluruhnya, lalu menunjukkan pasangan mana yang sudah
-masuk antrean dan mana yang belum, supaya bisa langsung dikerjakan.
-"""
+"""Halaman cakupan antrean pemeriksaan"""
 
 from __future__ import annotations
 
@@ -108,11 +103,10 @@ st.caption(
     "data asli apa pun."
 )
 
-BULK_ADD_CAP = 200
+BULK_ADD_CAP = 5000
 
 st.caption(
-    f"⚠ Maksimal **{BULK_ADD_CAP} pasangan per klik**, diurutkan dari peluang "
-    "tertinggi. Ini disengaja supaya antrean tetap bisa diselesaikan manusia."
+    f"Maksimal **{BULK_ADD_CAP} pasangan per klik**, diurutkan dari peluang tertinggi"
 )
 
 bulk_pool = filtered.sort_values("match_probability", ascending=False).head(BULK_ADD_CAP)

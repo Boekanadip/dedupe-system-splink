@@ -8,12 +8,14 @@ import pandas as pd
 import splink
 from splink import DuckDBAPI, Linker, SettingsCreator, block_on
 import splink.comparison_library as cl
+from splink.comparison_level_library import CustomLevel, ElseLevel
 
 from . import model_lifecycle
 from .config import (
     LAMBDA_RECALL_ASSUMPTION,
-    MATCH_THRESHOLD,
     M_ELSE_LEVEL_FLOOR,
+    CONTACT_M_PROB,
+    MATCH_THRESHOLD,
     PROCESSED_DATA_PATH,
     RANDOM_SEED,
     REVIEW_THRESHOLD,
@@ -22,106 +24,282 @@ from .config import (
     m_else_floor_for,
     predictions_path,
     scope_of,
+    active_path,
     write_meta,
-    atomic_write_parquet,
     atomic_write_json,
+    atomic_write_parquet,
 )
+
+
+def build_name_comparison() -> cl.CustomComparison:
+    """Nama: ejaan persis (kuat) + fonetik + fuzzy typo + Else (lemah)."""
+    both_null = (
+        "(first_name_std_l IS NULL OR last_name_std_l IS NULL) "
+        "AND (first_name_std_r IS NULL OR last_name_std_r IS NULL)"
+    )
+    exact = (
+        "first_name_std_l IS NOT NULL AND first_name_std_r IS NOT NULL "
+        "AND first_name_std_l = first_name_std_r "
+        "AND last_name_std_l IS NOT NULL AND last_name_std_r IS NOT NULL "
+        "AND last_name_std_l = last_name_std_r"
+    )
+    phonetic = (
+        "phonetic_first_name_l IS NOT NULL AND phonetic_first_name_r IS NOT NULL "
+        "AND phonetic_last_name_l IS NOT NULL AND phonetic_last_name_r IS NOT NULL "
+        "AND phonetic_first_name_l = phonetic_first_name_r "
+        "AND phonetic_last_name_l = phonetic_last_name_r"
+    )
+    # Fuzzy match untuk typo: jaro-winkler >= 0.85
+    fuzzy = (
+        "(first_name_std_l IS NOT NULL AND first_name_std_r IS NOT NULL "
+        "AND last_name_std_l IS NOT NULL AND last_name_std_r IS NOT NULL "
+        "AND jaro_winkler_similarity(first_name_std_l || ' ' || last_name_std_l, "
+        "                             first_name_std_r || ' ' || last_name_std_r) >= 0.85)"
+    )
+    levels = [
+        CustomLevel(both_null, label_for_charts="nama kosong").configure(
+            is_null_level=True
+        ),
+        CustomLevel(exact, label_for_charts="ejaan persis").configure(
+            m_probability=0.85
+        ),
+        CustomLevel(fuzzy, label_for_charts="fuzzy match (typo)").configure(
+            m_probability=0.50
+        ),
+        CustomLevel(phonetic, label_for_charts="fonetik saja").configure(
+            m_probability=0.30
+        ),
+        ElseLevel().configure(m_probability=0.10),
+    ]
+    return cl.CustomComparison(
+        comparison_levels=levels, output_column_name="name"
+    )
+
 
 DETERMINISTIC_RULES = [
     block_on("email_std"),
-    block_on("phone_std"),
+    block_on("phone_pre7"),  # KEMBALIKAN ke original: phone_pre7 penting
 ]
 
 BENCHMARK_RULES = load_benchmark_rules()
-TRAINING_RULES = [(name, block_on(*cols)) for name, cols in BENCHMARK_RULES]
+
+CORE_IDENTITY_FIELDS = (
+    "first_name_std", "last_name_std", "address_std",
+    "city_std", "state_std", "country_std",
+    "email_std", "phone_std", "dob_std",
+)
+
+TRAINING_RULES = [
+    (name, block_on(*cols))
+    for name, cols in BENCHMARK_RULES
+    if not (set(cols) & set(CORE_IDENTITY_FIELDS))
+]
 
 
 def load_data(full: bool = False) -> pd.DataFrame:
-    df = pd.read_parquet(PROCESSED_DATA_PATH)
+    df = pd.read_parquet(active_path(PROCESSED_DATA_PATH))
     if not full and len(df) > SMOKE_SAMPLE_SIZE:
         df = df.head(SMOKE_SAMPLE_SIZE).copy()
     return df
 
 
-def pin_else_level(comparison, output_column_name: str, floor: float):
-    """Bangun ulang pembanding dengan nilai m tingkat "all other" ditetapkan ke `floor`.
-
-    Tanpa ini, tingkat tersebut dilatih hingga ~0 lalu dibatasi oleh Splink,
-    sehingga semua pasangan bukan-kecocokan mendapat skor identik. Pembanding
-    dibangun ulang melalui CustomComparison karena perubahan pada objek hasil
-    `create_comparison_levels()` tidak berpengaruh; objek itu dibangun ulang
-    setiap kali dipanggil.
-
-    Kini `floor` ditetapkan per kolom (M_ELSE_LEVEL_FLOOR_BY_FIELD): batas rendah
-    pada dob dan phone memberi bobot besar pada ketidakcocokannya, sehingga lima
-    kolom yang cocok tidak menutupi dua kolom yang berbeda.
-    """
+def pin_else_level(comparison, output_column_name: str, floor: float | None):
+    if floor is None:
+        return comparison
     levels = comparison.create_comparison_levels()
-    levels[-1].configure(m_probability=floor, fix_m_probability=True)
+    last = levels[-1]
+    if getattr(last, "m_probability", None) is None:
+        return comparison
+    levels[-1] = last.configure(m_probability=floor, fix_m_probability=True)
     return cl.CustomComparison(comparison_levels=levels, output_column_name=output_column_name)
 
 
-def build_settings():
-    # (pembuat, kolom keluaran, penyesuaian frekuensi istilah?)
-    # Penyesuaian TF dipindahkan KE first_name / last_name / email pada
-    # 2026-10-12. Sebelumnya hanya diterapkan pada city / state / country, padahal
-    # nama depan umum ("randy") atau domain email gratis ("gmail.com") merupakan
-    # bukti lemah yang perlu dikurangi bobotnya. Sebaliknya, kecocokan kota yang
-    # persis di antara kota-kota Indonesia sudah kuat dengan sendirinya.
-    #
-    # gender dan signup_date ditambahkan lalu DIHAPUS pada hari yang sama.
-    # Pengukuran pada set 101 ribu baris menunjukkan keduanya tidak mengubah
-    # salah gabung (4.867 -> 4.867) atau jumlah entity campuran (2.603 -> 2.603).
-    # Dua pembanding tambahan yang memperlama pelatihan tanpa manfaat dihapus,
-    # bukan disimpan "untuk nanti".
-    specs = [
-        (cl.NameComparison("first_name_std"), "gamma_first_name_std", True),
-        (cl.NameComparison("last_name_std"), "gamma_last_name_std", True),
-        (cl.EmailComparison("email_std"), "gamma_email_std", True),
-        (
-            cl.JaroWinklerAtThresholds("address_std", [0.95, 0.90, 0.80]),
-            "gamma_address_std",
-            False,
-        ),
-        (cl.ExactMatch("city_std"), "gamma_city_std", True),
-        (cl.ExactMatch("state_std"), "gamma_state_std", True),
-        (cl.ExactMatch("country_std"), "gamma_country_std", True),
-        (
-            cl.DateOfBirthComparison("dob_std", input_is_string=True),
-            "gamma_dob_std",
-            False,
-        ),
-        (cl.ExactMatch("phone_std"), "gamma_phone_std", False),
-    ]
+def pin_comparison_level(comparison, output_column_name: str, level_index: int, floor: float):
+    levels = comparison.create_comparison_levels()
+    if 0 <= level_index < len(levels):
+        levels[level_index].configure(m_probability=floor, fix_m_probability=True)
+    return cl.CustomComparison(comparison_levels=levels, output_column_name=output_column_name)
 
-    comparisons = []
-    for creator, output_column, term_frequency in specs:
-        # Batas per kolom menggunakan nama kolom SUMBER, bukan nama gamma:
-        # prefiks gamma tidak akan cocok dengan kunci
-        # M_ELSE_LEVEL_FLOOR_BY_FIELD.
-        source_col = output_column.removeprefix("gamma_")
-        floor = m_else_floor_for(source_col)
-        if floor is None:
-            comparison = creator
-        else:
-            comparison = pin_else_level(creator, output_column, floor)
-        # Penyesuaian TF harus diterapkan ulang setelah pembangun ulang, jadi
-        # cabang ini ditulis sekali untuk kedua jalur, bukan digandakan.
-        if term_frequency:
-            comparison = comparison.configure(term_frequency_adjustments=True)
-        comparisons.append(comparison)
 
-    if M_ELSE_LEVEL_FLOOR is not None:
-        print(
-            f"Pinned 'all other' m on {len(comparisons)} comparisons "
-            f"(default {M_ELSE_LEVEL_FLOOR}, per-field overrides applied)"
+def _normalize_fixed_m(comparisons):
+    for i, comp in enumerate(comparisons):
+        levels = comp.create_comparison_levels()
+        total = sum((lv.m_probability or 0) for lv in levels)
+        if total > 0 and total != 1:
+            comparisons[i] = cl.CustomComparison(
+                comparison_levels=[
+                    lv.configure(
+                        m_probability=(lv.m_probability or 0) / total,
+                        fix_m_probability=True,
+                    )
+                    for lv in levels
+                ],
+                output_column_name=comp.output_column_name,
+            )
+    return comparisons
+
+
+NAME_PHONETIC_COLUMNS = {
+    "first_name_std": "phonetic_first_name",
+    "last_name_std": "phonetic_last_name",
+}
+
+
+def _field_match_term(column: str) -> str:
+    phonetic = NAME_PHONETIC_COLUMNS.get(column)
+    if phonetic is None:
+        return (
+            f"({column}_l IS NOT NULL AND {column}_r IS NOT NULL "
+            f"AND {column}_l = {column}_r)::INTEGER"
         )
+    return (
+        f"(({column}_l IS NOT NULL AND {column}_r IS NOT NULL) AND ("
+        f"{column}_l = {column}_r OR ("
+        f"{phonetic}_l IS NOT NULL AND {phonetic}_r IS NOT NULL "
+        f"AND {phonetic}_l = {phonetic}_r)))::INTEGER"
+    )
 
-    # Blocking prediksi menggunakan gabungan aturan yang telah di-benchmark.
-    # Tanpa pengukuran, pemilihan aturan dapat membuat sistem memberi skor pada
-    # pasangan yang biayanya belum diketahui.
+
+def build_contact_comparison() -> cl.CustomComparison:
+    """Kontak: email + telepon. Moderate m-prob: balance recall vs precision."""
+    contact_null = (
+        "(email_std_l IS NULL AND phone_std_l IS NULL) "
+        "OR (email_std_r IS NULL AND phone_std_r IS NULL)"
+    )
+    both = (
+        "email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l = email_std_r "
+        "AND phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l = phone_std_r"
+    )
+    one = (
+        "(email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l = email_std_r) "
+        "OR (phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l = phone_std_r)"
+    )
+    phone_fuzzy = (
+        "phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l <> phone_std_r "
+        "AND jaro_winkler_similarity(phone_std_l, phone_std_r) >= 0.90"
+    )
+    email_fuzzy = (
+        "email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l <> email_std_r "
+        "AND jaro_winkler_similarity(email_std_l, email_std_r) >= 0.85"
+    )
+    levels = [
+        CustomLevel(contact_null, label_for_charts="kontak kosong").configure(
+            is_null_level=True
+        ),
+        CustomLevel(both, label_for_charts="email dan telepon").configure(
+            m_probability=0.70
+        ),
+        CustomLevel(one, label_for_charts="email atau telepon").configure(
+            m_probability=CONTACT_M_PROB
+        ),
+        CustomLevel(email_fuzzy, label_for_charts="email mirip (typo)").configure(
+            m_probability=0.45
+        ),
+        CustomLevel(phone_fuzzy, label_for_charts="telepon mirip (typo)").configure(
+            m_probability=0.40
+        ),
+        ElseLevel().configure(m_probability=0.10),
+    ]
+    return cl.CustomComparison(
+        comparison_levels=levels, output_column_name="contact"
+    )
+
+
+def build_location_comparison() -> cl.CustomComparison:
+    """Alamat: 4 field + komponen individual untuk coverage lebih baik."""
+    location_null = (
+        "(address_std_l IS NULL AND city_std_l IS NULL) "
+        "OR (address_std_r IS NULL AND city_std_r IS NULL)"
+    )
+    full_match = (
+        "address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r "
+        "AND city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r "
+        "AND state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r"
+    )
+    street_match = (
+        "address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r"
+    )
+    city_match = (
+        "city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r"
+    )
+    state_match = (
+        "state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r"
+    )
+    three_of_four = (
+        "(address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r "
+        "AND city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r)"
+        "OR (address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r "
+        "AND state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r)"
+        "OR (address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r "
+        "AND state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r)"
+    )
+    levels = [
+        CustomLevel(location_null, label_for_charts="lokasi kosong").configure(
+            is_null_level=True
+        ),
+        CustomLevel(full_match, label_for_charts="alamat lengkap (4 field)").configure(
+            m_probability=0.40
+        ),
+        CustomLevel(street_match, label_for_charts="street cocok").configure(
+            m_probability=0.20
+        ),
+        CustomLevel(city_match, label_for_charts="city cocok").configure(
+            m_probability=0.25
+        ),
+        CustomLevel(state_match, label_for_charts="state cocok").configure(
+            m_probability=0.30
+        ),
+        CustomLevel(three_of_four, label_for_charts="3 dari 4 field cocok").configure(
+            m_probability=0.15
+        ),
+        ElseLevel().configure(m_probability=0.10),
+    ]
+    return cl.CustomComparison(
+        comparison_levels=levels, output_column_name="location"
+    )
+
+
+def build_dob_comparison() -> cl.CustomComparison:
+    """Tanggal lahir: persis sama OR mendekat (year)."""
+    dob_null = "dob_std_l IS NULL OR dob_std_r IS NULL"
+    match_exact = (
+        "dob_std_l IS NOT NULL AND dob_std_r IS NOT NULL AND dob_std_l = dob_std_r"
+    )
+    match_fuzzy = (
+        "dob_std_l IS NOT NULL AND dob_std_r IS NOT NULL "
+        "AND (dob_std_l = dob_std_r OR "
+        "dob_year_std_l IS NOT NULL AND dob_year_std_r IS NOT NULL "
+        "AND ABS(CAST(dob_year_std_l AS INTEGER) - CAST(dob_year_std_r AS INTEGER)) <= 1)"
+    )
+    levels = [
+        CustomLevel(dob_null, label_for_charts="dob kosong").configure(
+            is_null_level=True
+        ),
+        CustomLevel(match_exact, label_for_charts="tanggal lahir persis").configure(
+            m_probability=0.30
+        ),
+        CustomLevel(match_fuzzy, label_for_charts="tanggal lahir mendekat (year)").configure(
+            m_probability=0.25
+        ),
+        ElseLevel().configure(m_probability=0.12),
+    ]
+    return cl.CustomComparison(
+        comparison_levels=levels, output_column_name="dob"
+    )
+
+
+def three_match_level_index() -> int:
+    return len(build_dob_comparison().comparison_levels) - 3 + 1
+
+
+def build_settings():
+    comparisons = [
+        pin_else_level(build_name_comparison(), "name", m_else_floor_for("last_name_std")),
+        pin_else_level(build_contact_comparison(), "contact", m_else_floor_for("email_std")),
+        pin_else_level(build_location_comparison(), "location", m_else_floor_for("address_std")),
+        pin_else_level(build_dob_comparison(), "dob", m_else_floor_for("dob_std")),
+    ]
     prediction_blocks = [block_on(*cols) for _, cols in BENCHMARK_RULES]
-
     return SettingsCreator(
         link_type="dedupe_only",
         unique_id_column_name="record_id",
@@ -131,13 +309,6 @@ def build_settings():
 
 
 def add_decision(pred_df: pd.DataFrame) -> pd.DataFrame:
-    """Kebijakan tiga arah (PRD §7). Satu kolom sebagai sumber keputusan.
-
-    MATCH berada di atas ambang hasil evaluasi, REVIEW di antaranya, dan
-    NON_MATCH di bawahnya. Tahap clustering hanya memakai MATCH, sehingga semua
-    pasangan dalam rentang REVIEW harus diperiksa manusia dan sengaja TIDAK
-    digabungkan.
-    """
     out = pred_df.copy()
     out["decision"] = "NON_MATCH"
     out.loc[out["match_probability"] >= REVIEW_THRESHOLD, "decision"] = "REVIEW"
@@ -145,24 +316,7 @@ def add_decision(pred_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# Kolom yang menjadi prasyarat aturan bisnis, dan satu kolom pemisah.
 BUSINESS_RULE_KEYS = ("email_std", "first_name_std", "last_name_std", "address_std")
-BUSINESS_RULE_DISCRIMINATOR = "dob_std"
-
-# Ambang selisih tanggal lahir yang dianggap "satu tahun" (masih orang yang
-# sama). TERUKUR lewat 153 keputusan peninjau: semua pasangan yang dilabeli
-# "match" punya selisih dob <= 368 hari (median TEPAT 365 hari — pola tahun
-# salah ketik, bulan dan hari tetap sama). 138 dari 143 jatuh di <= 366 hari.
-# > 366 = selisih TEBUS lebih dari satu tahun, terlalu besar untuk langsung
-# digabung.
-DOB_SAME_YEAR_DAYS = 366
-
-# Kolom yang dihitung sebagai "ada yang cocok" untuk aturan nol-bukti.
-# TERVALIDASI pada gold: dari 5 pasangan yang TIDAK ADA satu pun field cocok,
-# kelima-limanya dilabeli manusia sebagai "beda orang", nol sebagai "orang
-# sama". Pada 1 field cocok pun 1.630 vs 5 condong ke beda, tapi 5 kasus
-# "orang sama" di sana membuat aturan 1-field tidak aman — jadi hanya 0-field
-# yang dipaksa.
 ZERO_EVIDENCE_FIELDS = (
     "email_std", "first_name_std", "last_name_std",
     "address_std", "phone_std", "dob_std", "city_std",
@@ -170,83 +324,27 @@ ZERO_EVIDENCE_FIELDS = (
 
 
 def apply_business_rules(pred_df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
-    """Aturan bisnis domain, tiga arah, semuanya menimpa keputusan model.
-
-    ATURAN 1 — email + nama depan + nama belakang + alamat identik berarti
-    orang yang sama, asalkan tanggal lahirnya juga sama.
-
-    Splink adalah naive Bayes dan overconfident: pasangan dengan email+nama+
-    alamat identik tetap mendapat p = 1.0 walaupun dob berbeda, karena bobot
-    email yang sama persis (log2(m/u) ~ +18,7) menenggelamkan penalti dob.
-    TERUKUR pada 101k: 153 pasangan dengan dob berbeda ikut tergabung.
-
-      email+nama+alamat sama + dob sama     -> paksa MATCH
-      email+nama+alamat sama + dob BEDA
-          atau KOSONG di satu sisi           -> paksa REVIEW
-          DOB bisa saja salah ketik, jadi menolak otomatis sama
-          berbahayanya dengan menggabung salah. Biayanya timpang — salah
-          gabung merusak data selamanya, salah tolak hanya menunda.
-
-    ATURAN 2 — tidak ada satu pun field identitas yang cocok = bukan orang yang
-    sama.
-
-    TERVALIDASI pada gold: dari 5 pasangan yang TIDAK ADA satu pun field cocok
-    (email, nama, alamat, telepon, dob, kota), kelima-limanya dilabeli manusia
-    sebagai "beda orang" — nol yang salah. Pola di gold juga tegas: 0-1 field
-    cocok condong ke "beda orang" (1.635 vs 5), 2+ field condong ke "orang
-    sama" (592 vs 4). Hanya 0-field yang dipaksa, karena di 1-field masih ada
-    5 kasus "orang sama" yang akan hilang.
-
-    Pasangan yang TIDAK memenuhi ketiga kunci persis (mis. alamat beda typo)
-    dibiarkan pada keputusan model — aturan ini sengaja sempit supaya tidak
-    menarik orang yang benar-benar berbeda hanya karena satu field mirip.
-    """
     out = pred_df.copy()
-    needed = [f"{c}_{s}" for c in (*BUSINESS_RULE_KEYS, BUSINESS_RULE_DISCRIMINATOR)
-              for s in ("l", "r")]
+    needed = [f"{c}_{s}" for c in BUSINESS_RULE_KEYS for s in ("l", "r")]
     missing = [c for c in needed if c not in out.columns]
     if missing:
-        # Kolom tidak ada (model lama / konfigurasi berbeda). Jangan menebak:
-        # lewati aturan dan katakan, supaya hasil tidak diam-diam berubah.
         if verbose:
             print(f"Business rules skipped — columns absent: {missing}")
         out["business_rule"] = None
         return out
+
+    email_diff = out["email_std_l"].ne(out["email_std_r"])
+    last_name_diff = out["last_name_std_l"].ne(out["last_name_std_r"])
+    force_non_by_email_last = email_diff & last_name_diff
 
     keys_same = pd.Series(True, index=out.index)
     for col in BUSINESS_RULE_KEYS:
         left, right = out[f"{col}_l"], out[f"{col}_r"]
         keys_same &= left.notna() & right.notna() & left.eq(right)
 
-    # Aturan 1: dob SAMA atau beda <= 1 tahun (366 hari) dianggap satu orang.
-    # Aturan ini berdasar pengukuran, bukan asumsi: peninjau melabeli 153
-    # pasangan email+nama+alamat identik sebagai "match", dan median selisih
-    # dob-nya TEPAT 365 hari. Beda hingga 1 tahun = salah ketik tahun, bukan
-    # orang kedua.
-    dob_left, dob_right = out[f"{BUSINESS_RULE_DISCRIMINATOR}_l"], out[f"{BUSINESS_RULE_DISCRIMINATOR}_r"]
-    dob_both = dob_left.notna() & dob_right.notna()
-    dob_same = dob_both & dob_left.eq(dob_right)
+    force_match = keys_same
+    force_review = pd.Series(False, index=out.index)
 
-    dob_within_year = pd.Series(False, index=out.index)
-    if dob_both.any():
-        try:
-            d1 = pd.to_datetime(dob_left[dob_both], errors="coerce")
-            d2 = pd.to_datetime(dob_right[dob_both], errors="coerce")
-            within = (d1 - d2).dt.days.abs() <= DOB_SAME_YEAR_DAYS
-            dob_within_year.loc[dob_both] = within.fillna(False).to_numpy()
-        except (ValueError, TypeError):
-            # Tanggal tidak bisa diparse — anggap tidak bisa diverifikasi.
-            dob_within_year = pd.Series(False, index=out.index)
-
-    # dob beda > 1 tahun ATAU kosong di satu sisi -> tidak bisa diverifikasi
-    # sebagai satu orang -> REVIEW.
-    dob_unverified = keys_same & ~dob_same & ~dob_within_year
-
-    force_match = keys_same & (dob_same | dob_within_year)
-    force_review = dob_unverified
-
-    # ATURAN 2: nol field identitas yang cocok. Perhitungannya dari kolom yang
-    # benar-benar ada, supaya aturan ini ikut bekerja meski satu field hilang.
     any_agree = pd.Series(False, index=out.index)
     for col in ZERO_EVIDENCE_FIELDS:
         left, right = out.get(f"{col}_l"), out.get(f"{col}_r")
@@ -255,21 +353,22 @@ def apply_business_rules(pred_df: pd.DataFrame, verbose: bool = False) -> pd.Dat
         any_agree |= left.notna() & right.notna() & left.eq(right)
     force_non = ~any_agree
 
+    force_non = force_non | force_non_by_email_last
+
     out["business_rule"] = None
     out.loc[force_match, "business_rule"] = "same_person_email_name_address"
-    out.loc[force_review, "business_rule"] = "unverified_dob"
-    out.loc[force_non, "business_rule"] = "no_field_agrees"
+    out.loc[force_non & ~force_non_by_email_last, "business_rule"] = "no_field_agrees"
+    out.loc[force_non_by_email_last, "business_rule"] = "different_identity_email_lastname"
     out.loc[force_match, "decision"] = "MATCH"
-    # REVIEW, bukan NON_MATCH: tanpa dob yang bisa dibandingkan kita tidak
-    # punya bukti untuk menolak, dan menolak otomatis tidak bisa dibatalkan.
     out.loc[force_review, "decision"] = "REVIEW"
     out.loc[force_non, "decision"] = "NON_MATCH"
 
     if verbose:
         print(
-            f"Business rules: {int(force_match.sum()):,} dipaksa MATCH (dob sama), "
-            f"{int(force_review.sum()):,} dipaksa REVIEW (dob beda/kosong), "
-            f"{int(force_non.sum()):,} dipaksa NON_MATCH (nol field cocok)"
+            f"Business rules: {int(force_match.sum()):,} dipaksa MATCH "
+            f"(email + nama + alamat sama), "
+            f"{int(force_non.sum()):,} dipaksa NON_MATCH "
+            f"(nol field cocok + email/lastname berbeda)"
         )
     return out
 
@@ -279,51 +378,28 @@ def train_and_predict(
     verbose: bool = True,
     model: dict | None = None,
 ) -> tuple[pd.DataFrame, object]:
-    """Beri skor pada semua pasangan kandidat tolok ukur; latih dahulu jika model tidak diberikan.
 
-    Kembalikan (predictions, linker) agar pemanggil dapat menyimpan model yang
-    baru dilatih tanpa menjalankan pelatihan untuk kedua kalinya.
-
-    `model` adalah dict model Splink tersimpan. Jika diberikan, seluruh
-    pelatihan EM dilewati (MASTER_CONTEXT bagian 15: model tidak dilatih ulang
-    setiap kali CSV baru diterima). Linker yang dikembalikan tidak memiliki
-    parameter hasil pelatihan sendiri, sehingga save_model_to_json akan menulis
-    model yang belum dilatih. Pemanggil hanya boleh menyimpan linker dari proses
-    pelatihan.
-
-    Fungsi ini dipisahkan agar src/stress_test.py memberi skor pada data rusak
-    dengan konfigurasi model yang sama persis. Jalur pelatihan kedua yang ditulis
-    manual dapat diam-diam berbeda dari jalur produksi dan melaporkan tingkat
-    pemulihan untuk pipeline yang sebenarnya tidak digunakan.
-    """
     if model is not None:
-        linker = Linker(df, model, db_api=DuckDBAPI())
+        db_api = DuckDBAPI()
+        sdf = db_api.register(df, dataset_display_name="dedup")
+        linker = Linker(sdf, model)
         if verbose:
             print("Loaded saved model — skipping EM training (MC section 15).")
         preds = add_decision(linker.inference.predict().as_pandas_dataframe())
         return apply_business_rules(preds, verbose=verbose), linker
 
-    linker = Linker(df, build_settings(), db_api=DuckDBAPI())
+    db_api = DuckDBAPI()
+    sdf = db_api.register(df, dataset_display_name="dedup")
+    linker = Linker(sdf, build_settings())
 
-    # CATATAN: fungsi EM Splink 4.0.17 tidak memiliki argumen max_pairs; ukuran
-    # sampel pelatihan ditentukan oleh aturan blocking pelatihan.
-    # Splink sendiri menyarankan max_pairs=1e8 agar sampel u tidak terlalu kecil.
-    # Pada sampel 10 ribu baris, batas ini mencakup seluruh data sehingga
-    # probabilitas u dihitung secara persis.
     if verbose:
         print("Estimating model parameters with EM...")
-    # Nilai bawaan 1e-4 terlalu rendah untuk data ini: semua pasangan bukan-
-    # kecocokan menyusut ke probabilitas 1e-300. Perkirakan nilai ini dari aturan
-    # deterministik. Pembagi recall merupakan asumsi; lihat LAMBDA_RECALL_ASSUMPTION.
+
     linker.training.estimate_probability_two_random_records_match(
         DETERMINISTIC_RULES, recall=LAMBDA_RECALL_ASSUMPTION
     )
     linker.training.estimate_u_using_random_sampling(max_pairs=100_000_000, seed=RANDOM_SEED)
 
-    # EM tidak memperkirakan pembanding yang digunakan oleh aturan blockingnya
-    # sendiri, sehingga satu aturan saja membuat nilai m pembanding tersebut
-    # tidak terlatih. Jalankan setiap aturan yang telah di-benchmark agar semua
-    # pembanding dilatih menggunakan aturan lainnya.
     for name, rule in TRAINING_RULES:
         if verbose:
             print(f"EM on {name}")
@@ -374,9 +450,6 @@ def main() -> None:
     elif args.reuse_model:
         saved = model_lifecycle.load_model_json(args.reuse_model)
         given = Path(args.reuse_model)
-        # Proses penggunaan ulang tetap harus mencatat model MANA yang memberi
-        # skor. model_version kosong membuat evaluate/dashboard menampilkan "n/a"
-        # untuk artefak pembentuk entity_map saat ini.
         reused_from = given.name if given.is_dir() else given.parent.name
 
     pred_df, linker = train_and_predict(df, model=saved)
@@ -393,10 +466,6 @@ def main() -> None:
         "runtime_seconds": runtime,
     }
 
-    # Setiap pelatihan mendapat direktori versi yang tidak dapat diubah
-    # (bagian 16 MASTER_CONTEXT). Proses penggunaan ulang tidak menghasilkan
-    # apa pun yang perlu disimpan: menyimpan linker yang tidak dilatih akan
-    # menimpa catatan asal-usul dengan model tanpa parameter.
     version = None
     if saved is None:
         version = model_lifecycle.save_version(

@@ -1,25 +1,4 @@
-"""Koreksi keanggotaan entity secara manual: pisahkan/gabungkan dengan catatan audit.
 
-Penanda triase (membership_flags.csv) hanya MELAPORKAN salah gabung; modul ini
-MENANGANINYA. Setiap operasi hanya ditambahkan ke
-outputs/entity_history.jsonl agar pembentukan entity dapat direkonstruksi.
-
-Pengamanan (menjaga invariant pada smoke test — suntingan manual tidak boleh
-diam-diam melanggar hal yang ditegaskan oleh rangkaian tes):
-  * merge — ditolak jika kedua entity memiliki device id berbeda (sinyal salah
-    gabung pada dataset ini), kecuali jika menggunakan --force.
-  * split — ditolak jika tindakan tersebut memisahkan pasangan berkeputusan
-    MATCH, kecuali jika menggunakan --force.
-
-Setelah operasi berhasil, baris master untuk entity yang terdampak dibangun
-ulang dengan fungsi yang sama seperti di incremental.py agar lineage dan
-konflik tetap konsisten.
-
-Run:
-    python -m src.entity_correction --split ent_000123 rec_0001 rec_0002 --reason "salah gabung"
-    python -m src.entity_correction --merge ent_000123 ent_000456 --reason "satu orang"
-    python -m src.entity_correction --history            # cetak log audit
-"""
 from __future__ import annotations
 
 import argparse

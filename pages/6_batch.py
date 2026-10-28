@@ -1,15 +1,4 @@
-"""Halaman peninjauan batch: usulan sistem untuk batch baru sebelum penggabungan.
-
-Incremental --stage menghitung usulan untuk setiap catatan baru dan tidak
-menerapkan apa pun. Halaman ini menjadi gerbang pemeriksaan manusia:
-
-  * lihat entity usulan untuk setiap catatan beserta skor model
-  * batalkan pilihan catatan yang tidak disetujui (catatan tersebut masuk ke
-    dataset sebagai entity tersendiri dan tidak pernah dibuang)
-  * terapkan usulan atau tolak usulan dan hapus seluruh staging batch
-  * jawaban format tanggal untuk batch ini ditampilkan; staging ulang tersedia
-    jika kolom tanggal tidak memberikan bukti yang cukup
-"""
+"""Halaman peninjauan batch: usulan sistem untuk batch baru sebelum penggabungan"""
 
 from __future__ import annotations
 

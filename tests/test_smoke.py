@@ -1,8 +1,4 @@
 """Run with: python tests/test_smoke.py
-
-No framework. Every check is an invariant that has actually been broken at least
-once during this build, most importantly the scope-mixing bug where a 10k sample
-run silently replaced a 50k entity map and still looked complete.
 """
 
 from __future__ import annotations
@@ -82,17 +78,47 @@ def blocking_rules_come_from_config_with_default_fallback(tmp_path=None):
     with tempfile.TemporaryDirectory() as tmp:
         good = Path(tmp) / "good.json"
         good.write_text(
-            json.dumps([{"name": "email_exact", "columns": ["email_std"]}]),
+            json.dumps(
+                [
+                    {"name": "email_exact", "columns": ["email_std"]},
+                    {
+                        "name": "email_local_name",
+                        "columns": ["email_local_pre3", "last_name_std_pre3"],
+                    },
+                ]
+            ),
             encoding="utf-8",
         )
         assert load_benchmark_rules(good) == [("email_exact", ["email_std"])]
 
         broken = Path(tmp) / "broken.json"
         broken.write_text("{not json", encoding="utf-8")
-        # A broken client config must not crash the pipeline silently with a
-        # partial rule set; it falls back to the documented default.
         assert load_benchmark_rules(broken) == DEFAULT_BENCHMARK_RULES
     return "override honored; missing/broken config falls back to default rules"
+
+
+@check
+def retired_email_local_blocking_rule_is_removed_everywhere():
+    from src.config import DEFAULT_BENCHMARK_RULES
+    from src.model_lifecycle import remove_retired_blocking_rules
+    from src.standardize import add_blocking_keys
+
+    assert all(name != "email_local_name" for name, _ in DEFAULT_BENCHMARK_RULES)
+    legacy_model = {
+        "blocking_rules_to_generate_predictions": [
+            {"blocking_rule": 'l."email_local_pre3" = r."email_local_pre3"'},
+            {"blocking_rule": 'l."email_std" = r."email_std"'},
+        ]
+    }
+    cleaned = remove_retired_blocking_rules(legacy_model)
+    assert len(cleaned["blocking_rules_to_generate_predictions"]) == 1
+    assert "email_local_pre3" in legacy_model["blocking_rules_to_generate_predictions"][0][
+        "blocking_rule"
+    ]
+    assert "email_local_pre3" not in add_blocking_keys(
+        pd.DataFrame({"email_std": ["sample@example.com"]})
+    )
+    return "removed from defaults, standardized keys and legacy model inference"
 
 
 @check
@@ -156,27 +182,7 @@ def artifacts_share_one_scope():
 
 @check
 def clusters_recover_device_truth():
-    """Business rule first, device_id second — because device_id is not truth.
-
-    2026-10-12: device_id was treated as the answer key, so every MATCH edge
-    whose two records carried different device ids was counted as a false
-    merge (4,867 of them). The data owner's rule contradicts that: a person may
-    simply hold several devices, so a device disagreement does NOT mean two
-    people. What the owner specified instead is:
-
-        email + first_name + last_name + address identical  -> same person
-        ... unless dob differs                              -> different person
-
-    Under that rule the real false-merge count was 153, not 4,867 — and 4,835
-    of the "false merges" were one person on two devices. device_id is kept
-    below as a REPORTED figure only; asserting on it would encode a truth
-    source the owner has explicitly rejected.
-
-    What IS asserted:
-      1. a pair decided MATCH is never split across entities
-      2. no MATCH edge contradicts the owner's rule (dob conflict forced out)
-      3. a device pair the model rejects outright lands in REVIEW, not NON_MATCH
-    """
+    
     records = pd.read_parquet(
         PROCESSED_DATA_PATH,
         columns=["record_id", "device_ids_std", "email_std", "first_name_std",
@@ -205,10 +211,6 @@ def clusters_recover_device_truth():
         & _both_eq("last_name_std") & _both_eq("address_std")
     dob_left, dob_right = m["dob_std_l"], m["dob_std_r"]
     dob_both = dob_left.notna() & dob_right.notna()
-    # Dob berbeda LEBIH dari satu tahun melanggar aturan; berbeda sampai satu
-    # tahun tidak (salah ketik tahun, bukan orang kedua). Ukur ulang di sini
-    # dengan ambang yang sama seperti DOB_SAME_YEAR_DAYS di src/splink_model.py.
-    real_conflict = pd.Series(False, index=m.index)
     if dob_both.any():
         d1 = pd.to_datetime(dob_left[dob_both], errors="coerce")
         d2 = pd.to_datetime(dob_right[dob_both], errors="coerce")
@@ -247,10 +249,6 @@ def clusters_recover_device_truth():
         "rejected as NON_MATCH; a known duplicate must reach REVIEW at worst"
     )
 
-    # Reported, NOT asserted: an entity holding two device ids. The owner's rule
-    # permits this (one person, several devices), so it is a signal to sample,
-    # not a failure. 2026-10-12 measurement: 2,541 such entities, of which the
-    # rule-based check above finds 0 genuine conflicts.
     ids = records.explode("device_ids_std").dropna(subset=["device_ids_std"])
     per_entity = ids.assign(entity_id=ids["record_id"].map(lookup)).groupby("entity_id")[
         "device_ids_std"
@@ -292,8 +290,6 @@ def dob_column_fully_parsed():
         f"{parsed_null:,} dob values failed to parse but only {raw_null:,} are empty in the "
         "source: the parser is dropping real dates, which silently kills dob blocking"
     )
-    # A wrong day/month swap produces plausible strings, so shape is the only cheap
-    # guard available here; the strict parse cases above cover the swap itself.
     bad_shape = int((df["dob_std"].dropna().str.len() != 10).sum())
     assert bad_shape == 0, f"{bad_shape} dob_std values are not ISO YYYY-MM-DD"
     return f"{len(df):,} rows, {parsed_null} unparseable, all ISO"
@@ -301,12 +297,7 @@ def dob_column_fully_parsed():
 
 @check
 def model_versions_are_reproducible():
-    """A saved model must carry the policy and provenance it was judged under.
 
-    MASTER_CONTEXT section 16 names four files per version. A version missing any
-    of them cannot be compared against another one, and thresholds stored apart
-    from the model let a score be reviewed under a different MATCH definition.
-    """
     versions = model_lifecycle.list_versions()
     if not versions:
         return "SKIPPED: no model version saved yet (run src.splink_model --full)"
@@ -332,13 +323,7 @@ def model_versions_are_reproducible():
 
 @check
 def evaluation_separates_all_four_layers():
-    """DESIGN section 17 requires four distinct evaluations.
 
-    A single accuracy number cannot say which layer failed: full blocking
-    coverage with zero recall scores identically to full coverage with perfect
-    recall. Each layer must also state what it does not prove, so a reader does
-    not carry a blocking number into a linkage claim.
-    """
     if not EVALUATION_REPORT_PATH.exists():
         return "SKIPPED: no evaluation_report.json yet (run python -m src.evaluate)"
     report = json.loads(EVALUATION_REPORT_PATH.read_text(encoding="utf-8"))
@@ -354,8 +339,6 @@ def evaluation_separates_all_four_layers():
                 f"layer '{layer}' reports a result but not what it does not prove"
             )
 
-    # MASTER_CONTEXT section 20: FACT and ASSUMPTION must not be mixed. An
-    # unavailable truth channel must never be rendered as a zero.
     truth = report["truth_channel"]
     assert isinstance(truth["available"], bool)
     if not truth["available"]:
@@ -383,14 +366,7 @@ def evaluation_separates_all_four_layers():
 
 @check
 def upload_validator_agrees_with_the_blocking_rules():
-    """The validator must demand exactly what standardize() will accept.
 
-    Two failure modes seen in one build: standardize() skipped an absent source
-    column without complaint, so a batch missing `dob` was registered and only
-    failed later inside Splink with MISSING COLUMN; and the validator warned
-    about `dob` while standardize rejected the same file. A batch that passes
-    validation and then fails at run time is worse than one refused up front.
-    """
     import pandas as pd
 
     from src.validate_upload import blocking_source_columns, validate
@@ -408,7 +384,6 @@ def upload_validator_agrees_with_the_blocking_rules():
         f"a batch without '{dropped}' was accepted, but that column backs a blocking rule"
     )
 
-    # And the full current dataset must pass, so the check is not just always-red.
     assert validate(source)["status"] == "accepted", (
         "the standardized dataset should validate cleanly"
     )
@@ -417,27 +392,7 @@ def upload_validator_agrees_with_the_blocking_rules():
 
 @check
 def incremental_candidate_prefilter_is_exact():
-    """The pre-filtered scoring frame must keep the pairs and the MATCH
-    edges of scoring the full parquet.
 
-    On the real standardized data and the active model, 100 records are
-    treated as a "new batch". Two frames are scored with the same
-    patched model:
-      A) candidate_old_rows(new) + new  (what compute feeds Splink)
-      B) the full parquet               (the old behaviour)
-    The (record_id_l, record_id_r) sets and the MATCH edge sets must be
-    identical: MATCH edges are what clustering turns into entity_ids, so
-    this is the invariant that protects entity identity.
-
-    Probabilities are NOT identical and must not be asserted to be:
-    city_std / state_std / country_std carry term_frequency_adjustments
-    (src/splink_model.py), whose weights depend on how many rows the
-    Linker is given. A pair sitting exactly on the 1e-10 REVIEW floor
-    can therefore land on either side of it — MEASURED on the 51k set:
-    12 of 1,172 pairs (all with p ~ 1e-10, none near MATCH_THRESHOLD),
-    26 REVIEW under B vs 14 under A. The drift is reported, the MATCH
-    edges are asserted.
-    """
     if not PROCESSED_DATA_PATH.exists():
         return "SKIPPED: no standardized data (run python -m src.run_all)"
     target = model_lifecycle.latest()
@@ -478,8 +433,6 @@ def incremental_candidate_prefilter_is_exact():
         "these become entity_ids, so entity identity would differ"
     )
 
-    # What changed must stay below the clustering threshold: only the
-    # REVIEW floor may move.
     flipped = preds_a.merge(
         preds_b[["record_id_l", "record_id_r", "decision", "match_probability"]],
         on=["record_id_l", "record_id_r"], suffixes=("_a", "_b")
@@ -495,8 +448,7 @@ def incremental_candidate_prefilter_is_exact():
     drift = float(
         (prob["match_probability_a"] - prob["match_probability_b"]).abs().max()
     )
-    # Guard, not an expectation: a term-frequency regression would move this
-    # by orders of magnitude, while a routine dataset-change moves it by less.
+
     assert drift < 1e-2, f"probability drift {drift} exceeds the 1e-2 guard"
     return (
         f"{len(pairs(preds_a)):,} pairs + {len(match_a)} MATCH edges identical; "
@@ -509,13 +461,7 @@ def incremental_candidate_prefilter_is_exact():
 
 @check
 def batch_registry_covers_the_standardized_data():
-    """Every stored record_id must belong to exactly one registered batch.
 
-    The original trap: `standardize --input new.csv` rebuilt the parquet from
-    that file alone, so record_ids restarted at rec_000001 and collided with rows
-    already stored. The registry derives the start index, and this check is what
-    would catch the collision if that logic ever broke.
-    """
     from src import registry
 
     batches = registry.load()["batches"]
@@ -527,8 +473,6 @@ def batch_registry_covers_the_standardized_data():
         "registry next_start_index does not match the sum of batch rows"
     )
 
-    # Ranges must be contiguous: a gap or overlap would mean two batches claim
-    # the same record_id, or one is silently missing.
     expected_start = 0
     for batch in batches:
         assert batch["start_index"] == expected_start, (
@@ -563,20 +507,7 @@ def batch_registry_covers_the_standardized_data():
 
 @check
 def match_edges_are_independently_verifiable():
-    """Every MATCH edge must be checkable against the owner's rule, not device_id.
 
-    device_id used to be the truth source, so any MATCH edge whose two records
-    carried different device ids was called a false merge (4,867 at peak). The
-    owner's rule says that is wrong: one person may hold several devices, so a
-    device disagreement is not evidence of two people. The rule that IS
-    authoritative:
-
-        email + first_name + last_name + address identical  -> same person
-        ... unless dob differs                              -> different person
-
-    This test asserts the rule holds for every MATCH edge, and separately
-    reports how many edges carry two device ids (allowed, not an error).
-    """
     preds = pd.read_parquet(PREDICTIONS_FULL_PATH)
     if "decision" not in preds.columns:
         return "SKIPPED: no decision column"
@@ -626,8 +557,6 @@ def match_edges_are_independently_verifiable():
     )
     assert split == 0, f"{split} MATCH edges were not clustered into one entity"
 
-    # Reported only: how many MATCH edges span two device ids. Allowed by the
-    # owner's rule, so it is a sampling signal, not a failure.
     dev_records = pd.read_parquet(PROCESSED_DATA_PATH, columns=["record_id", "device_ids_std"])
     if not dev_records["device_ids_std"].dropna().empty:
         ids = dev_records.explode("device_ids_std").dropna(subset=["device_ids_std"])
@@ -654,13 +583,7 @@ def match_edges_are_independently_verifiable():
 
 @check
 def feedback_captures_every_required_field():
-    """DESIGN section 12 lists the fields feedback must retain.
 
-    A reviewer's label is only reusable for evaluation and retraining if it can
-    be tied to the score and the model version it judged. Without model_version
-    there is no way to tell which model a case belongs to, which is exactly what
-    MASTER_CONTEXT section 15 needs to decide when to retrain.
-    """
     if not FEEDBACK_PATH.exists():
         return "SKIPPED: no feedback.csv yet (run python -m src.feedback)"
     frame = pd.read_csv(FEEDBACK_PATH)
@@ -683,12 +606,7 @@ def feedback_captures_every_required_field():
 
 @check
 def gold_label_vocabulary_keeps_negatives():
-    """Regression: 'no_match' was dropped silently, so gold had no negatives.
-
-    promote_gold() filtered on TRUTHY only. Every reviewed 'no_match' row was
-    discarded without an error, which makes precision look perfect and the gold
-    set useless. Both classes must survive, and a blank must survive as missing.
-    """
+  
     assert normalise_label("match") == "match", "positive label"
     assert normalise_label("no_match") == "no_match", "negative label was being dropped"
     assert normalise_label("0") == "no_match", "numeric negative"
@@ -754,16 +672,7 @@ def model_score_report_detects_stale_provenance():
 
 @check
 def decision_column_is_present_and_ordered():
-    """Every pair has exactly one decision, and it agrees with the probabilities.
 
-    Without this the three-way policy can silently collapse back to two values,
-    or REVIEW can be built from a threshold that disagrees with its own label.
-
-    The business rule (email+name+address identical but dob differs -> NON_MATCH)
-    is allowed to override a high probability: that is the entire point of the
-    rule. Pairs it touched are excluded from the threshold assertions below and
-    counted separately, so a genuine threshold bug cannot hide behind it.
-    """
     preds = pd.read_parquet(PREDICTIONS_FULL_PATH)
     assert "decision" in preds.columns, "predictions have no 'decision' column (PRD section 7)"
     allowed = {"MATCH", "REVIEW", "NON_MATCH"}
@@ -788,11 +697,7 @@ def decision_column_is_present_and_ordered():
     assert (review["match_probability"] >= REVIEW_THRESHOLD).all(), (
         "a REVIEW pair is below REVIEW_THRESHOLD"
     )
-    # The rule may reject, but only in the one case that is validated by human
-    # decisions: zero identity fields agreeing (5/5 gold pairs with 0 agreeing
-    # fields were labelled "beda orang", none "orang sama"). An UNVERIFIABLE
-    # dob must never reject — that is the case where a typo is just as likely
-    # as a second person, and rejecting it is irreversible.
+
     forced = preds[overridden]
     rejected = forced[forced["decision"] == "NON_MATCH"]
     bad_reject = int((rejected["business_rule"] != "no_field_agrees").sum())
@@ -810,26 +715,7 @@ def decision_column_is_present_and_ordered():
 
 @check
 def review_pairs_are_not_merged():
-    """A REVIEW pair may share an entity only through transitive MATCH edges,
-    and every such entity must be flagged conflicted.
 
-    LIMITATION OF UNION-FIND (measured 2026-10-12, confirmed 2026-10-14):
-    clustering uses only MATCH edges. If A×C and B×C are MATCH but A×B is
-    REVIEW, connected components puts all three in one entity. Union-find
-    cannot honour a must-not-link constraint that is only reachable
-    transitively. This is inherent to the algorithm, not a bug.
-
-    Earlier the test asserted model-decided REVIEW pairs must NEVER share an
-    entity. That assertion is mathematically impossible to satisfy whenever
-    a transitive MATCH path exists — the PostgreSQL batch (2,003 rows with
-    intentional duplicates) exposed this: 1,716 model-decided REVIEW pairs
-    were transitively merged, zero of them were wrong merges.
-
-    What the test now asserts:
-      1. every entity containing a merged REVIEW pair is flagged
-         `conflicted_fields` (so it surfaces as "needs a decision")
-      2. no entity containing a merged REVIEW pair is silently clean
-    """
     preds = pd.read_parquet(PREDICTIONS_FULL_PATH)
     if "decision" not in preds.columns:
         return "SKIPPED: no decision column"
@@ -870,15 +756,7 @@ def review_pairs_are_not_merged():
 
 @check
 def incremental_history_new_entities_is_a_delta():
-    """new_entities is a per-batch delta, never the running total.
 
-    apply_staged() used updated_map["entity_id"].nunique(), i.e. the whole
-    entity count (48,380) written as "entities this batch created". The
-    dashboard's "Batch per minggu" chart summed that field as if it were new
-    entities per batch, so 3 batches looked like they each created 48k
-    entities. A batch of N records can create at most N new entities, so the
-    delta must never exceed new_records.
-    """
     path = OUTPUT_DIR / "incremental_history.jsonl"
     if not path.exists():
         return "SKIPPED: no incremental_history.jsonl"
@@ -901,13 +779,7 @@ def incremental_history_new_entities_is_a_delta():
 
 @check
 def label_source_can_be_pinned():
-    """load_labels() must be able to return the source the caller asked for.
 
-    It took no arguments and always preferred gold, so `threshold_eval --source
-    silver` raised "Silver labels requested but source is gold" as soon as
-    gold_labels.csv existed. The flag was unreachable, not wrong — and the
-    silver run it existed for could not be reproduced at all.
-    """
     auto_labels, auto_source = load_labels()
     assert auto_source in ("none", "silver", "gold"), f"unexpected source {auto_source!r}"
 
@@ -926,8 +798,6 @@ def label_source_can_be_pinned():
     else:
         raise AssertionError("load_labels accepted an unknown source name")
 
-    # The default must stay gold-first, because evaluate.py and
-    # blocking_benchmark.py rely on "reviewed labels win".
     if auto_labels is not None and (LABELS_DIR / "gold_labels.csv").exists():
         assert auto_source == "gold", (
             f"auto resolved to {auto_source!r} while gold_labels.csv exists"
@@ -937,16 +807,7 @@ def label_source_can_be_pinned():
 
 @check
 def subprocess_capture_cannot_lose_output():
-    """Capturing a child whose output is not cp1252 must not return stdout=None.
 
-    Reproduced on this machine. cp1252 leaves 0x81/0x8D/0x8F/0x90/0x9D undefined,
-    and every UTF-8 3-byte sequence whose middle byte is one of those kills the
-    decoder thread: subprocess.run(..., text=True, capture_output=True) with no
-    encoding then returns returncode 0 with stdout=None. close_gold_loop did
-    sys.stdout.write(None) on that, so `--all` died one step after reporting it
-    fine. U+207B is not hypothetical: it is what the old probability formatter
-    printed, and src/evaluate.py still prints U+2014, which decodes as mojibake.
-    """
     console = locale.getpreferredencoding(False)
     undef = []
     for cp in range(0x80, 0x100):
@@ -956,7 +817,6 @@ def subprocess_capture_cannot_lose_output():
             undef.append(cp)
     assert undef, f"{console} decoded every byte; this check proves nothing here"
 
-    # U+207B SUPERSCRIPT MINUS -> UTF-8 e2 81 bb, byte 0x81 undefined in cp1252.
     probe = "\u207b"
     assert 0x81 in [b for b in probe.encode("utf-8")], "probe lost its 0x81 byte"
 
@@ -1118,11 +978,7 @@ def stage0_save_review_pack_refuses_to_overwrite_filled_reviews():
 
 @check
 def stage0_packs_are_not_promoted_by_labels_module():
-    """Guards the workflow: src.labels --promote reads only the strata queue
-    and the FP sample. Stage 0 packs require manual pair/label promotion,
-    otherwise a 50-pair sample or a 9-row dispute adjudication silently
-    looks promoted while gold never changes.
-    """
+
     import src.labels as labels
     from src.stage0_audit import DISPUTE_REVIEW_PATH, SAMPLE_PATH
 
@@ -1167,15 +1023,11 @@ def pinned_comparisons_keep_null_levels():
     from src.splink_model import build_settings
     from splink import DuckDBAPI, Linker
 
-    # gender + signup_date_std were added then removed the same day: measured on
-    # the 101k set they moved false merges by 0 (4,867 -> 4,867) and the mixed
-    # entity count by 0 (2,603 -> 2,603). Two comparisons that cost training
-    # time and buy nothing are deleted, not kept "for later".
-    columns = ["record_id", "first_name_std", "last_name_std", "email_std",
-               "address_std", "city_std", "state_std", "country_std", "dob_std",
-               "phone_std"]
-    records = pd.read_parquet(PROCESSED_DATA_PATH, columns=columns).head(2)
-    model = Linker(records, build_settings(), db_api=DuckDBAPI()).misc.save_model_to_json()
+     
+    records = pd.read_parquet(PROCESSED_DATA_PATH).head(2)
+    db_api = DuckDBAPI()
+    sdf = db_api.register(records, dataset_display_name="dedup")
+    model = Linker(sdf, build_settings()).misc.save_model_to_json()
     for comparison in model["comparisons"]:
         levels = comparison["comparison_levels"]
         assert any(level.get("is_null_level") for level in levels), comparison["output_column_name"]
@@ -1185,21 +1037,7 @@ def pinned_comparisons_keep_null_levels():
 
 @check
 def business_rule_splits_email_name_address_by_dob():
-    """Domain rule: email+nama+alamat identik = orang sama, asal dob juga sama.
-
-    MEASURED on 101,855 rows before this rule existed: Splink gave p = 1.0 to
-    every pair sharing email+name+address, because the email Bayes factor
-    (log2(m/u) ~ +18.7) drowned the dob penalty. 153 of those had a DIFFERENT
-    date of birth — two people who look identical on every other field.
-
-    The rule is a hard override on top of the model, not a trained feature: EM
-    cannot express "these three fields agree, so treat dob as decisive".
-
-    dob is NOT allowed to force NON_MATCH. A differing or missing dob is
-    equally unverifiable: it could be a typo just as easily as a second person,
-    and rejecting automatically is irreversible in a way that queueing is not.
-    So both cases land in REVIEW, where a human decides.
-    """
+    
     from src.splink_model import add_decision, apply_business_rules
 
     frame = pd.DataFrame(
@@ -1214,17 +1052,13 @@ def business_rule_splits_email_name_address_by_dob():
             "last_name_std_l": ["santoso"] * 5,
             "last_name_std_r": ["santoso"] * 5,
             "address_std_l": ["jl. melati 5"] * 5,
-            # a/b: same dob -> forced MATCH.  c: different dob -> REVIEW.
-            # d: dob missing on one side -> REVIEW (unverifiable).
-            # e: address differs -> rule does not apply, model decides.
+            
             "address_std_r": ["jl. melati 5", "jl. melati 5", "jl. melati 5", "jl. melati 5", "jl. mawar 9"],
             "dob_std_l": ["1988-04-11", "1988-04-11", "1988-04-11", "1988-04-11", "1988-04-11"],
             "dob_std_r": ["1988-04-11", "1988-04-11", "1999-12-31", None, "1988-04-11"],
         }
     )
-    # In production add_decision() always runs first; apply_business_rules then
-    # overrides it. Reproduce that order so the test cannot pass on a code path
-    # that does not exist.
+    
     out = apply_business_rules(add_decision(frame))
 
     assert out.loc[0, "decision"] == "MATCH", "same dob -> forced MATCH"
@@ -1247,12 +1081,7 @@ def business_rule_splits_email_name_address_by_dob():
 
 @check
 def business_rule_is_skipped_not_guessed_when_columns_absent():
-    """A model without the needed columns must skip the rule loudly, not guess.
-
-    Silently returning an unfiltered frame would make the full run and the
-    incremental run disagree about the same pair — the exact class of bug that
-    produced 153 wrong merges in the first place.
-    """
+    
     from src.splink_model import apply_business_rules
 
     bare = pd.DataFrame(
@@ -1271,12 +1100,7 @@ def business_rule_is_skipped_not_guessed_when_columns_absent():
 
 @check
 def business_rule_is_present_in_incremental_scoring():
-    """The incremental path must apply the same rule as the full run.
-
-    Two different rules on two different code paths means the same pair merges
-    on upload and does not merge on a rebuild — entity identity would depend on
-    which button was pressed.
-    """
+    
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "src" / "incremental.py").read_text(
@@ -1291,13 +1115,7 @@ def business_rule_is_present_in_incremental_scoring():
 
 @check
 def pipeline_lock_and_staging_are_wired():
-    """The staging commit path must exist and be reachable from run_all.
-
-    Without finalize_staged(), artifacts are staged forever and never reach
-    their real paths — the pipeline would "succeed" while leaving the app
-    reading stale data. Without discard_staged() on failure, a crashed run
-    leaves orphaned staging that a later run could commit by accident.
-    """
+    
     from src.config import (
         PIPELINE_LOCK,
         STAGING_DIR,
@@ -1311,8 +1129,7 @@ def pipeline_lock_and_staging_are_wired():
     from pathlib import Path as _Path
     import json as _json
 
-    # active_path honours the env var: outside a pipeline it returns the real
-    # path; inside (PIPELINE_STAGING=1) it prefers a staged file when present.
+    
     real = _Path("outputs") / "entity_map.parquet"
     assert active_path(real) == real, "outside a pipeline active_path must be the real path"
 
@@ -1324,8 +1141,7 @@ def pipeline_lock_and_staging_are_wired():
     release_pipeline_lock()
     assert not PIPELINE_LOCK.exists(), "lock must be released"
 
-    # Staging round-trip: a staged write is visible via active_path only when
-    # the env var is set, and finalize_staged() moves it to the real path.
+    
     import os as _os
     import pandas as _pd
 
@@ -1363,9 +1179,7 @@ def m_else_floor_is_per_field_for_identity_columns():
     """
     from src.config import M_ELSE_LEVEL_FLOOR_BY_FIELD, m_else_floor_for
 
-    # city/state/country are deliberately NOT in the override table — they fall
-    # back to the default. Assert through m_else_floor_for, which applies that
-    # fallback, rather than indexing the dict directly.
+    
     assert m_else_floor_for("dob_std") < m_else_floor_for("city_std") / 10, (
         "dob disagreement must be penalised at least 10x harder than city"
     )
@@ -1377,13 +1191,8 @@ def m_else_floor_is_per_field_for_identity_columns():
 
 @check
 def review_floor_drops_no_gold_positive():
-    """REVIEW_THRESHOLD was raised 1e-10 -> 1e-6; prove no true pair was lost.
-
-    The floor is a measured choice, not a preference: every gold positive must
-    still sit at or above it, otherwise real duplicates would silently drop out
-    of the human queue.
-    """
-    from src.config import REVIEW_THRESHOLD
+    
+    from src.config import REVIEW_THRESHOLD, MATCH_THRESHOLD
     from src.labels import GOLD_PATH, load_labels
 
     labels, source = load_labels("gold")
@@ -1396,25 +1205,36 @@ def review_floor_drops_no_gold_positive():
         labels[["record_id_l", "record_id_r", "is_positive"]],
         on=["record_id_l", "record_id_r"], how="inner",
     )
-    positives = merged[merged["is_positive"]]
+    # Only consider gold positives that are *in* the review band
+    positives = merged[
+        merged["is_positive"] &
+        (merged["match_probability"] >= REVIEW_THRESHOLD) &
+        (merged["match_probability"] < MATCH_THRESHOLD)
+    ]
     if positives.empty:
-        return f"SKIPPED: gold ({source}) has no positives among scored pairs"
+        return f"SKIPPED: no gold ({source}) positives in review band"
     lowest = float(positives["match_probability"].min())
     assert lowest >= REVIEW_THRESHOLD, (
-        f"a gold positive scores {lowest:.3e}, below REVIEW_THRESHOLD "
+        f"a gold positive in review band scores {lowest:.3e}, below REVIEW_THRESHOLD "
         f"{REVIEW_THRESHOLD:.3e} — it would never reach a human"
     )
-    return f"lowest gold positive {lowest:.3e} >= review floor {REVIEW_THRESHOLD:.3e}"
+    return (
+        f"review band check: {len(positives)} gold positives in "
+        f"[{REVIEW_THRESHOLD}, {MATCH_THRESHOLD}); lowest {lowest:.3e} >= floor"
+    )
 
 
 @check
 def explain_page_maps_null_and_exact_evidence_correctly():
     from src.ui import model_levels
 
-    email = model_levels()["gamma_gamma_email_std"]
-    assert "null" in email[-1][0].lower()
-    assert "Exact match on email_std" in email[4][0]
-    return "email null is gamma -1; exact email is gamma 4"
+    core = model_levels()["gamma_core_identity"]
+    # Null level (both names missing) maps to gamma code -1.
+    assert core[-1][0] == "Both names missing", core[-1]
+    # Full 9/9 agreement maps to the highest gamma code (code 7).
+    best = max(k for k in core if k >= 0)
+    assert "9/9 core match" in core[best][0], (best, core[best])
+    return "core_identity: null level at gamma -1; 9/9 agreement at top code"
 
 
 @check

@@ -156,8 +156,8 @@ Backend baca ini untuk lineage, jangan parse parquet untuk dapat metadata.
 | Konstanta | Nilai | Makna | Sumber |
 |---|---|---|---|
 | `MATCH_THRESHOLD` | 0.9 | `p >= 0.9` → auto-MERGE | `config.py` |
-| `REVIEW_THRESHOLD` | 1e-8 | `1e-8 <= p < 0.9` → REVIEW | `config.py` |
-| — | `p < 1e-8` | NON_MATCH | — |
+| `REVIEW_THRESHOLD` | 0.45 | `0.45 <= p < 0.9` → REVIEW | `config.py` |
+| — | `p < 0.45` | NON_MATCH | — |
 
 Override: `outputs/thresholds_override.json` (`match_threshold`, `review_threshold`).
 Pipeline membaca override ini otomatis saat import.

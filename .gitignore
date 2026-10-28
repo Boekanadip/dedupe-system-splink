@@ -1,52 +1,94 @@
-.venv/
+# gitignore untuk CRM Entity Resolution System
+# Generated untuk Windows + Python + PostgreSQL
+
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 .pytest_cache/
-.ipynb_checkpoints/
-.vscode/
-
-# Local database files and credentials
-*.duckdb
-*.db
-*.sqlite
-*.sqlite3
-.env
+.coverage
+htmlcov/
+.tox/
+venv/
+.env/
 .env.*
-!.env.example
+!env/.gitkeep
+!venv/.gitkeep
 
-# safety net: data files never belong in git, wherever they land
-*.parquet
-*.csv
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-!data/labels/.gitkeep
-!outputs/.gitkeep
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# raw and generated customer data
-data/raw/*
-!data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
-data/labels/*
-!data/labels/.gitkeep
-outputs/*
-!outputs/.gitkeep
+# OS
+.DS_Store
+Thumbs.db
 
-# Model versions are small JSON (config, thresholds, counts) and are the artifact
-# a reviewer's label is attributed to (MASTER_CONTEXT section 16), so they stay
-# tracked. Record-level customer data never lives here — but if a model.json is
-# ever found to contain record ids, this is the line to uncomment:
-# models/*/model.json
-
-# local OpenCode state
-.opencode/MEMORY.md
-
-# secrets
+# Environment/credentials (SENSITIVE)
+.env
+.env.local
+.env.*.local
+secrets.env
+credentials.json
 *.pem
+*.key
+*.crt
 
-# local-only: dokumentasi & konteks agent. Ada di disk, tidak dikirim ke GitHub.
-AGENTS.md
-DESIGN.md
-MASTER_CONTEXT.md.txt
-PRD.md
-/docs/
-.opencode/skills/
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Temporary files
+*.tmp
+*.bak
+body.json
+blocking_output.txt
+threshold_output.txt
+pytest_out.txt
+*.log
+
+# Data - raw CSVs (private)
+data/*.csv
+data/raw/*.csv
+data/processed/*.csv
+data/synthetic/*.csv
+data/demo/*.csv
+!data/.gitkeep
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/labels/.gitkeep
+
+# Outputs - large files (reproducible, don't commit)
+outputs/*.parquet
+outputs/*.json
+outputs/*.md
+outputs/*.csv
+outputs/metrics.json
+outputs/*.html
+!outputs/.gitkeep
+
+# Models - binary artifacts
+models/*.pkl
+models/*.bin
+models/*.sav
+models/*.joblib
+models/v20261027_161903/model.json
+!models/.gitkeep
+!models/latest.json
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

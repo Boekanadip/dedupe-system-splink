@@ -1,20 +1,3 @@
-"""Evaluasi berbasis skenario: kasus yang biasanya ditanyakan peninjau atau pembimbing.
-
-Laporan empat lapisan (src/evaluate) menjawab "apakah pipeline benar secara
-keseluruhan". Laporan tersebut tidak menjawab pertanyaan kasus seperti "apa
-yang dilakukan sistem saat email sama tetapi nama berbeda?". Modul ini
-menjawabnya dengan menghitung keputusan secara terukur dari seluruh prediksi,
-serta menggunakan dua acuan eksternal yang sudah tersedia (cakupan blocking
-atas duplikat yang diketahui dan pemulihan salah ketik pada uji tekanan).
-
-Setiap skenario melaporkan jumlah keputusan (MATCH/REVIEW/NON_MATCH) dan
-menjelaskan hal yang TIDAK dibuktikannya. Angka tersebut adalah hitungan, bukan
-klaim akurasi: tanpa label acuan untuk setiap pasangan, distribusi keputusan
-menunjukkan PERILAKU, bukan kebenaran.
-
-Jalankan: python -m src.scenario_eval
-Keluaran: outputs/scenario_evaluation.json (serta tabel yang dicetak)
-"""
 from __future__ import annotations
 
 import json
@@ -46,13 +29,9 @@ def build() -> dict:
     agree = agree_fields(records, preds[["record_id_l", "record_id_r"]])
     preds = preds.merge(agree, on=["record_id_l", "record_id_r"], how="left")
 
-    # predict() milik Splink sudah menyertakan nilai berdampingan (dob_std_l/r).
     dob_both = preds["dob_std_l"].notna() & preds["dob_std_r"].notna()
 
     scenarios: dict[str, dict] = {}
-
-    # S1 — email sama, nama berbeda: kotak masuk bersama, nama panggilan, atau
-    # data yang dimasukkan pasangan/asisten. Risiko utamanya adalah auto-MATCH.
     s1 = preds[preds["agree_email"] & ~preds["agree_name"]]
     scenarios["email_sama_nama_beda"] = {
         "question": "email sama tapi nama beda — apakah dianggap match?",
@@ -60,8 +39,6 @@ def build() -> dict:
         "does_not_prove": "whether each decision is correct; needs human labels (review pack stratum)",
     }
 
-    # S2 — catatan tanpa email DAN telepon tidak dapat diblokir dengan kedua
-    # kunci tersebut. Ini batas recall struktural, bukan keputusan model.
     no_contact = records["email_std"].isna() & records["phone_std"].isna()
     ids_no_contact = set(records.loc[no_contact, "record_id"])
     entities = pd.read_parquet("outputs/entity_map.parquet")
@@ -76,8 +53,6 @@ def build() -> dict:
         "does_not_prove": "that they ARE unique — blocking never generates them as candidates",
     }
 
-    # S3 — nama lengkap sama, tetapi tanggal lahir bertentangan: contoh umum
-    # "orang berbeda". Auto-MATCH di sini menandakan salah gabung.
     s3 = preds[preds["agree_name"] & dob_both & ~preds["agree_dob"]]
     scenarios["nama_sama_tanggal_lahir_beda"] = {
         "question": "nama sama tapi dob beda — sistem tetap merge?",
@@ -85,8 +60,6 @@ def build() -> dict:
         "does_not_prove": "correctness per pair; a shared dob alone is also a collision risk (see evaluation_report blocking layer)",
     }
 
-    # S4 — duplikat yang diketahui dari kunci jawaban device tetapi tidak pernah
-    # menjadi kandidat: batas maksimum recall akibat blocking.
     truth = device_truth_pairs(records)
     if truth.empty:
         scenarios["duplikat_lolos_blocking"] = {
@@ -103,7 +76,6 @@ def build() -> dict:
             "does_not_prove": "fuzzy duplicates beyond the device answer key",
         }
 
-    # S5 — pemulihan salah ketik diukur oleh uji tekanan, bukan dihitung ulang di sini.
     stress_path = OUTPUT_DIR / "stress_test.json"
     if stress_path.exists():
         stress = json.loads(stress_path.read_text(encoding="utf-8"))
@@ -119,7 +91,6 @@ def build() -> dict:
             "does_not_prove": "n/a",
         }
 
-    # S6 — keempat pengenal kuat cocok: pemeriksaan kewajaran arah kebijakan.
     s6 = preds[preds["agree_name"] & preds["agree_email"] & preds["agree_dob"] & preds["agree_phone"]]
     scenarios["nama_email_dob_telepon_sama"] = {
         "question": "4 identitas kuat sama — seharusnya MATCH?",
@@ -140,7 +111,7 @@ def build() -> dict:
 
 
 def main() -> None:
-    # Konsol Windows memakai cp1252 secara bawaan, yang merusak teks pertanyaan UTF-8.
+
     import sys
 
     if hasattr(sys.stdout, "reconfigure"):

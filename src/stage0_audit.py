@@ -314,12 +314,6 @@ def save_review_pack(path: Path, frame: pd.DataFrame, label_column: str) -> bool
 
 
 def stage1_promote_command() -> str:
-    """Jelaskan bagaimana paket stage 0 yang selesai masuk ke gold_labels.csv.
-
-    src.labels.promote_gold hanya membaca antrean strata dan sampel FP, sehingga
-    paket stage 0 tidak dipromosikan oleh perintah tersebut. Peninjau harus
-    mempromosikan kunci pasangan dan label hasil adjudikasi secara manual.
-    """
     return (
         "Promote manually: copy record_id_l, record_id_r and "
         "adjudicated_label (match/no_match) from this file into "

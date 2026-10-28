@@ -1,23 +1,3 @@
-"""Berkas mentah penyusun dataset saat ini dan record_id yang dimiliki tiap berkas.
-
-Kegagalan yang dicegah
-Perintah `standardize --input new_batch.csv` membangun ulang parquet hanya dari
-berkas tersebut, sehingga record_id dimulai
-kembali dari rec_000001 dan bertabrakan dengan baris yang sudah tersimpan.
-Peringatan yang dicetak setelahnya ("keluaran memiliki N baris, sedangkan
-parquet sebelumnya memiliki M") memang benar, tetapi kerusakan telanjur terjadi.
-
-Registri mencegah kesalahan perhitungan indeks: setiap batch didaftarkan satu
-kali, dan `next_start_index` dihitung dari data yang sudah ada. Pendaftaran
-ulang berkas yang sama ditolak berdasarkan hash isi, bukan nama berkas, karena
-data yang sama dengan nama berbeda lebih mungkin terjadi.
-
-Ketahanan data
-`record_id` ditetapkan berdasarkan posisi dalam batch. Mengubah berkas yang
-sudah didaftarkan akan mengubah ID semua catatan setelah posisi tersebut.
-sha256 disimpan agar perubahan itu dapat diketahui, bukan dicegah.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -62,12 +42,7 @@ def registered_paths() -> list[Path]:
 
 
 def source_paths() -> list[Path]:
-    """Daftar berkas penyusun dataset saat ini.
 
-    Definisi tunggal agar profiling dan standardize membaca data yang sama.
-    Sebelum registri tersedia, nilai ini adalah RAW_DATA_PATH yang dikonfigurasi
-    agar perilaku sebelum penggunaan registri tetap berfungsi.
-    """
     from .config import RAW_DATA_PATH
 
     paths = registered_paths()
@@ -75,12 +50,10 @@ def source_paths() -> list[Path]:
 
 
 def next_start_index() -> int:
-    """Titik awal record_id untuk batch berikutnya. Dihitung, bukan dimasukkan pengguna."""
     return int(load()["next_start_index"])
 
 
 def register(path: Path, rows: int) -> dict:
-    """Tambahkan batch; tolak batch yang akan dihitung dua kali atau tumpang tindih."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"{path} not found")
@@ -127,20 +100,12 @@ def unregister(file: str) -> bool:
     registry["batches"] = [b for b in registry["batches"] if b["file"] != file]
     if len(registry["batches"]) == before:
         return False
-    # next_start_index is derived from the remaining batches, so the freed range
-    # can be reused by the next batch without colliding.
     registry["next_start_index"] = sum(b["rows"] for b in registry["batches"])
     save(registry)
     return True
 
 
 def seed(names: list[str]) -> dict:
-    """Daftarkan sekumpulan batch awal secara berurutan dari awal.
-
-    Jumlah baris dibaca dari berkas, bukan diteruskan sebagai argumen: jumlah
-    yang salah akan membuat batch berikutnya memulai indeks di tengah batch
-    yang sudah ada.
-    """
     save(_empty())
     for name in names:
         path = RAW_DIR / name
@@ -160,7 +125,6 @@ def _row_count(path: Path) -> int:
 
 
 def verify_against(standardized_path: Path) -> dict:
-    """Apakah record_id yang terdaftar benar-benar mencakup parquet terstandardisasi?"""
     registry = load()
     if not registry["batches"]:
         return {"status": "unavailable", "reason": "no batches registered"}

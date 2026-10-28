@@ -28,11 +28,7 @@ def load_data(full: bool = False) -> pd.DataFrame:
 
 
 def block_stats(con: duckdb.DuckDBPyConnection, cols: list[str]) -> dict:
-    """Ukur kemencengan blok: ukuran blok terbesar dan nilai penyebabnya.
 
-    Kunci NULL dikecualikan karena equi-join tidak pernah mencocokkannya,
-    sehingga kunci tersebut juga tidak akan menghasilkan kandidat.
-    """
     keys = ", ".join(f'"{c}"' for c in cols)
     not_null = " AND ".join(f'"{c}" IS NOT NULL' for c in cols)
     block_count, largest_rows = con.execute(

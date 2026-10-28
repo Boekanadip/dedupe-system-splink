@@ -1,14 +1,4 @@
-"""Health check: baca semua artifact → satu JSON standar.
 
-Dipanggil backend engineer sebagai:
-    python -m src.health          → JSON ke stdout
-    python -m src.health --pretty → JSON terformat
-
-Read-only. Tidak menulis apa pun. Tidak pernah crash — file yang hilang
-dilaporkan sebagai {"available": false}, bukan exception.
-
-Exit code selalu 0. Backend yang menentukan alerting berdasarkan isi JSON.
-"""
 from __future__ import annotations
 
 import argparse

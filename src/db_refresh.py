@@ -1,30 +1,3 @@
-"""Refresh path: update already-ingested records when the source row changed.
-
-Phase 3 of the DB-input work. Until now the pipeline only ingests rows it has
-never seen. When a database row is corrected (a typo fixed, a blank filled in),
-the same customer_pk comes back with a newer updated_at. This module updates
-that record in place instead of creating a second record for the same person.
-
-Two kinds of changed row, handled separately:
-  - INSERT  customer_pk not seen before  -> normal new-batch path (export +
-            incremental stage). Reuses db_export, nothing new here.
-  - UPDATE  customer_pk already ingested -> overwrite that record's values in
-            the standardized parquet, keeping its record_id and entity_id.
-
-Why entity_id is NOT reassigned automatically. Updating a record's fields can
-change who it matches. If the record no longer matches its entity mates, the
-entity should split; if it matches new records, it may merge. Splitting is not
-something the current clustering does, and silently moving a record between
-entities changes identity without a human seeing it (AGENTS.md data rules).
-So this module re-scores the updated record, compares its match edges against
-the previous ones, and writes a staleness report when they differ. A human
-decides via the normal review queue; entity_id is left untouched here.
-
-Usage:
-    python -m src.db_refresh --source data/synthetic/crm.duckdb --table crm_customers
-    python -m src.db_refresh --source ... --table ... --date-order dmy
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -84,12 +57,7 @@ def save_key_map(mapping: dict) -> None:
 
 
 def _pk_str(value) -> str | None:
-    """Normalize a customer_pk to a stable lookup key.
 
-    The parquet stores an integer key as a float (2001.0) because the column
-    holds NaN for the rows that have none; the database returns an int (2001).
-    Without this the map lookup would miss every update.
-    """
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
     if isinstance(value, float) and value.is_integer():
@@ -98,13 +66,7 @@ def _pk_str(value) -> str | None:
 
 
 def sync_key_map_from_parquet(mapping: dict) -> dict:
-    """Add any customer_pk that reached the parquet but is not mapped yet.
 
-    A batch that was staged and then applied gains record_ids without going
-    through this module, so the map has to be rebuilt from the parquet to see
-    them. Only rows carrying a customer_pk column can be mapped; the original
-    50k CRM file has none, so those rows are left alone.
-    """
     if not PROCESSED_DATA_PATH.exists():
         return mapping
     try:
@@ -132,11 +94,7 @@ def _existing_record_ids(record_ids: list[str]) -> set[str]:
 
 
 def _replace_rows(target: Path, replacement: pd.DataFrame) -> None:
-    """Overwrite rows in a parquet by record_id, streaming via DuckDB.
 
-    The old rows for these record_ids are dropped and the new ones appended in
-    one COPY, so the file is never half-written. Atomic via a temp file.
-    """
     ids = sorted(replacement["record_id"].unique())
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".tmp")
@@ -178,11 +136,7 @@ def _old_match_edges(record_ids: set[str]) -> pd.DataFrame:
 def update_records(
     updates: pd.DataFrame, date_order: str | None, mapping: dict
 ) -> dict:
-    """Overwrite already-ingested records and re-score only those records.
 
-    Returns a report. entity_id is never changed here; a changed match edge is
-    written to the staleness report for a human to resolve.
-    """
     record_ids = [mapping[_pk_str(pk)] for pk in updates["customer_pk"]]
     present = _existing_record_ids(record_ids)
     missing = [rid for rid, pk in zip(record_ids, updates["customer_pk"]) if rid not in present]
@@ -193,9 +147,6 @@ def update_records(
             "the registry."
         )
 
-    # Standardize the new values, then force the original record_id back on.
-    # standardize() assigns record_id positionally; overriding it here is what
-    # keeps the record's identity instead of minting a new one.
     evidence: dict = {}
     new_std = standardize(updates.copy(), date_order, evidence)
     new_std["record_id"] = record_ids
@@ -212,11 +163,6 @@ def update_records(
 
     changed_fields = _changed_fields(old_rows, updates, record_ids)
 
-    # Re-score BEFORE writing anything. candidate_old_rows anti-joins the
-    # updated record_ids, so it reads the current (still-old) parquet and
-    # returns other rows that share a blocking key with the NEW values. Gating
-    # the parquet write on a successful score means a scoring failure leaves
-    # every artifact untouched instead of half-updated.
     latest = model_lifecycle.latest()
     if latest is None:
         raise SystemExit("No saved model. Run python -m src.run_all first.")
@@ -233,7 +179,6 @@ def update_records(
         scoring_frame = pd.concat([old_candidates, new_std], ignore_index=True)
     new_preds = score_new_pairs(scoring_frame, set(record_ids), model=model)
 
-    # --- scoring succeeded; now commit the new values and the re-scored pairs.
     _replace_rows(PROCESSED_DATA_PATH, new_std)
     write_meta(
         PROCESSED_DATA_PATH,
@@ -242,8 +187,6 @@ def update_records(
         incremental_batch="db_refresh",
     )
 
-    # Append the re-scored pairs. dedup_on skips a pair that is already stored,
-    # so re-running a refresh does not duplicate the predictions file.
     from .incremental import _append_parquet
 
     _append_parquet(
@@ -346,13 +289,7 @@ def _write_stale(stale: list[dict]) -> None:
 
 
 def _enqueue_stale(stale: list[dict]) -> int:
-    """Put stale records into the human review queue (G5).
 
-    A changed match edge means the record may belong to a different entity.
-    Clustering cannot split entities, so the only safe path is a human
-    decision. The stale JSON is a machine report; the queue is where a
-    person actually looks at the pair.
-    """
     if not stale:
         return 0
     records = pd.read_parquet(PROCESSED_DATA_PATH)
@@ -433,9 +370,7 @@ def main() -> None:
         return
 
     started = time.perf_counter()
-    # Hold the pipeline lock for the whole refresh: it writes the parquet,
-    # predictions, key map and watermark. Without the lock a concurrent
-    # run_all could read the parquet mid-write (G6).
+
     acquire_pipeline_lock(note=f"db_refresh {args.table}")
     try:
         watermark = read_watermark(args.source, args.table)
@@ -475,8 +410,6 @@ def main() -> None:
             "steps": [],
         }
 
-        # --- inserts: register as a normal new batch. Staging is left to the caller
-        # (job_run or the Streamlit batch page) so this module stays single-purpose.
         if len(inserts):
             registered = register_frame(inserts)
             if registered["status"] == "exported":
@@ -499,14 +432,9 @@ def main() -> None:
             if result["stale_entities"]:
                 print(f"  -> {result['stale_entities']} entity/entities may be stale; see {STALE_PATH.name}")
 
-        # Re-sync the map so freshly ingested customer_pk become updatable next run.
         mapping = sync_key_map_from_parquet(load_key_map())
         save_key_map(mapping)
-
-        # Write watermark (dict form with last_pk to close gap G1).
         last_updated = str(frame.iloc[-1]["updated_at"])
-        # Also include the last_pk to close the G1 watermark gap: rows with the
-        # same updated_at but a larger customer_pk will still be fetched.
         write_watermark(args.source, args.table, {"updated_at": last_updated})
 
         report["key_map_size"] = len(mapping)

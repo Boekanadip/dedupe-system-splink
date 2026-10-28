@@ -22,8 +22,6 @@ from .config import (
 
 MASTER_SUMMARY_PATH = OUTPUT_DIR / "master_summary.csv"
 
-# device_ids_std berisi daftar pada setiap baris, sehingga tidak dapat dipilih
-# sebagai nilai tunggal. Kolom ini tetap ada di parquet terstandardisasi untuk audit.
 MASTER_FIELDS = [
     "first_name_std",
     "last_name_std",
@@ -38,40 +36,12 @@ MASTER_FIELDS = [
 LINEAGE_FIELDS = ["record_id", "customer_id", "source"]
 
 
-# Kolom yang angka-nya adalah ISI sah, bukan kerusakan. Tanggal, telepon, dan
-# nomor rumah memang berisi angka; menghukum angka di sana selalu memilih nilai
-# yang salah. Diukur pada data ini: dob_std "1988-04-11" mencetak skor 18 hanya
-# karena delapan angkanya, sehingga kalah telak dari nilai lain yang sama sahnya.
 DIGIT_EXPECTED = frozenset({"dob", "phone", "signup_date", "email", "address"})
 
-# Kolom yang simbol-nya adalah ISI sah: tanda "-" pada tanggal dan "@"/"." pada
-# email. Simbol lain tetap dihukum — normalize_text sudah membuang simbol dari
-# nama/kota/alamat, jadi yang tersisa memang mencurigakan.
 SYMBOL_EXPECTED = frozenset({"dob", "email", "phone"})
 
 
 def corruption_score(value: str, field: str = "") -> int:
-    """Skor keanehan sebuah nilai terstandardisasi. Makin kecil makin dipilih.
-
-    Dipakai HANYA sebagai pemecah seri setelah jumlah kemunculan (`n`), jadi
-    nilai yang paling sering muncul di dalam entity tetap menang tanpa syarat.
-
-    DUA PERUBAHAN dari versi lama, keduanya berdasar temuan terukur:
-
-    1. PENALTI HURUF BERULANG DIHAPUS. Verifikasi menunjukkan "Muhammad" (benar)
-       mencetak 2 sedangkan "Muhamed" (salah ketik) mencetak 1, sehingga justru
-       salah ketik yang dipilih. Profiling juga menemukan 10.666 catatan dengan
-       karakter berulang bersebelahan — pola itu umum dan sah pada nama asli
-       ("Muhammad", "Lee", "Stafford"), jadi menghukumnya merugikan lebih banyak
-       daripada menolong.
-
-    2. PENALTI ANGKA SEKARANG PER-KOLOM. Versi lama menghukum angka di semua
-       kolom, padahal tanggal lahir, telepon, dan nomor rumah memang berisi
-       angka. Itu membuat tanggal lahir nyaris mustahil dipilih sebagai nilai
-       master.
-
-    Sisa metriknya tetap: angka di nama/kota = ganjil, simbol di nama/kota = ganjil.
-    """
     if field.startswith("master_"):
         field = field[len("master_"):]
     field = field.removesuffix("_std")
@@ -88,12 +58,6 @@ def corruption_score(value: str, field: str = "") -> int:
 
 
 def pick_master_values(frame: pd.DataFrame) -> pd.DataFrame:
-    """Pilih nilai terstandardisasi terkuat dan paling sedikit rusak per entity dan kolom.
-
-    Urutan: pilih nilai yang paling banyak disepakati, lalu yang paling sedikit
-    rusak, kemudian urutkan secara alfabetis. Setiap tahap deterministik,
-    sehingga masukan yang sama selalu menghasilkan catatan master yang sama.
-    """
     long = frame.melt(
         id_vars=["entity_id"],
         value_vars=MASTER_FIELDS,
@@ -102,12 +66,9 @@ def pick_master_values(frame: pd.DataFrame) -> pd.DataFrame:
     ).dropna(subset=["value"])
 
     counts = long.groupby(["entity_id", "field", "value"]).size().reset_index(name="n")
-    # corruption dinilai per-kolom: angka sah pada tanggal/telepon tapi ganjil
-    # pada nama. Tanpa field-nya, tanggal lahir selalu kalah dari nilai lain.
     counts["corruption"] = counts.apply(
         lambda r: corruption_score(r["value"], r["field"]), axis=1
     )
-    # Urutkan berdasarkan jumlah terbanyak, kerusakan paling sedikit, lalu nilai.
     counts = counts.sort_values(
         ["entity_id", "field", "n", "corruption", "value"],
         ascending=[True, True, False, True, True],
@@ -121,10 +82,6 @@ def pick_master_values(frame: pd.DataFrame) -> pd.DataFrame:
 
 def build_lineage(frame: pd.DataFrame) -> pd.DataFrame:
     grouped = frame.groupby("entity_id")
-    # Batch saat ini memiliki 1.281 nilai source kosong (diukur 2026-10-01), dan
-    # satu entity dapat mencampur nilai kosong dengan nilai nyata — sorted()
-    # pada {None, 'referral'} memunculkan TypeError. Nilai kosong dibuang dari
-    # daftar; entity tanpa source menghasilkan [], bukan [None].
     return pd.DataFrame(
         {
             "record_count": grouped["record_id"].nunique(),
@@ -156,9 +113,7 @@ def main() -> None:
             f"entity_map covers {len(frame):,} of {len(records):,} records; rebuild clustering"
         )
 
-    # Pengelompokan cakupan sampel juga mencakup semua record_id, sehingga
-    # pemeriksaan panjang di atas tidak dapat mendeteksinya. Ini titik terakhir
-    # untuk mencegah cakupan yang keliru menghasilkan berkas master pelanggan salah.
+
     meta = read_meta(ENTITY_MAP_PATH)
     if meta and meta.get("scope") != SCOPE_FULL:
         raise SystemExit(
@@ -174,8 +129,6 @@ def main() -> None:
 
     master = build_lineage(frame).merge(pick_master_values(frame), on="entity_id", how="left")
 
-    # Asal-usul: kolom yang berbeda di dalam entity agar peninjau dapat melihat
-    # nilai master mana yang ditentukan melalui pertimbangan.
     conflicts = (
         frame.melt(
             id_vars=["entity_id"],

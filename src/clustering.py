@@ -37,13 +37,7 @@ def load_predictions(full: bool) -> pd.DataFrame:
 
 
 def guard_against_scope_downgrade(full: bool, force: bool) -> None:
-    """Tolak penggantian peta entity hasil proses penuh dengan peta hasil sampel.
 
-    Proses sampel tetap menghasilkan seluruh 50.000 record_id, sehingga semua
-    pemeriksaan jumlah baris berikutnya lolos dan tidak terlihat ada masalah.
-    Padahal, 49.850 catatan menjadi entity tunggal karena sisi kecocokannya
-    tidak pernah diberi skor.
-    """
     existing = read_meta(ENTITY_MAP_PATH)
     if not existing or force:
         return
@@ -67,11 +61,7 @@ def guard_against_scope_downgrade(full: bool, force: bool) -> None:
 def connected_components(
     record_ids: list[str], edges: pd.DataFrame
 ) -> dict[str, str]:
-    """Jalankan union-find pada sisi kecocokan. Ukuran graf ini tidak memerlukan pustaka graf.
 
-    ID entity ditetapkan berdasarkan record_id terendah pada setiap komponen,
-    sehingga masukan yang sama selalu menghasilkan entity_id yang sama.
-    """
     parent = {rid: rid for rid in record_ids}
 
     def find(node: str) -> str:
@@ -161,8 +151,7 @@ def main() -> None:
     entity_map["entity_id"] = entity_map["record_id"].map(entity_ids)
     atomic_write_parquet(entity_map, ENTITY_MAP_PATH)
 
-    # Provenance: record which model version produced these clusters so a
-    # stale entity_map can never masquerade behind a newer model.
+
     model_version = None
     preds_meta = read_meta(active_path(predictions_path(full=args.full)))
     model_version = preds_meta.get("model_version") or (

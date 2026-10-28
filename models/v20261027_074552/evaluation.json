@@ -1,0 +1,14 @@
+{
+  "version": "v20261027_074552",
+  "decisions": {
+    "NON_MATCH": 1474310,
+    "REVIEW": 35336,
+    "MATCH": 13314
+  },
+  "decision_rates": {
+    "NON_MATCH": 0.968056,
+    "REVIEW": 0.023202,
+    "MATCH": 0.008742
+  },
+  "note": "Counts produced by this run. Accuracy metrics are NOT here on purpose: they belong in outputs/threshold_evaluation_*.json and are only valid against the label source that produced them."
+}

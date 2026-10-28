@@ -22,8 +22,6 @@ from .config import (
 )
 from .profiling import load_raw
 
-# Tiga kolom numerik dengan SATU pemisah berulang. Pola sengaja dibuat ketat:
-# pola longgar dapat membuat '1988-04-11' terbaca sebagai 4 November.
 NUMERIC_DATE = re.compile(r"^(\d{1,4})([-/.])(\d{1,2})\2(\d{1,4})$")
 
 
@@ -40,6 +38,19 @@ def normalize_text(value) -> str | None:
 def normalize_name(value) -> str | None:
     return normalize_text(value)
 
+_LEET_TABLE = str.maketrans({
+    "0": "o", "1": "i", "3": "e", "4": "a", "5": "s",
+    "7": "t", "8": "b", "@": "a", "$": "s", "!": "i",
+})
+
+_PERSON_NAME_FIELDS = {"first_name", "last_name"}
+
+
+def normalize_person_name(value) -> str | None:
+    if pd.isna(value):
+        return None
+    return normalize_text(str(value).translate(_LEET_TABLE))
+
 
 def normalize_email(value) -> str | None:
     if pd.isna(value):
@@ -49,44 +60,28 @@ def normalize_email(value) -> str | None:
 
 
 def normalize_phone(value) -> str | None:
-    r"""Ambil angka saja dan buang ekstensi.
+    r"""Ambil angka saja, buang ekstensi, dan seragamkan prefix internasional.
 
-    PENGUKURAN pada berkas pengembangan 50 ribu baris sebelum perubahan ini:
-    29.966 dari 50.000 nilai memiliki ekstensi "xNNN", dan `re.sub(r"\D", "")`
-    memasukkan ekstensi ke dalam kunci. '(449) 977-1729' dan
-    '449.977.1729x282' adalah nomor yang sama dari dua sistem, tetapi
-    sebelumnya menghasilkan kunci berbeda sehingga tidak dapat dicocokkan.
-
-    Yang dibuang hanya ekstensi, bukan seluruh nomor: nomor pusat yang sama
-    dengan ekstensi berbeda tetap menjadi bukti organisasi yang sama, dan nomor
-    utama adalah bagian yang dikenali customer sebagai nomor teleponnya.
-
-    Docstring mentah digunakan dengan sengaja: docstring biasa mengubah "\D"
-    di atas menjadi SyntaxWarning setiap kali modul diimpor.
+    Data asli memuat nomor yang sama dengan prefix berbeda (001..., 00..., 1...,
+    0...). Tanpa normalisasi prefix, pasangan yang sama persis gagal cocok dan
+    menjadi false negative. Aturan: buang '00' internasional, lalu buang satu
+    '0' domestik di depan, sisanya angka Nasional.
     """
     if pd.isna(value):
         return None
     text = re.split(r"[xX]\s*\d+", str(value))[0]
     digits = re.sub(r"\D", "", text)
+    if not digits:
+        return None
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if digits.startswith("0"):
+        digits = digits[1:]
     return digits or None
 
 
 def normalize_date(value, dayfirst: bool) -> str | None:
-    """Ubah satu tanggal ke format ISO dengan menentukan urutan hari/bulan secara eksplisit.
 
-    dayfirst WAJIB diberikan. Implementasi sebelumnya mencoba %d/%m/%Y lalu
-    diam-diam beralih ke pandas dayfirst=True, yang membaca '1988-04-11' sebagai
-    day=04 month=11 dan menghasilkan 1988-11-04: salah, tanpa pesan kesalahan.
-    Tidak ada tebakan yang dijamin benar, sehingga pemanggil harus menentukan
-    urutan terlebih dahulu — dari baris yang tidak ambigu pada kolom yang sama
-    atau dari jawaban manusia.
-
-    Pengukuran pada dataset saat ini: 30.279 baris dob memiliki hari > 12 dan
-    tidak ada yang memiliki bulan > 12, sehingga format berkas adalah hari-bulan.
-    Sebanyak 19.721 baris (39,4%) memiliki hari dan bulan <= 12, sehingga
-    urutannya hanya dapat ditentukan dari keseluruhan kolom, bukan dari nilainya
-    sendiri.
-    """
     if pd.isna(value):
         return None
     text = str(value).strip()
@@ -97,8 +92,7 @@ def normalize_date(value, dayfirst: bool) -> str | None:
     if parts:
         first, second, third = parts.group(1), parts.group(3), parts.group(4)
         if len(first) == 4:
-            # Menurut konvensi ISO 8601, jika tahun berada di awal, kolom kedua
-            # adalah bulan. Ini konvensi terdokumentasi, bukan tebakan lokal.
+            
             year, month, day = first, second, third
         else:
             year = third
@@ -108,16 +102,13 @@ def normalize_date(value, dayfirst: bool) -> str | None:
             elif b > 12:
                 month, day = a, b
             else:
-                # Nilai ini ambigu jika berdiri sendiri; hanya jawaban yang
-                # tercatat yang dapat menentukannya.
+
                 month, day = (b, a) if dayfirst else (a, b)
         try:
             return date(int(year), int(month), int(day)).isoformat()
         except ValueError:
             return None
 
-    # Nama bulan sudah menyatakan bulannya, jadi urutan hari/bulan tidak perlu
-    # ditentukan untuk nilai-nilai ini.
     for fmt in ("%d-%b-%Y", "%d %b %Y", "%b %d %Y"):
         try:
             return datetime.strptime(text, fmt).date().isoformat()
@@ -127,17 +118,10 @@ def normalize_date(value, dayfirst: bool) -> str | None:
 
 
 def detect_date_order(values: pd.Series) -> tuple[str | None, dict]:
-    """Simpulkan urutan hari-bulan atau bulan-hari dari baris yang tidak ambigu.
 
-    Kembalikan (order, evidence). Nilai order adalah None jika urutan kolom tidak
-    dapat ditentukan: kedua urutan ditemukan atau tidak ada baris yang tidak
-    ambigu. Kedua kondisi memerlukan jawaban manusia dan tidak boleh ditebak.
-    """
     parts = values.dropna().astype(str).str.extract(NUMERIC_DATE.pattern)
-    # Kelompok: 1=kolom pertama, 2=pemisah, 3=kolom kedua, 4=kolom ketiga.
     first = pd.to_numeric(parts[0], errors="coerce")
     second = pd.to_numeric(parts[2], errors="coerce")
-    # Kolom pertama dengan 4 digit menunjukkan tahun di awal, sesuai konvensi ISO.
     year_first = int((first >= 1000).sum())
     day_gt_12 = int((first[first < 1000] > 12).sum())
     month_gt_12 = int((second[first < 1000] > 12).sum())
@@ -156,10 +140,6 @@ def detect_date_order(values: pd.Series) -> tuple[str | None, dict]:
     elif month_gt_12 and not day_gt_12:
         order = "mdy"
     elif year_first > 0 and day_gt_12 == 0 and month_gt_12 == 0:
-        # Every parsed row is year-first (ISO). d/m vs m/d is irrelevant —
-        # normalize_date already handles YYYY-MM-DD. Without this the DB path
-        # (where DuckDB returns DATE columns that db_source normalizes to ISO)
-        # always raised "Cannot tell whether dob is d/m/Y or m/d/Y".
         order = "iso"
     else:
         order = None
@@ -227,15 +207,6 @@ def add_record_id(
 
 
 def add_blocking_keys(df: pd.DataFrame) -> pd.DataFrame:
-    """Turunkan kunci blocking umum dari kolom yang telah distandardisasi.
-
-    Blocking persis pada nilai identitas terstandardisasi menghasilkan sangat
-    sedikit kandidat di dataset ini (3.487 dari 49.995.000 pasangan pada sampel
-    10 ribu baris) karena salah ketik tetap ada setelah normalisasi. Kunci ini
-    sengaja menggunakan prefiks yang tidak utuh agar catatan yang hampir sama
-    masuk ke blok yang sama. Kunci hanya menghasilkan kandidat; kemiripan tetap
-    dinilai oleh Splink setelahnya.
-    """
     for column, length in (("first_name_std", 3), ("last_name_std", 3)):
         if column in df:
             df[f"{column}_pre{length}"] = df[column].str.slice(0, length)
@@ -253,17 +224,37 @@ def add_blocking_keys(df: pd.DataFrame) -> pd.DataFrame:
     if "dob_std" in df:
         df["dob_year_std"] = df["dob_std"].str.slice(0, 4)
 
+    if "last_name_std" in df:
+        # Soundex grouping catch typo variants ("Smith" / "Smyth").
+        df["phonetic_last_name"] = df["last_name_std"].map(soundex)
+
+    if "first_name_std" in df:
+        df["phonetic_first_name"] = df["first_name_std"].map(soundex)
+
     return df
 
 
-def assert_blocking_columns(df: pd.DataFrame) -> list[str]:
-    """Tolak standardisasi dataset yang tidak dapat diproses oleh blocking.
+def soundex(name: str | None) -> str | None:
+    if not name or pd.isna(name):
+        return None
+    name = re.sub(r"[^A-Za-z]", "", str(name)).upper()
+    if not name:
+        return None
+    first = name[0]
+    mapping = str.maketrans("BFPVCGJKQSXZDTLMNR", "111122222222334556")
+    core = name[1:].translate(mapping)
+    core = re.sub(r"[^0-9]", "", core)
+    result = first
+    prev = ""
+    for ch in core:
+        if ch != prev:
+            result += ch
+        prev = ch
+    result = f"{result[:4]:<04.4}"
+    return result
 
-    `standardize()` melewati kolom sumber yang tidak tersedia, sehingga batch
-    tanpa `dob` tidak menghasilkan `dob_std`. Tidak ada kesalahan sampai Splink
-    melaporkan MISSING COLUMN, setelah data baru terlanjur ditulis dan
-    didaftarkan. Pemeriksaan di sini menyebutkan kolom sumber yang hilang.
-    """
+
+def assert_blocking_columns(df: pd.DataFrame) -> list[str]:
     required = {col for _, cols in load_benchmark_rules() for col in cols}
     missing = sorted(required - set(df.columns))
     if not missing:
@@ -292,7 +283,14 @@ def standardize(
     for canonical in text_fields:
         source = COLUMN_MAP[canonical]
         if source in df:
-            df[f"{canonical}_std"] = df[source].map(normalize_name)
+            # Fold leet hanya untuk nama. Alamat berisi angka ("no. 3") dan
+            # akan rusak bila 3->e diterapkan di sana.
+            mapper = (
+                normalize_person_name
+                if canonical in _PERSON_NAME_FIELDS
+                else normalize_name
+            )
+            df[f"{canonical}_std"] = df[source].map(mapper)
 
     source = COLUMN_MAP["email"]
     if source in df:
@@ -301,10 +299,6 @@ def standardize(
     source = COLUMN_MAP["phone"]
     if source in df:
         df["phone_std"] = df[source].map(normalize_phone)
-
-    # Setiap kolom tanggal menentukan urutan hari/bulannya sendiri. Urutannya
-    # dapat berbeda antar kolom dan antar batch, sehingga satu pengaturan global
-    # tidak cukup.
     date_evidence: dict[str, dict] = {}
     for canonical in ("dob", "signup_date"):
         source = COLUMN_MAP[canonical]
@@ -317,10 +311,6 @@ def standardize(
 
     source = COLUMN_MAP["device_ids"]
     if source not in df and DEVICE_ID_ALIASES:
-        # Berkas 50 ribu baris memakai `device_id(s)`, sedangkan batch_0005
-        # memakai `device_id`. COLUMN_MAP hanya menampung satu nama per kolom
-        # kanonis. Tanpa penanganan ini, 200 catatan batch_0005 tidak memiliki
-        # acuan device dan 35 sisi MATCH-nya tidak dapat diverifikasi.
         source = next((alt for alt in DEVICE_ID_ALIASES if alt in df), source)
     if source in df:
         df["device_ids_std"] = df[source].map(normalize_device_ids)
@@ -434,9 +424,6 @@ def main() -> None:
             f"({ev['source']})"
         )
 
-    # Asal-usul data: jawaban urutan tanggal merupakan keputusan, bukan detail.
-    # Tanpanya, pembaca berikutnya tidak dapat mengetahui apakah tanggal diparse
-    # atau hanya ditebak.
     write_meta(
         PROCESSED_DATA_PATH,
         artifact="standardized_records",

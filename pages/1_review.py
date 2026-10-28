@@ -1,16 +1,3 @@
-"""Halaman pemeriksaan pasangan (PRD FR-09).
-
-Dua tab, satu sumber data (data/labels/review_queue.csv):
-  - Bandingkan: satu pasangan satu layar, lengkap dengan "Kenapa?".
-  - Daftar: kisi edit massal untuk-triase cepat.
-
-Semua bahasa di halaman ini diambil dari src/ui.py supaya istilah yang sama
-tidak pernah ditulis berbeda di halaman lain. Kolom di file tetap nama teknis
-(backward compatible); hanya tampilannya yang diganti bahasa manusia.
-
-Kedua tab menulis kolom yang SAMA (label / reviewer / reviewer_note).
-"""
-
 from __future__ import annotations
 
 import subprocess
@@ -47,10 +34,8 @@ QUEUE_PATH = LABELS_DIR / "review_queue.csv"
 PREDS_PATH = OUTPUT_DIR / "splink_predictions.parquet"
 EDITABLE = ["label", "reviewer", "reviewer_note"]
 
-# 30 detik per pasangan adalah perkiraan kasar
 SECONDS_PER_PAIR = 30
 
-# Kolom yang tampil di kisi "Daftar"
 GRID_COLUMNS: list[tuple[str, str]] = [
     ("record_id_l", "Record A"),
     ("record_id_r", "Record B"),
@@ -221,7 +206,7 @@ with tab_compare:
             try:
                 wanted = (
                     ["record_id_l", "record_id_r", "decision"]
-                    + [f"gamma_gamma_{f}" for f in value_fields]
+                    + [f"gamma_{f}" for f in value_fields]
                     + [f"{f}_{side}" for f in value_fields for side in ("l", "r")]
                 )
                 gdf = pd.read_parquet(PREDS_PATH, columns=wanted)
@@ -380,35 +365,6 @@ if st.button("Simpan ke daftar utama"):
 if st.session_state.get("msg", "").startswith("Berhasil disimpan"):
     st.divider()
     st.subheader("Habis ini ke mana?")
-    st.markdown(
-        f"""
-Keputusan Anda sudah masuk ke **`data/labels/gold_labels.csv`** — file paling
-berharga di sistem ini. Isinya dipakai untuk **mengukur seberapa tepat model**,
-bukan untuk memutuskan sendiri.
 
-Tapi perlu diketahui: **keputusan Anda belum mengubah model.** Model yang
-sedang jalan tetap sama seperti sebelumnya. Perubahan baru terjadi kalau model
-dilatih ulang.
-
-Urutan selanjutnya:
-
-1. **Lihat hasil pengukuran** — buka halaman **Ringkasan**. Di sana terlihat
-   berapa customer unik, berapa yang digabung, dan berapa yang masih perlu
-   diperiksa.
-
-2. **Kalau hasilnya sudah memuaskan** — selesai. Tidak perlu apa-apa.
-
-3. **Kalau hasilnya belum benar** — buka halaman **Pengaturan Sistem** lalu
-   tekan **Latih ulang**. Di situ model belajar dari keputusan yang baru saja
-   Anda simpan. Prosesnya beberapa menit.
-
-4. **Kalau ada yang salah gabung** — buka halaman **Daftar Customer**, cari
-   customer yang keliru, lalu laporkan sebagai *salah gabung*. Itu jadi masukan
-   untuk perbaikan berikutnya.
-
-Saran: jangan melatih ulang setiap kali menilai beberapa pasangan. Kumpulkan
-dulu beberapa lusin keputusan, baru latih ulang — supaya perubahannya terukur.
-"""
-    )
     if st.button("Buka Pengaturan Sistem untuk melatih ulang"):
         st.switch_page("pages/4_retrain.py")

@@ -1,29 +1,3 @@
-"""Uji skala untuk src.incremental: 100 ribu / 500 ribu / 1 juta baris lama.
-
-Yang diukur
-    Biaya jalur inkremental per batch (compute + apply) saat dataset LAMA
-    membesar: waktu nyata dalam detik, perubahan puncak RSS, dan jumlah pasangan
-    yang diberi skor. Pengujian memakai isi src/incremental.py yang sedang ada,
-    sehingga perintah yang sama menghasilkan angka sebelum dan sesudah perbaikan.
-
-Yang dilakukan pada setiap proses
-    1. mencadangkan semua artefak yang akan disentuh (lihat ARTIFACTS),
-       termasuk berkas pendamping .meta.json
-    2. membuat N pelanggan sintetis, lalu menstandardisasinya ke
-       data/processed/crm_standardized.parquet, satu entity per catatan
-    3. mendaftarkan batch baru berisi 100 baris (90 pelanggan baru + 10 salinan
-       persis dari baris lama, sehingga ada sisi MATCH yang nyata)
-    4. mengukur waktu compute() dan apply(), serta mengambil sampel puncak RSS
-       melalui thread
-    5. memulihkan semua cadangan pada blok finally dan menghapus berkas sementara
-
-Hasil ditambahkan sebagai baris JSON ke --out. CSV yang dihasilkan disimpan di
-data/raw/ dan dihapus saat proses berakhir.
-
-Cara menjalankan:
-    python notebooks/scale_benchmark.py --size 100000 --out /tmp/scale.jsonl
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -81,9 +55,6 @@ RAW_COLUMNS = [
     "device_id(s)", "source",
 ]
 
-# Semua berkas yang diganti atau ditambahi oleh satu proses. Berkas pendamping
-# dicadangkan bersama artefaknya agar pemulihan tidak meninggalkan asal-usul data
-# yang sudah kedaluwarsa.
 ARTIFACTS = [
     PROCESSED_DATA_PATH,
     ENTITY_MAP_PATH,
@@ -182,9 +153,7 @@ def generate_batch(old_std: pd.DataFrame, rng: random.Random) -> pd.DataFrame:
             "source": rng.choices(SOURCES, k=n_new),
         }
     )
-    # 10 salinan persis baris lama: orang yang sama, dengan sisi MATCH nyata.
-    # Hanya kolom mentah yang dipertahankan agar batch tampak seperti CSV baru,
-    # bukan salinan parquet terstandardisasi yang sudah memiliki record_id dan *_std.
+
     clone_src = old_std[RAW_COLUMNS].sample(
         n=BATCH_CLONES, random_state=rng.randrange(10**9)
     )
@@ -212,9 +181,7 @@ def setup_old_data(n: int, rng: random.Random) -> int:
     emap = pd.DataFrame(
         {
             "record_id": std["record_id"],
-            # Satu entity per catatan: kasus terburuk bagi union-find sekaligus
-            # keadaan wajar bagi dataset yang baru distandardisasi, tetapi belum
-            # dikelompokkan oleh model.
+            
             "entity_id": "ent_"
             + pd.Series(range(1, len(std) + 1), dtype="object").astype(str).str.zfill(6),
         }

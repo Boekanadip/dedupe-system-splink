@@ -1,23 +1,3 @@
-"""Ukur perubahan pada entity lama saat batch baru ditambahkan.
-
-Empat angka beserta hal yang dijawab masing-masing:
-
-1. cross_batch_match_pairs   - apakah model menautkan catatan dari batch berbeda?
-                               Nilai 0 berarti baris baru menjadi "pulau" terpisah,
-                               yaitu linkage tidak berjalan secara inkremental.
-2. new_batch_internal_pairs - duplikat yang hanya ditemukan di dalam batch baru.
-3. wrong_merges             - sisi lintas batch yang dinilai negatif oleh label
-                               silver (bertentangan dengan bukti dob/nama).
-                               Ukuran dampak terhadap entity lama.
-4. old_entity_ids_changed   - catatan dari batch lama yang entity_id-nya berubah
-                               antara proses dasar dan proses gabungan.
-
-Angka keempat menunjukkan risiko utamanya: `connected_components` memberi nomor
-entity berdasarkan record_id terendah di setiap komponen, sehingga penambahan
-catatan *dapat* mengubah nomor yang lama. Ini merupakan sifat struktural tahap
-clustering, bukan hasil pemodelan, sehingga diukur dan tidak diasumsikan.
-"""
-
 from __future__ import annotations
 
 import argparse

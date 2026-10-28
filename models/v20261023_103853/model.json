@@ -1,0 +1,172 @@
+{
+  "link_type": "dedupe_only",
+  "probability_two_random_records_match": 3.3849068178151257e-06,
+  "retain_matching_columns": true,
+  "retain_intermediate_calculation_columns": false,
+  "additional_columns_to_retain": [],
+  "sql_dialect": "duckdb",
+  "linker_uid": "d8erxyqq",
+  "em_convergence": 0.0001,
+  "max_iterations": 25,
+  "match_weight_column_prefix": "mw_",
+  "term_frequency_adjustment_column_prefix": "tf_",
+  "comparison_vector_value_column_prefix": "gamma_",
+  "unique_id_column_name": "record_id",
+  "source_dataset_column_name": "source_dataset",
+  "blocking_rules_to_generate_predictions": [
+    {
+      "blocking_rule": "l.\"email_std\" = r.\"email_std\"",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.\"phone_std\" = r.\"phone_std\"",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"first_name_std\" = r.\"first_name_std\") AND (l.\"last_name_std\" = r.\"last_name_std\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"city_std\" = r.\"city_std\") AND (l.\"dob_std\" = r.\"dob_std\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.\"dob_std\" = r.\"dob_std\"",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"address_std\" = r.\"address_std\") AND (l.\"city_std\" = r.\"city_std\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.\"phone_pre7\" = r.\"phone_pre7\"",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"last_name_std_pre3\" = r.\"last_name_std_pre3\") AND (l.\"first_name_std_pre3\" = r.\"first_name_std_pre3\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"last_name_std_pre3\" = r.\"last_name_std_pre3\") AND (l.\"state_std\" = r.\"state_std\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"email_domain_pre4\" = r.\"email_domain_pre4\") AND (l.\"last_name_std_pre3\" = r.\"last_name_std_pre3\") AND (l.\"first_name_std_pre3\" = r.\"first_name_std_pre3\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"city_std\" = r.\"city_std\") AND (l.\"state_std\" = r.\"state_std\") AND (l.\"dob_year_std\" = r.\"dob_year_std\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"phonetic_last_name\" = r.\"phonetic_last_name\") AND (l.\"city_std\" = r.\"city_std\")",
+      "sql_dialect": "duckdb"
+    }
+  ],
+  "comparisons": [
+    {
+      "output_column_name": "name",
+      "comparison_levels": [
+        {
+          "sql_condition": "first_name_std_l IS NOT NULL AND first_name_std_r IS NOT NULL AND first_name_std_l = first_name_std_r AND last_name_std_l IS NOT NULL AND last_name_std_r IS NOT NULL AND last_name_std_l = last_name_std_r",
+          "label_for_charts": "ejaan persis",
+          "m_probability": 0.7620171132947281,
+          "u_probability": 3.258052301717228e-05,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "phonetic_first_name_l IS NOT NULL AND phonetic_first_name_r IS NOT NULL AND phonetic_first_name_l = phonetic_first_name_r AND phonetic_last_name_l IS NOT NULL AND phonetic_last_name_r IS NOT NULL AND phonetic_last_name_l = phonetic_last_name_r",
+          "label_for_charts": "fonetik saja",
+          "m_probability": 0.20450160001848525,
+          "u_probability": 2.77952586990251e-05,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.009067031039404198,
+          "u_probability": 0.9999396242182838,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "contact",
+      "comparison_levels": [
+        {
+          "sql_condition": "email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l = email_std_r AND phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l = phone_std_r",
+          "label_for_charts": "email dan telepon",
+          "m_probability": 0.130828734503689,
+          "u_probability": 1.68175649259129e-06,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "(email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l = email_std_r) OR (phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l = phone_std_r)",
+          "label_for_charts": "email atau telepon",
+          "m_probability": 0.020119457378076796,
+          "u_probability": 1.6237648893984869e-06,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.8490518081182342,
+          "u_probability": 0.999996694478618,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "location",
+      "comparison_levels": [
+        {
+          "sql_condition": "address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r AND city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r AND state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r AND country_std_l IS NOT NULL AND country_std_r IS NOT NULL AND country_std_l = country_std_r",
+          "label_for_charts": "alamat lengkap",
+          "m_probability": 0.1402911753387765,
+          "u_probability": 2.1097847597588094e-06,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.8597088246612236,
+          "u_probability": 0.9999978902152402,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "dob",
+      "comparison_levels": [
+        {
+          "sql_condition": "dob_std_l IS NOT NULL AND dob_std_r IS NOT NULL AND dob_std_l = dob_std_r",
+          "label_for_charts": "tanggal lahir sama",
+          "m_probability": 0.116185251015348,
+          "u_probability": 5.263790749961896e-05,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.883814748984652,
+          "u_probability": 0.9999473620925003,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    }
+  ]
+}

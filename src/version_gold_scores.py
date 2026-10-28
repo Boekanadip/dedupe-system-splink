@@ -55,15 +55,38 @@ def _version_thresholds(version_dir: Path) -> tuple[float, float]:
     )
 
 
-def build() -> dict:
+def _load_previous_cache(processed_sha256: str, gold_sha256: str) -> dict[str, dict]:
+    """Skor per versi dari laporan sebelumnya, hanya jika datanya identik.
+
+    Tanpa cache, setiap run_all menilai ulang puluhan versi model (tiap
+    ~30 detik) padahal hasilnya deterministik selama records + gold tidak
+    berubah. Valid cache = data standardisasi dan gold sama persis.
+    """
+    if not REPORT_PATH.exists():
+        return {}
+    try:
+        prev = json.loads(REPORT_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    prov = prev.get("provenance") or {}
+    if prov.get("processed_data_sha256") != processed_sha256:
+        return {}
+    if prov.get("gold_sha256") != gold_sha256:
+        return {}
+    return {e["version"]: e for e in prev.get("versions", []) if "version" in e}
+
+
+def build(limit: int | None = 6, rescore: bool = False) -> dict | None:
     labels, source = load_labels("gold")
     if labels is None:
-        raise SystemExit("No gold labels. Promote reviewed pairs first: python -m src.labels --promote")
+        print("skip: no gold labels — promote reviewed pairs first (python -m src.labels --promote)")
+        return None
 
     pred_path = predictions_path(full=True)
     pred_meta = read_meta(pred_path)
     if pred_meta.get("scope") != "full":
-        raise SystemExit("Full-scope predictions are required for a comparable baseline")
+        print("skip: full-scope predictions are required for a comparable baseline")
+        return None
 
     records = pd.read_parquet(PROCESSED_DATA_PATH)
     if not records["record_id"].is_unique:
@@ -84,6 +107,9 @@ def build() -> dict:
     versions: list[dict] = []
     common_pairs: set[tuple[str, str]] | None = None
     common_candidates: int | None = None
+    previous = {} if rescore else _load_previous_cache(processed_sha256, gold_sha256)
+
+    candidates: list[Path] = []
     for path in sorted(model_lifecycle.MODELS_DIR.glob("v*")):
         meta_path = path / "metadata.json"
         if not meta_path.exists():
@@ -92,6 +118,25 @@ def build() -> dict:
         if meta.get("scope") != "full":
             continue
         if meta.get("blocking_rules") != pred_meta.get("blocking_rules"):
+            continue
+        candidates.append(path)
+    # Batasi ke versi terbaru agar waktu jalan tetap wajar; `--limit 0` = semua.
+    if limit:
+        candidates = candidates[-limit:]
+
+    reused = 0
+    for path in candidates:
+        meta = json.loads((path / "metadata.json").read_text(encoding="utf-8"))
+        model_sha = sha256_of(path / "model.json")
+        cached = previous.get(path.name)
+        if cached and cached.get("model_sha256") == model_sha:
+            # Data + gold identik + isi model identik → skor lama masih benar.
+            versions.append(cached)
+            reused += 1
+            if common_candidates is not None and cached.get("candidate_pairs") != common_candidates:
+                raise ValueError(
+                    f"{path.name} (cached) has different candidate count; versions cannot be compared"
+                )
             continue
 
         saved = model_lifecycle.load_model_json(path)
@@ -114,7 +159,7 @@ def build() -> dict:
 
         entry = {
             "version": path.name,
-            "model_sha256": sha256_of(path / "model.json"),
+            "model_sha256": model_sha,
             "created_at": meta.get("created_at"),
             "trained_on_rows": meta.get("input_rows"),
             "splink_version": meta.get("splink_version"),
@@ -126,6 +171,7 @@ def build() -> dict:
             "unscored_gold_pairs": unscored,
             "positive_pairs": int(merged["is_positive"].sum()),
             "disputed_pairs": int(merged["is_disputed"].sum()),
+            "candidate_pairs": len(scored),
         }
         for tag, subset in (
             ("clean", merged[~merged["is_disputed"]]),
@@ -175,8 +221,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Score every saved full-scope model on the same gold pairs"
     )
-    parser.parse_args()
-    report = build()
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=6,
+        help="Berapa versi terbaru yang dinilai (default 6). 0 = semua.",
+    )
+    parser.add_argument(
+        "--rescore",
+        action="store_true",
+        help="Buang cache dan score ulang semua versi dari awal.",
+    )
+    args = parser.parse_args()
+    report = build(limit=args.limit, rescore=args.rescore)
+    if report is None:
+        return
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
     summary = {

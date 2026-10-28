@@ -1,17 +1,3 @@
-"""Buat berkas unggahan demo dari baris yang sudah ada di data/raw/.
-
-Alasan dibuat seperti ini: CSV yang benar-benar baru tidak memiliki pasangan
-yang diketahui, sehingga kita tidak dapat menjawab apakah pipeline berhasil
-mencocokkannya. Setiap baris yang dihasilkan merupakan salinan catatan yang
-sudah ada (customer_id dan device id sama), sehingga hasil yang benar sudah
-diketahui dan dapat diperiksa, bukan sekadar diperkirakan.
-
-Seratus dari seribu baris diberi salah ketik pada tingkat karakter yang
-tercatat, sehingga pencocokan kabur benar-benar diuji, bukan hanya diasumsikan.
-
-    python notebooks/make_demo_batch.py
-"""
-
 from __future__ import annotations
 
 import random
@@ -45,8 +31,7 @@ def typo(value, rng: random.Random) -> str | None:
 def main() -> None:
     rng = random.Random(SEED)
     frame = pd.read_csv(SOURCE, sep=";", low_memory=False)
-    # Ambil satu catatan per customer_id agar demo tidak membawa duplikat yang
-    # sudah diketahui sejak awal.
+
     owners = frame.drop_duplicates(subset=["customer_id"])
     sample = owners.sample(n=ROWS, random_state=SEED).reset_index(drop=True)
 

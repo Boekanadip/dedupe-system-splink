@@ -1,23 +1,3 @@
-"""Periksa silang label manusia dengan kanal device_id.
-
-Pipeline belum pernah membandingkan label manusia dengan kanal yang tidak
-pernah dilihat model. PENGUKURAN pada kondisi saat ini: 8 dari 114 keputusan
-`match` manusia memiliki nama dan email yang sama, tetapi `customer_id`,
-`device_id`, tanggal lahir, telepon, alamat, kota, dan negara yang berbeda.
-Mereka adalah dua customer berbeda yang kebetulan menggunakan email sama,
-bukan satu orang yang berpindah. Memberi label `match` pada pasangan tersebut
-mengecilkan recall dan, lebih buruk lagi, mengajari peninjau berikutnya bahwa
-email yang sama sudah cukup.
-
-`device_id` adalah kanal acuan, bukan kebenaran dunia nyata (lihat AGENTS.md 11),
-sehingga modul ini tidak pernah menulis ulang label secara otomatis: modul ini
-melaporkan dan menyimpan bukti, lalu memperbaiki label gold hanya setelah
-peninjau memutuskan dan menggunakan --apply.
-
-Run:
-    python -m src.label_audit                 # hanya laporkan, tanpa menulis
-    python -m src.label_audit --apply         # perbaiki baris yang bertentangan di gold
-"""
 from __future__ import annotations
 
 import argparse
@@ -59,14 +39,7 @@ def _pair_key(left: str, right: str) -> tuple[str, str]:
 
 
 def audit() -> pd.DataFrame:
-    """Satu baris per pasangan berlabel, beserta hasil pemeriksaan kanal device.
 
-      Hasil pemeriksaan:
-      agrees        - label sesuai dengan informasi kanal device
-      contradicted  - label menyatakan match, sedangkan kanal device menunjukkan sebaliknya
-      unverifiable  - salah satu sisi tidak memiliki device id, sehingga tidak
-                      ada yang dapat diperiksa
-    """
     if not GOLD_PATH.exists():
         raise SystemExit(f"No gold labels at {GOLD_PATH}")
 

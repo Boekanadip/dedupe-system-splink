@@ -1,47 +1,3 @@
-"""Linkage inkremental: deduplikasi batch baru lalu hubungkan ke entity yang sudah ada.
-
-Proses penuh ulang (src.run_all) menstandardisasi, melakukan blocking, memberi
-skor, mengelompokkan, dan membangun ulang master untuk setiap catatan pada
-setiap unggahan. Karena data lama tidak berubah, proses itu boros pada skala
-produksi. Modul ini menjalankan alur produksi (PRD FR-14):
-
-    batch baru -> standardisasi -> pemberian skor (baru x baru + baru x lama)
-    -> pengelompokan (entity lama tetap) -> perbarui master -> antrean tinjauan
-
-Model tersimpan memberi skor pada pasangan baru; tidak ada pelatihan ulang.
-entity_id yang sudah ada dipertahankan dan penomoran entity baru dilanjutkan,
-sehingga pasangan dan pengelompokan catatan baru sama dengan hasil proses penuh
-ulang (dibuktikan oleh tests/test_smoke.py). Skor kolom dengan penyesuaian TF
-(city/state/country) dihitung pada kerangka kandidat, sehingga pasangan yang
-tepat berada di ambang REVIEW 1e-10 dapat jatuh di salah satu sisinya. Pada set
-51 ribu baris, hal ini terukur pada 12 dari 1.172 pasangan; tidak ada yang
-mendekati MATCH_THRESHOLD, sehingga identitas entity tidak terpengaruh.
-
-Tiga mode:
-  (bawaan)    hitung dan terapkan dalam satu proses.
-  --stage     hitung dan tulis ke berkas staging tanpa menerapkan. Peninjau
-              memeriksa usulan penggabungan di halaman batch Streamlit terlebih dahulu.
-  --apply     baca berkas staging dan terapkan penggabungan yang disetujui.
-
-Biaya berikut bertambah seiring ukuran dataset LAMA, sehingga proses menghindari
-operasi tersebut:
-  - setiap aturan blocking tersimpan ditambahi `(l.is_new OR r.is_new)`, agar
-    DuckDB tidak pernah membentuk pasangan lama x lama;
-  - Linker hanya menerima baris baru dan baris lama yang berbagi kunci blocking
-    dengan baris baru (candidate_old_rows). Artefak bersama ditambahkan dengan
-    aliran DuckDB, bukan dengan membaca seluruh parquet ke pandas.
-Pengukuran pada 51.855 baris dengan batch baru 100 baris: jumlah pasangan
-berkurang dari 312.363 menjadi 349, tanpa pasangan lama x lama. Lihat pengukuran
-skala pada bagian 14 PRD.
-
-Cara menggunakan:
-    python -m src.incremental                      # batch terdaftar terbaru
-    python -m src.incremental --batch batch_0006.csv
-    python -m src.incremental --date-order dmy
-    python -m src.incremental --stage              # buat usulan tanpa menerapkannya
-    python -m src.incremental --apply              # terapkan usulan staging
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -98,13 +54,7 @@ STAGING_DIR = OUTPUT_DIR / "staging"
 
 
 def _rule_key_pairs(model: dict) -> list[list[tuple[str, str]]] | None:
-    """Pasangan kolom pada setiap aturan blocking yang tersimpan.
 
-    Kembalikan None jika aturan bukan equi-join murni. Pemilihan kandidat hanya
-    dapat dipastikan setara untuk aturan `l."col" = r."col"`, sehingga aturan
-    yang tidak dapat dibaca mengharuskan penyaringan awal memakai seluruh parquet,
-    bukan menebak subset yang lebih kecil.
-    """
     rules = []
     for rule in model["blocking_rules_to_generate_predictions"]:
         pairs = re.findall(
@@ -120,14 +70,6 @@ def _rule_key_pairs(model: dict) -> list[list[tuple[str, str]]] | None:
 def candidate_old_rows(
     new_std: pd.DataFrame, key_pairs: list[list[tuple[str, str]]]
 ) -> pd.DataFrame:
-    """Baris lama yang berbagi setidaknya satu kunci blocking dengan baris baru.
-
-    Setara dengan menjalankan aturan yang telah diubah pada seluruh parquet:
-    pasangan baru x lama lolos suatu aturan hanya jika baris lama memiliki kunci
-    aturan tersebut, tepat seperti kondisi EXISTS di bawah. Kunci NULL tidak
-    pernah cocok (semantik SQL), sama seperti equi-join Splink. Anti-join
-    mengecualikan batch baru dari kandidat, meskipun batch itu sudah terdaftar.
-    """
     con = duckdb.connect()
     con.register("new_batch", new_std)
     exists = " OR ".join(
@@ -175,15 +117,7 @@ def _overlapping_old_record_ids(new_ids: set[str]) -> set[str]:
 def _append_parquet(
     target: Path, extra: pd.DataFrame, dedup_on: tuple[str, ...] | None = None
 ) -> None:
-    """Tambahkan baris ke berkas parquet secara streaming.
 
-    Data lama tidak berubah, sehingga menulis ulang melalui pandas (baca,
-    gabungkan, tulis) akan menyalin seluruh dataset pada setiap batch. DuckDB
-    mengalirkan hasil gabungan secara langsung; berkas sementara menjaga
-    penulisan tetap atomik. `dedup_on` berisi nama kolom identitas: baris
-    tambahan yang menduplikasi baris tersimpan dilewati agar setiap pasangan
-    hanya tersimpan satu kali.
-    """
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".tmp")
     con = duckdb.connect()
@@ -237,9 +171,6 @@ def staging_path(batch: dict) -> Path:
 
 
 def staged_preds_path(batch: dict) -> Path:
-    """Pasangan berskor dari --stage agar --apply dapat melengkapi berkas
-    prediksi tanpa menghitung ulang (penghitungan ulang dapat mengubah urutan
-    record_id dan usulan yang telah ditinjau)."""
     return STAGING_DIR / f"{batch['file']}.predictions.parquet"
 
 
@@ -257,11 +188,7 @@ def standardize_new_batch(batch: dict, date_order: str | None) -> pd.DataFrame:
 
 
 def tf_adjusted_columns(model: dict) -> list[str]:
-    """Kolom yang level pembandingnya memakai penyesuaian frekuensi istilah.
 
-    Diturunkan dari model tersimpan (tf_adjustment_column), bukan dari daftar
-    tetap: menambah pembanding bert TF pada versi berikutnya otomatis tercakup.
-    """
     cols: list[str] = []
     for comparison in model.get("comparisons", []):
         for level in comparison.get("comparison_levels", []):
@@ -272,20 +199,7 @@ def tf_adjusted_columns(model: dict) -> list[str]:
 
 
 def corpus_tf_tables(model: dict) -> dict[str, pd.DataFrame]:
-    """Tabel frekuensi istilah dari SELURUH korpus, bukan frame kandidat.
 
-    TERUKUR 2026-10-14: Splink menghitung TF dari frame yang diberikan ke
-    Linker. Pada jalur inkremental frame hanya memuat kandidat + batch baru,
-    sehingga kunci blocking terwakili berlebihan — 'saputra' tampak 1,47%
-    (32/2.181) padahal di korpus 0,146% (152/103.858). Boost TF untuk nilai
-    langka lalu hilang: 6 dari 2.103 pasangan bergeser keputusan, 1 di
-    antaranya REVIEW -> MATCH (p 0,2976 -> 0,9451). Dengan tabel TF korpus
-    yang didaftarkan, skor frame kandidat IDENTIK dengan full run (selisih
-    maksimum 0,0 pada 2.103 pasangan yang sama).
-
-    TF dihitung dari parquet yang sama yang dibaca splink_model.load_data
-    (PROCESSED_DATA_PATH), sehingga kedua jalur memakai distribusi yang sama.
-    """
     cols = tf_adjusted_columns(model)
     if not cols:
         return {}
@@ -302,31 +216,7 @@ def corpus_tf_tables(model: dict) -> dict[str, pd.DataFrame]:
 def score_new_pairs(
     frame: pd.DataFrame, new_ids: set[str], model: dict | None = None
 ) -> pd.DataFrame:
-    """Beri skor dengan model tersimpan dan ambil hanya pasangan yang melibatkan catatan baru.
-
-    TERUKUR pada 51.855 baris dengan batch baru 100 baris: versi sebelumnya
-    (beri skor pada semua pasangan, lalu saring) menghasilkan 312.363 pasangan;
-    versi ini menghasilkan 349, dan tidak ada pasangan lama x lama. Data lama
-    tidak berubah, sehingga menghitung ulang skornya pada setiap unggahan
-    merupakan biaya terbesar yang dapat dihindari. Biaya itu juga bertambah
-    mengikuti ukuran dataset LAMA, padahal pemuatan inkremental seharusnya tidak
-    menyentuh bagian tersebut.
-
-    Caranya: setiap aturan blocking tersimpan ditambahi `(l.is_new OR r.is_new)`
-    agar DuckDB tidak pernah membentuk pasangan lama x lama. Berdasarkan
-    konstruksinya, baris yang tersisa sama persis dengan hasil penyaringan lama,
-    sehingga sisi MATCH dan hasil pengelompokan tidak berubah.
-
-    Biasanya `frame` hanya berisi baris baru dan kandidat yang telah disaring
-    sebelumnya (compute meneruskan candidate_old_rows), bukan seluruh dataset.
-
-    TF adjustments: Splink menghitung frekuensi istilah dari `frame`. Karena
-    `frame` hanya kandidat, kolom kunci blocking terwakili berlebihan dan
-    bobot TF menyimpang dari full run (TERUKUR: 6 keputusan berbeda, skor
-    pasangan yang sama 0,30 vs 0,94). Tabel TF korpus didaftarkan sebelum
-    predict sehingga jalur inkremental identik dengan full run — lihat
-    corpus_tf_tables().
-    """
+    
     latest = model_lifecycle.latest()
     if latest is None:
         raise SystemExit("No saved model. Run python -m src.run_all first.")
@@ -342,7 +232,9 @@ def score_new_pairs(
             f'({rule["blocking_rule"]}) AND (l.is_new OR r.is_new)'
         )
 
-    linker = Linker(scored, patched, db_api=DuckDBAPI())
+    db_api = DuckDBAPI()
+    sdf = db_api.register(scored, dataset_display_name="incremental_scored")
+    linker = Linker(sdf, patched)
     tf_tables = corpus_tf_tables(model)
     for col, table in tf_tables.items():
         linker.table_management.register_term_frequency_lookup(table, col, overwrite=True)
@@ -370,14 +262,7 @@ def score_new_pairs(
 def incremental_cluster(
     existing_map: pd.DataFrame, new_ids: set[str], match_edges: pd.DataFrame
 ) -> tuple[pd.DataFrame, list[dict], int]:
-    """Jalankan union-find dengan entity lama sebagai komponen yang sudah terbentuk.
 
-    Catatan baru yang cocok dengan catatan lama bergabung ke entity tersebut.
-    Catatan baru yang cocok dengan catatan dari dua entity akan menggabungkan
-    keduanya (entity_id terkecil menjadi pemenang, sama seperti aturan komponen
-    terhubung pada proses penuh). Catatan baru tanpa kecocokan membentuk entity
-    baru dengan nomor setelah nomor maksimum saat ini.
-    """
     parent: dict[str, str] = {}
 
     def find(node: str) -> str:
@@ -540,9 +425,7 @@ def compute(batch: dict, date_order: str | None) -> dict:
     key_pairs = _rule_key_pairs(model)
 
     if key_pairs is None:
-        # Aturan blocking tidak dapat dibaca oleh pengurai: penyaringan awal
-        # belum terbukti setara, jadi beri skor pada seluruh parquet (perilaku
-        # sebelumnya) daripada mengambil risiko mengubah himpunan kandidat.
+
         print("pre-filter skipped: a blocking rule is not a pure equi-join")
         scoring_frame = pd.concat(
             [pd.read_parquet(active_path(PROCESSED_DATA_PATH)), new_std], ignore_index=True
@@ -574,9 +457,6 @@ def compute(batch: dict, date_order: str | None) -> dict:
     for event in merge_events:
         affected.update(event["entities"])
 
-    # Ambil hanya catatan yang disentuh oleh pasangan berskor. agree_fields dan
-    # attach_evidence menggabungkan data berdasarkan record_id, sehingga bagian
-    # dataset lainnya tidak perlu dibaca.
     pair_ids = set(new_preds["record_id_l"]) | set(new_preds["record_id_r"])
     pair_frame = scoring_frame[scoring_frame["record_id"].isin(pair_ids)]
 
@@ -602,8 +482,6 @@ def build_staging_rows(state: dict) -> pd.DataFrame:
     updated_map = state["updated_map"]
     entity_of = dict(zip(updated_map["record_id"], updated_map["entity_id"]))
 
-    # Sisi kecocokan terbaik untuk setiap catatan baru (probabilitas tertinggi)
-    # sebagai konteks.
     best = (
         new_preds.sort_values("match_probability", ascending=False)
         .drop_duplicates(subset=["record_id_l", "record_id_r"])
@@ -664,8 +542,6 @@ def apply(state: dict) -> dict:
     n_new = state["n_new"]
     affected = state["affected"]
 
-    # Baris lama tidak berubah: tambahkan batch baru ke parquet tersimpan secara
-    # streaming, alih-alih membaca ulang dataset ke pandas.
     _append_parquet(PROCESSED_DATA_PATH, new_std)
     write_meta(
         PROCESSED_DATA_PATH,
@@ -678,9 +554,6 @@ def apply(state: dict) -> dict:
     preds_path = active_path(predictions_path(full=True))
     existing_pairs = _count_parquet(preds_path)
     _append_parquet(preds_path, new_preds)
-    # Tanpa ini, berkas metadata prediksi tetap menggambarkan proses PELATIHAN
-    # terakhir. Akibatnya evaluate/dashboard melaporkan jumlah baris yang usang
-    # dan model_version kosong setelah setiap batch inkremental.
     active = model_lifecycle.latest()
     write_meta(
         preds_path,
@@ -707,10 +580,7 @@ def apply(state: dict) -> dict:
         entity_merges=len(merge_events),
     )
 
-    # Ambil berdasarkan ID semua baris dari entity yang disentuh batch: nilai
-    # master entity yang tidak disentuh tidak mungkin berubah. Baris baru
-    # ditambahkan secara terpisah, sehingga dikecualikan dari kumpulan ID ini
-    # agar batch tidak diambil dua kali (baris tersebut sudah ada di parquet).
+
     emap = dict(zip(updated_map["record_id"], updated_map["entity_id"]))
     affected_ids = {
         rid for rid, eid in emap.items() if eid in affected
@@ -744,7 +614,7 @@ def apply(state: dict) -> dict:
         "affected_entities": len(affected),
         "match_edges": len(state["match_edges"]),
         "review_pairs_added": n_queue,
-        "runtime_seconds": None,  # diisi oleh pemanggil
+        "runtime_seconds": None,  
     }
     return history
 
@@ -814,9 +684,6 @@ def main() -> None:
         if not path.exists():
             raise SystemExit(f"No staged proposal at {path}. Run with --stage first.")
         staging = pd.read_parquet(path)
-        # Usulan yang diberi skor oleh model lain sudah kedaluwarsa: probabilitasnya
-        # tidak mencerminkan model aktif. Buat ulang staging daripada menerapkan
-        # perkiraan yang keliru.
         if "model_version" in staging.columns:
             staged_model = staging["model_version"].iloc[0]
             current = model_lifecycle.latest()
@@ -839,9 +706,7 @@ def main() -> None:
                 f"(for example a full run): rm outputs/staging/{path.name}\n"
                 "  Or use a different batch."
             )
-        # Lakukan standardisasi saja (tanpa pemberian skor): usulan staging sudah
-        # menyimpan penetapan entity yang ditinjau manusia. compute() akan
-        # menghitung ulang skor dan menolak karena batch tidak idempoten.
+
         acquire_pipeline_lock(note=f"incremental apply {batch['file']}")
         try:
             new_std = standardize_new_batch(batch, explicit)
@@ -851,7 +716,7 @@ def main() -> None:
             raise
         finally:
             release_pipeline_lock()
-        # Commit: tukar semua artefak staging ke path asli sekaligus.
+
         finalize_staged()
         return
 
@@ -868,16 +733,10 @@ def main() -> None:
     if args.stage:
         STAGING_DIR.mkdir(parents=True, exist_ok=True)
         staging = build_staging_rows(state)
-        # Setujui semua catatan secara bawaan; halaman batch hanya membatalkan
-        # pilihan untuk catatan yang dipermasalahkan peninjau. model_version
-        # menandai usulan agar --apply dapat menolaknya setelah pelatihan ulang.
         active = model_lifecycle.latest()
         staging["approved"] = True
         staging["model_version"] = active.name if active else None
         staging.to_parquet(staging_path(batch), index=False)
-        # Simpan pasangan berskor: tanpanya, --apply tidak dapat melengkapi
-        # berkas prediksi. Berkas prediksi yang tidak lengkap membuat setiap
-        # evaluasi berikutnya membaca dataset yang tidak dapat diperhitungkan.
         state["new_preds"].to_parquet(staged_preds_path(batch), index=False)
         counts = staging["action"].value_counts().to_dict()
         print(f"Staged {len(staging):,} records -> {staging_path(batch)}")
@@ -916,10 +775,6 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
     """
     started = time.perf_counter()
 
-    # Mulai dari usulan staging: record_id -> proposed_entity_id. Catatan yang
-    # tidak disetujui peninjau TIDAK bergabung dengan entity yang diusulkan;
-    # catatan tersebut masuk sebagai entity baru tersendiri (catatan tidak pernah
-    # dibuang tanpa pemberitahuan, sesuai aturan data di AGENTS.md).
     proposal = dict(zip(staging["record_id"], staging["proposed_entity_id"]))
     if "approved" in staging.columns:
         rejected = staging[staging["approved"] == False]  # noqa: E712
@@ -939,11 +794,6 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
                 "masuk sebagai entity baru sendiri, tidak digabung."
             )
 
-    # Usulan berupa dict record_id BARU. Memetakannya kembali ke DataFrame yang
-    # ada akan membuangnya tanpa pemberitahuan (map() hanya menetapkan nilai pada
-    # baris yang sudah ada). Akibatnya, entity_map kekurangan tepat sebanyak
-    # ukuran batch dan compute() berikutnya gagal dengan KeyError. Baris catatan
-    # baru harus ditambahkan sebagai baris tersendiri.
     existing_map = pd.read_parquet(active_path(ENTITY_MAP_PATH))
     updated = {r: e for r, e in zip(existing_map["record_id"], existing_map["entity_id"])}
     updated.update(proposal)
@@ -960,9 +810,6 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
     old_row_count = _count_parquet(PROCESSED_DATA_PATH)
     known_old = set(existing_map["record_id"])
 
-    # Ambil berdasarkan ID semua baris dalam entity yang disentuh oleh usulan:
-    # nilai master entity lain tidak mungkin berubah. Baris baru ditambahkan
-    # secara terpisah, jadi tidak disertakan dalam pengambilan berdasarkan ID.
     affected = set(proposal.values())
     affected_old_ids = [
         rid for rid, eid in updated.items() if eid in affected and rid in known_old
@@ -978,9 +825,7 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
         source_files=[b["file"] for b in registry.load()["batches"]],
         incremental_batch=batch["file"],
     )
-    # Tambahkan pasangan yang diberi skor saat --stage. Jika dilewati, berkas
-    # prediksi tidak memuat batch baru dan pemeriksaan acuan device akan
-    # melaporkan pasangan tanpa skor — kondisi yang tampak seperti kegagalan model.
+
     preds_path = active_path(predictions_path(full=True))
     staged_preds = staged_preds_path(batch)
     new_pairs = pd.DataFrame()
@@ -1030,9 +875,6 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
     staging_path(batch).unlink(missing_ok=True)
     staged_preds_path(batch).unlink(missing_ok=True)
 
-    # Tambahkan pasangan REVIEW dari batch baru ke antrean tinjauan. Pasangan
-    # diberi skor saat --stage, sehingga antrean dibangun dari berkas skor itu,
-    # bukan dari batchnya; nilainya berasal dari parquet yang baru ditambahi.
     if new_pairs.empty:
         print("  review queue: no scored pairs in the staging file")
     else:
@@ -1047,10 +889,6 @@ def apply_staged(new_std: pd.DataFrame, staging: pd.DataFrame, batch: dict) -> N
             # Artefak sudah ditulis; kegagalan antrean tidak boleh membatalkan penerapan.
             print(f"  review queue NOT updated: {type(exc).__name__}: {exc}")
 
-    # Entity baru = ID entity yang diperkenalkan batch ini, BUKAN jumlah total
-    # yang terus bertambah. nunique() pada seluruh peta menghasilkan 48.380 dan
-    # merusak grafik "Batch per minggu" di dasbor (entity_baru menjumlahkan total
-    # seolah-olah merupakan perubahan per batch).
     staged_entities = set(proposal.values()) - set(existing_map["entity_id"])
     history = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),

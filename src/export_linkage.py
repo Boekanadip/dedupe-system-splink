@@ -1,20 +1,3 @@
-"""Ekspor bukti di balik rentang keputusan, satu baris untuk setiap pasangan.
-
-Kemudahan penjelasan (PRD, Persyaratan Nonfungsional): "Sistem harus menyimpan
-bukti yang cukup untuk menjelaskan alasan pasangan/entity memperoleh skor dan
-keputusan tertentu." Parquet prediksi menyimpan bukti tersebut, tetapi isinya
-berupa data biner yang tidak dapat dibaca saat rapat peninjauan. Modul ini
-mengekspor bukti yang sama sebagai lembar kerja.
-
-`device_match` sengaja dicatat per baris. "Tidak ada salah gabung" adalah
-sebuah klaim; menyertakan pemeriksaannya dalam berkas memungkinkan data
-disaring, bukan sekadar dinyatakan dalam laporan.
-
-Splink 4.0.17 memberi nama tingkat pembanding `gamma_gamma_<column>` — awalan
-diterapkan dua kali. Nama tersebut diubah menjadi `cmp_<column>` agar kolom
-hasil ekspor mudah dibaca dan tidak tampak seperti kesalahan.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -29,7 +12,6 @@ DEFAULT_OUT = OUTPUT_DIR / "linkage_matches.csv"
 BANDS = ("match", "review", "non_match", "all")
 DECISION_OF = {"match": "MATCH", "review": "REVIEW", "non_match": "NON_MATCH"}
 
-# Sertakan kedua sisi agar pembaca dapat melihat nilai sebenarnya tanpa membuka berkas lain.
 PAIR_FIELDS = [
     "first_name_std",
     "last_name_std",
@@ -89,7 +71,10 @@ def build(band: str = "match") -> pd.DataFrame:
         raise SystemExit(f"No pairs with decision {DECISION_OF.get(band, band)} in this run.")
 
     frame = frame.rename(
-        columns={c: c.replace("gamma_gamma_", "cmp_") for c in frame.columns if c.startswith("gamma_")}
+        columns={
+            c: c.replace("gamma_gamma_", "cmp_").replace("gamma_", "cmp_")
+            for c in frame.columns if c.startswith("gamma_")
+        }
     )
 
     records = pd.read_parquet(
@@ -103,8 +88,6 @@ def build(band: str = "match") -> pd.DataFrame:
         ]
         frame[f"customer_id_{side}"] = ids.map(records.set_index("record_id")["customer_id"])
 
-    # Gunakan None, bukan False: catatan tanpa device id tidak dapat diperiksa.
-    # Menyebutnya "tidak cocok" akan disalahartikan sebagai bukti salah gabung.
     left_devices = frame["record_id_l"].map(devices)
     right_devices = frame["record_id_r"].map(devices)
     frame["device_match"] = [

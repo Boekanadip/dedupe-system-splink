@@ -1,1 +1,1 @@
-"""CRM deduplication PoC package."""
+"""CRM deduplication PoC package"""

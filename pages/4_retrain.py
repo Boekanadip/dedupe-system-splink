@@ -1,11 +1,4 @@
-"""Halaman pelatihan ulang dan pengelolaan model.
-
-Pelatihan ulang sengaja TIDAK digabungkan dengan pemasukan data: tindakan ini
-dilakukan secara terpisah dan eksplisit di halamannya sendiri. Halaman ini juga
-memuat pemulihan model, riwayat pelatihan ulang, indikator pergeseran, status
-umpan balik, evaluasi ambang, perbandingan A/B, asal-usul pelatihan, dan daftar
-periksa promosi.
-"""
+"""Halaman pelatihan ulang dan pengelolaan model"""
 
 from __future__ import annotations
 
@@ -17,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -111,8 +105,8 @@ def lock_status() -> tuple[bool, int, bool]:
 
 st.subheader("Latih Ulang Model")
 st.caption(
-    "Jalankan ulang seluruh pipeline di SEMUA data (bukan incremental). "
-    "Menghasilkan versi model baru; versi lama tetap tersimpan dan bisa di-rollback."
+    "Jalankan ulang seluruh pipeline di SEMUA data"
+    "Menghasilkan versi model baru."
 )
 
 
@@ -214,7 +208,6 @@ if prev and last:
     )
     st.caption(
         "Ini hanya hitungan keputusan per versi, BUKAN bukti akurasi. "
-        "Gunakan bagian 'Apakah model jadi lebih baik?' di bawah untuk bukti sebanding."
     )
 else:
     st.caption("Butuh 2 versi model untuk bisa dibandingkan.")
@@ -304,44 +297,87 @@ else:
                 "untuk snapshot"
             )
     # Label acuan, kandidat, dan ambang 0,9 yang sama; satu titik untuk tiap versi.
-    ref = vs[0]["own_match_threshold"] if vs else 0.9
-    f1 = []
+    ref = vs[-1]["own_match_threshold"] if vs else 0.9
+    points = []
     for entry in vs:
         m = entry["clean"][f"at_{ref}"]
-        f1.append({"f1": m["f1"], "tp": m["tp"], "fp": m["fp"], "fn": m["fn"]})
-    trend = pd.DataFrame(
-        {"waktu": [datetime.fromisoformat(entry["created_at"]) if entry.get("created_at") else None for entry in vs],
-         "F1": [row["f1"] for row in f1]}
-    ).set_index("waktu")
-    st.line_chart(trend)
-    first = vs[0] if vs else {}
+        points.append({
+            "versi": entry["version"],
+            "waktu": datetime.fromisoformat(entry["created_at"]) if entry.get("created_at") else None,
+            "F1": m["f1"],
+        })
+    points = [p for p in points if p["waktu"] is not None]
+    fig = go.Figure()
+    if points:
+        fig.add_trace(go.Scatter(
+            x=[p["waktu"] for p in points],
+            y=[p["F1"] for p in points],
+            mode="lines+markers",
+            text=[p["versi"] for p in points],
+            hovertemplate="%{text}<br>F1 %{y:.3f}<extra></extra>",
+            line=dict(color="#4cc9f0", width=2),
+            marker=dict(size=9),
+        ))
+    fig.update_layout(
+        yaxis=dict(title=f"F1 (batas {ref})", range=[0, 1]),
+        xaxis=dict(title=None),
+        height=320,
+        margin=dict(l=10, r=10, t=10, b=10),
+        plot_bgcolor="#0e1117",
+        paper_bgcolor="#0e1117",
+        font=dict(color="#e5e7eb"),
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    first = vs[-1] if vs else {}
     clean0 = first.get('clean', {}).get(f"at_{ref}", {})
     incl0 = first.get('including_disputed', {}).get(f"at_{ref}", {})
-    st.caption(
-        f"Ukuran bukti: {int(prov.get('gold_pairs') or 0):,} pasang yang diperiksa manusia "
-        f"({int(prov.get('gold_positive_pairs') or 0):,} benar-benar sama, "
-        f"{int(prov.get('gold_disputed_pairs') or 0):,} masih berselisih). "
-        f"Posisi bersih terbaru: TP={int(clean0.get('tp', 0) or 0)}, FP={int(clean0.get('fp', 0) or 0)}, "
-        f"FN={int(clean0.get('fn', 0) or 0)}, F1={format_rate(clean0.get('f1', 0))}. "
-        f"Termasuk berselisih: TP={int(incl0.get('tp', 0) or 0)}, "
-        f"FP={int(incl0.get('fp', 0) or 0)}, FN={int(incl0.get('fn', 0) or 0)}, "
-        f"F1={format_rate(incl0.get('f1', 0))}. "
-        "Model datar karena buktinya belum mampu membedakan data baik dan data kotor."
-    )
+    st.subheader("Ulasan versi terbaru")
+    metrik = pd.DataFrame([
+        {
+            "kelompok": "Tanpa pasangan berselisih",
+            "benar sama": int(clean0.get("tp", 0) or 0),
+            "salah gabung": int(clean0.get("fp", 0) or 0),
+            "terlewat": int(clean0.get("fn", 0) or 0),
+            "presisi": format_rate(clean0.get("precision", 0), 1),
+            "recall": format_rate(clean0.get("recall", 0), 1),
+            "skor gabungan F1": format_rate(clean0.get("f1", 0), 1),
+        },
+        {
+            "kelompok": "Termasuk pasangan berselisih",
+            "benar sama": int(incl0.get("tp", 0) or 0),
+            "salah gabung": int(incl0.get("fp", 0) or 0),
+            "terlewat": int(incl0.get("fn", 0) or 0),
+            "presisi": format_rate(incl0.get("precision", 0), 1),
+            "recall": format_rate(incl0.get("recall", 0), 1),
+            "skor gabungan F1": format_rate(incl0.get("f1", 0), 1),
+        },
+    ])
+    st.dataframe(metrik, width="stretch", hide_index=True)
+    if len(points) == 1:
+        st.caption(
+            f"Hanya {points[0]['versi']} yang punya data uji sama, jadi grafiknya satu titik. "
+            "Titik kedua muncul otomatis begitu versi lain dinilai ulang."
+        )
     with st.expander("Detail: tiap versi pada batas yang sama"):
         detail = pd.DataFrame(
             {
                 "versi": [entry["version"] for entry in vs],
                 "baris latih": [format_count(entry.get("trained_on_rows")) for entry in vs],
                 "batas": [format_threshold(ref) for _ in vs],
-                "benar sama": [row["tp"] for row in f1],
-                "salah gabung": [row["fp"] for row in f1],
-                "terlewat": [row["fn"] for row in f1],
-                "F1 bersih": [format_rate(row["f1"]) for row in f1],
+                "benar sama": [int(entry["clean"][f"at_{ref}"]["tp"]) for entry in vs],
+                "salah gabung": [int(entry["clean"][f"at_{ref}"]["fp"]) for entry in vs],
+                "terlewat": [int(entry["clean"][f"at_{ref}"]["fn"]) for entry in vs],
+                "F1 bersih": [format_rate(entry["clean"][f"at_{ref}"]["f1"]) for entry in vs],
                 "catatan": [entry.get("_training_data_note", "—") for entry in vs],
             }
         )
         st.dataframe(detail, width="stretch", hide_index=True)
+    st.caption(
+        "Ukuran bukti: total pasang yang diperiksa manusia; presisi = benar sama / semua yang sistem gabung, "
+        "recall = benar sama / semua pasang yang benar-benar sama, F1 = gabungan keduanya. "
+        "Ampirnya nol berarti masih belum ada basis uji yang cukup untuk membandingkan."
+    )
 
 # ---- umpan balik
 st.subheader("Catatan dari pemeriksaan manual")
@@ -458,8 +494,6 @@ else:
 st.subheader("Coba Batas Kepastian")
 st.caption(
     "Di bawah ini ditunjukkan apa yang terjadi kalau batas kepastian digeser. "
-    "Angka-angkanya dihitung dari label perak (otomatis), jadi "
-    "ini perkiraan — bukan jaminan."
 )
 
 preds_path = OUTPUT_DIR / "splink_predictions.parquet"

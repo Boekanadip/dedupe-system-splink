@@ -1,0 +1,45 @@
+{
+  "artifact": "standardized_records",
+  "rows": 108427,
+  "source_files": [
+    "batch_0001.csv",
+    "batch_0002.csv",
+    "batch_0003.csv",
+    "batch_0005.csv",
+    "batch_0006.csv",
+    "batch_0007.csv",
+    "batch_0008.csv",
+    "batch_0011.csv",
+    "batch_0012.csv",
+    "batch_0013.csv",
+    "batch_0014.csv",
+    "batch_0016.csv",
+    "batch_0017.csv",
+    "batch_0019.csv",
+    "batch_0020.csv",
+    "batch_0021.csv"
+  ],
+  "start_index": 0,
+  "date_evidence": {
+    "dob": {
+      "year_first_rows": 5770,
+      "day_gt_12": 61535,
+      "month_gt_12": 0,
+      "ambiguous_rows": 39742,
+      "detected_order": "dmy",
+      "source": "explicit",
+      "applied_order": "dmy",
+      "day_first": true
+    },
+    "signup_date": {
+      "year_first_rows": 5772,
+      "day_gt_12": 61968,
+      "month_gt_12": 0,
+      "ambiguous_rows": 39687,
+      "detected_order": "dmy",
+      "source": "explicit",
+      "applied_order": "dmy",
+      "day_first": true
+    }
+  }
+}

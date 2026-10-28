@@ -1,31 +1,4 @@
-"""Nilai hasil linkage dengan device_id, kanal yang tidak pernah dipakai pipeline.
 
-ALASAN MODUL INI ADA
-Label silver didefinisikan sebagai kesamaan `phone_std + dob_std`, dan kolom
-tersebut juga menjadi kunci blocking. Karena itu, cakupan terhadap label silver
-selalu 100% dan nilai F1 terhadapnya merupakan artefak. Pengukuran tersebut
-tidak dapat menjawab "seberapa akurat sistem ini?".
-
-`device_id(s)` adalah kanal berbeda: kolom ini bukan kunci blocking maupun
-pembanding dalam model, sehingga kesepakatan dengannya tidak dibangun ke dalam
-pipeline. PENGUKURAN pada berkas ini: terdapat 48.200 device_id unik untuk
-48.200 kelompok customer_id, dan tidak ada kelompok yang memiliki dua
-device_id berbeda. Jadi, device_id berkorespondensi satu banding satu dengan
-identitas sumber. Ini menjadikannya kunci acuan, BUKAN bukti independen:
-
-  - Hal yang dibuktikan: blocking + Splink + clustering mereproduksi
-    pengelompokan sumber tanpa membaca customer_id atau device_id.
-  - Hal yang tidak dapat dibuktikan: duplikat samar, recall di dunia nyata, atau
-    data klien. Satu fakta yang dihitung dengan empat cara bukan empat konfirmasi.
-
-Recall terhadap kanal yang tidak mungkin berbeda karenanya merupakan BATAS
-ATAS, dan hanya bermakna jika nilainya di bawah 1,0. Lihat src/stress_test.py
-untuk proses uji yang membuatnya informatif dengan merusak data.
-
-Modul ini juga menjadi sumber kueri SQL pasangan agar tolok ukur dan evaluasi
-tidak menyimpang: keduanya harus memberi skor pada pasangan yang sama agar
-hasilnya dapat dibandingkan.
-"""
 
 from __future__ import annotations
 

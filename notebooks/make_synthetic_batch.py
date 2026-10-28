@@ -1,50 +1,3 @@
-"""Buat batch CRM sintetis dengan jawaban benar yang diketahui sejak awal.
-
-Alasan pembuatan
-    Berkas pengembangan berisi 51.555 baris tidak dapat menjawab apakah sistem
-    menangani salah ketik atau keliru menggabungkan dua orang yang berbagi email,
-    karena tidak ada berkas yang mencatat baris mana yang seharusnya mewakili
-    orang yang sama. Di berkas itu, `device_id(s)` berpasangan satu-ke-satu
-    dengan customer_id, sehingga evaluasi yang ada hanya membuktikan bahwa
-    pipeline meniru pengelompokan sumber, bukan bahwa pengelompokan itu benar.
-
-    Berkas ini berisi jawaban acuan. Setiap kategori sengaja dibuat agar hasil
-    proses dapat dihitung, bukan hanya diperiksa sekilas.
-
-Komposisi (200 baris)
-    150     pelanggan unik tanpa kerusakan                 data dasar
-     10  5% baris dari berkas asli                         5 pasang: asli + salinan salah ketik
-     10  5% baris dengan nilai kosong                      termasuk 3 tanpa kontak
-     20 10% duplikat
-           4  2 pasang identik pada semua kolom              harus digabung
-           6  3 pasang dengan salah ketik papan ketik        harus digabung
-           4  2 pasang dengan email SAMA, orang berbeda      TIDAK boleh digabung
-           6  3 pasang orang sama, kontak atau nama berubah
-                                                             harus digabung dan konfliknya ditandai
-     10  5% pasang yang sengaja dibuat ambigu
-           nama + dob + city sama, semua kolom kontak berbeda.
-           Orangnya berbeda: TIDAK boleh digabung dan perlu dapat ditinjau.
-
-Label acuan
-    `device_id(s)` menyimpan kunci jawaban: device id yang sama berarti orang
-    nyata yang sama. Setiap kategori "orang berbeda" mendapat device id
-    tersendiri, sehingga penggabungan mereka terukur sebagai salah gabung,
-    bukan sekadar penilaian subjektif.
-
-    Setiap duplikat yang dibuat hanya boleh memiliki dua baris dengan device id
-    yang sama. Dengan demikian berkas dapat memeriksa dirinya sendiri: jika
-    jumlah pasangan dengan device yang sama melebihi duplikat yang ditanam,
-    generator bermasalah dan hasil proses tidak boleh dinilai.
-
-Berkas keluaran
-    data/raw/synthetic_200.csv         batch yang dibaca pipeline
-    data/raw/synthetic_200_truth.csv   kategori + device per baris untuk penilaian
-
-Keduanya disimpan di data/raw/ TANPA didaftarkan, sehingga dataset asli di
-data/processed/ tidak berubah sampai seseorang sengaja menjalankan unggahan.
-
-Jalankan:  python notebooks/make_synthetic_batch.py
-"""
 
 from __future__ import annotations
 
@@ -56,8 +9,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEST = PROJECT_ROOT / "data" / "raw" / "synthetic_200.csv"
 TRUTH = PROJECT_ROOT / "data" / "raw" / "synthetic_200_truth.csv"
-# Opsional: baris yang disalin persis dari berkas pengembangan asli. Jika berkas
-# tidak ditemukan, kategori ini dilewati dan proses tetap berjalan.
+
 REAL_RAW = PROJECT_ROOT / "data" / "raw" / "crm_50000_customers_dirty_v3.csv"
 
 SEED = 20260905
@@ -75,9 +27,6 @@ TOTAL = UNIQUE + OLD_DATA_PAIRS * 2 + MISSING_ROWS + (
     (DUP_EXACT_PAIRS + DUP_TYPO_PAIRS + EMAIL_SHARE_PAIRS + CONFLICT_PAIRS + CONFLICT_MAIDEN) * 2
 ) + AMBIGUOUS_PAIRS * 2
 
-# Nama sengaja dipilih agar tidak umum. Dengan begitu, tabrakan blocking yang
-# tidak disengaja menunjukkan kemiripan nyata, bukan dua nama keluarga umum
-# dengan tiga huruf awal yang sama.
 FIRST_NAMES = [
     "Balthazar", "Clementine", "Dieter", "Esperanza", "Fyodor", "Genoveva",
     "Halvard", "Isolde", "Joachim", "Katarzyna", "Leopoldo", "Marguerite",
@@ -102,8 +51,6 @@ STREETS = ["Kerkstraat", "Rue Lafayette", "Via Roma", "High Street", "Nørregade
 EMAIL_DOMAINS = ["protonmail.com", "yandex.com", "gmx.net", "zoho.com"]
 SOURCES = ["branch_form", "call_center", "mobile_app", "partner_api"]
 
-# Angka yang tercetak pada tombol yang sama saat Shift tidak ditekan. Kunci
-# blocking prefiks dirancang agar tetap menemukan catatan dengan salah ketik ini.
 KEYBOARD_TYPO = {"o": "5", "i": "1", "s": "5", "n": "8", "l": "1", "e": "3", "a": "4"}
 
 
@@ -142,9 +89,6 @@ def build() -> pd.DataFrame:
                 return candidate
         raise RuntimeError("phone space exhausted")
 
-    # Satu penghitung dinaikkan tepat sekali per baris. Membuat ID dari len(rows)
-    # akan menghasilkan tabrakan jika dua baris dibuat sebelum salah satunya
-    # ditambahkan.
     serial = {"n": 0}
 
     def next_id() -> int:
@@ -187,12 +131,9 @@ def build() -> pd.DataFrame:
             mutate(row)
         return row
 
-    # ---- 150 pelanggan unik tanpa kerusakan
     for _ in range(UNIQUE):
         rows.append(base_row(fresh_device("uni"), "unique"))
 
-    # ---- 10 baris (5%) dari berkas asli: 5 pasang, asli + salah ketik.
-    # Satu catatan asli per pasangan; device id memang sama.
     planted_old = 0
     if REAL_RAW.exists():
         real = pd.read_csv(REAL_RAW, sep=";", low_memory=False)
@@ -211,9 +152,6 @@ def build() -> pd.DataFrame:
     if not planted_old:
         print(f"CATATAN: {REAL_RAW.name} tidak ditemukan; kategori dari berkas asli dilewati.")
 
-    # ---- 10 baris (5%) dengan nilai kosong.
-    # Tiga baris kehilangan email DAN telepon: tidak ada kunci kontak yang dapat
-    # menjadikannya pasangan kandidat.
     missing_specs = [
         ("missing-email", ("email",)),
         ("missing-email", ("email",)),
@@ -258,8 +196,6 @@ def build() -> pd.DataFrame:
         rows.append(base_row(device, f"{note}-a"))
         rows.append(clone(rows[-1], device, f"{note}-b", mutate))
 
-    # ---- 4 baris: email SAMA, orang BERBEDA, device id berbeda.
-    # Menggabungkannya adalah salah gabung yang terukur, bukan perkara pendapat.
     for _ in range(EMAIL_SHARE_PAIRS):
         shared_email = new_email("household", "shared")
         person_a = base_row(fresh_device("shr"), "email-shared-a")
@@ -268,8 +204,6 @@ def build() -> pd.DataFrame:
         rows.append(person_a)
         rows.append(person_b)
 
-    # ---- 10 baris (5%) sengaja dibuat ambigu: nama + dob + city sama, tetapi
-    # semua kolom kontak berbeda. Device id berbeda: keduanya tidak boleh digabung.
     for _ in range(AMBIGUOUS_PAIRS):
         person_a = base_row(fresh_device("amb"), "ambiguous-a")
         person_b = base_row(fresh_device("amb"), "ambiguous-b")

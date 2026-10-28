@@ -25,7 +25,9 @@ Laporan juga menyertakan metadata operasional, bukan hanya kesalahan validasi:
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +39,163 @@ REPORT_PATH = OUTPUT_DIR / "upload_validation_report.json"
 
 REQUIRED_COLUMNS = ["first_name", "last_name"]
 ONE_OF = [("email", "phone")]
+
+# Bentuk email, bukan kebersihannya. Hanya menolak yang TIDAK mungkin menjadi
+# alamat: tanpa '@', tanpa domain, atau '@' ganda. 'a@b.c' diterima — TLD satu
+# karakter memang sah, dan menolaknya akan menandai data yang benar sebagai rusak.
+# Terverifikasi 2026-10-16: nolak 'budi@', '@gmail.com', 'budi', 'budi@@gmail.com',
+# 'budi gmail.com'; terima 48.960 alamat pada CSV 50k.
+EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Label kegagalan per kolom: pesan blocking harus menyebut gejala yang benar,
+# bukan satu bentuk umum yang dipakai untuk semua tipe data. Bentuknya kata
+# kerja supaya bisa disisipkan setelah "does not" dan setelah "every row".
+_SHAPE_FAILURE = {
+    "email": "parse as a valid email address",
+    "phone": "yield any digits (a usable phone)",
+    "dob": "parse as a date",
+}
+
+
+def shape_report(df: pd.DataFrame, date_evidence: dict | None = None) -> dict:
+    """Ukur apakah kolom identitas berisi tipe nilai yang benar.
+
+    PEMISAHAN INTI: nilai kosong BUKAN kegagalan bentuk. Email kosong adalah
+    data hilang (recall turun, terlihat di null_profile); email 'budi@' adalah
+    data salah bentuk (nilai yang sama di dua baris menembus aturan email_exact).
+    Keduanya perlu dilaporkan terpisah — jika digabung, kolom yang salah
+    dipetakan tampak sama saja dengan kolom yang banyak kosong, dan salah
+    peta justru yang paling berbahaya karena tidak menghasilkan error.
+
+    Tanpa ambang persentase: baseline terukur 2026-10-16 pada CSV 50k dan
+    Postgres 2.003 = 100% lolos untuk ketiga kolom (0 non-blank gagal), sehingga
+    angka seperti "tolak di bawah 90%" tidak punya dasar pengukuran.
+    """
+    from .standardize import normalize_date, normalize_phone
+
+    date_evidence = date_evidence or {}
+    n = len(df)
+    out: dict[str, dict] = {}
+
+    # email: bentuk, sebelum normalize_email yang hanya menurunkan huruf.
+    # phone: hasil normalize_phone yang kosong = baris itu tak menghasilkan
+    #   nomor sama sekali. '021-abc' menjadi '021' sehingga TIDAK dihitung gagal
+    #   di sini; ekstensi 'x282' sah dan dibuang oleh normalize_phone.
+    checks = (
+        ("email", lambda v: bool(EMAIL_SHAPE.match(v.strip().lower()))),
+        ("phone", lambda v: bool(normalize_phone(v))),
+    )
+    for canonical, is_shaped in checks:
+        source = COLUMN_MAP[canonical]
+        if source not in df.columns:
+            continue
+        raw = df[source].fillna("").astype(str)
+        present = raw[raw.str.strip() != ""]
+        shaped = present.map(is_shaped)
+        bad = present[~shaped]
+        out[canonical] = {
+            "column": source,
+            "rows": n,
+            "non_blank": int(len(present)),
+            "blank": int(n - len(present)),
+            "shaped": int(shaped.sum()) if len(present) else 0,
+            "unshaped": int(len(bad)),
+            "unshaped_pct": round(100.0 * len(bad) / len(present), 3) if len(present) else 0.0,
+            "samples": bad.head(5).tolist(),
+        }
+
+    source = COLUMN_MAP["dob"]
+    if source in df.columns:
+        raw = df[source].fillna("").astype(str)
+        present = raw[raw.str.strip() != ""]
+        order = (date_evidence.get("dob") or {}).get("applied_order")
+        if order is None:
+            # Urutan hari/bulan belum terjawab, sehingga ukur pun tidak sah.
+            # Laporan bentuk tidak boleh menandai kolom gagal hanya karena
+            # pertanyaan tanggal belum dijawab.
+            out["dob"] = {
+                "column": source,
+                "rows": n,
+                "non_blank": int(len(present)),
+                "blank": int(n - len(present)),
+                "measurable": False,
+                "reason": "date order unresolved — re-run with --date-order dmy|mdy",
+            }
+        else:
+            dayfirst = order == "dmy"
+            shaped = present.map(lambda v: normalize_date(v, dayfirst) is not None)
+            bad = present[~shaped]
+            out["dob"] = {
+                "column": source,
+                "rows": n,
+                "non_blank": int(len(present)),
+                "blank": int(n - len(present)),
+                "shaped": int(shaped.sum()) if len(present) else 0,
+                "unshaped": int(len(bad)),
+                "unshaped_pct": round(100.0 * len(bad) / len(present), 3) if len(present) else 0.0,
+                "measurable": True,
+                "applied_order": order,
+                "samples": bad.head(5).tolist(),
+            }
+
+    # customer_pk bukan kolom identitas, tetapi kunci update-in-place. Nilai
+    # kembar membuat pemetaan customer_pk -> record_id diam-diam membuang satu
+    # pihak, sehingga pembaruan berikutnya menimpa record yang salah.
+    if "customer_pk" in df.columns:
+        pk = df["customer_pk"]
+        total = int(pk.notna().sum())
+        unique = int(pk.nunique())
+        out["customer_pk"] = {
+            "column": "customer_pk",
+            "rows": n,
+            "non_blank": total,
+            "blank": int(n - total),
+            "unique": unique,
+            "duplicated": total - unique,
+            "unique_ok": total == 0 or total == unique,
+        }
+    return out
+
+
+def shape_findings(shape: dict) -> tuple[list[str], list[str]]:
+    """Terjemahkan laporan bentuk jadi alasan blocking + peringatan.
+
+    Blocking HANYA untuk bukti kategorikal yang tidak butuh ambang: tidak ada
+    satu pun nilai non-kosong yang lolos, sehingga kolom itu memang bukan tipe
+    yang diharapkan — gejala salah peta, bukan data kotor. Sisanya peringatan.
+    """
+    blocking: list[str] = []
+    warnings: list[str] = []
+    for canonical, info in shape.items():
+        if canonical == "customer_pk":
+            if not info["unique_ok"]:
+                blocking.append(
+                    f"column 'customer_pk' has {info['duplicated']:,} duplicated value(s) "
+                    f"across {info['non_blank']:,} rows — update-in-place maps "
+                    "customer_pk -> record_id and would silently keep only one, then "
+                    "overwrite the other record on the next refresh"
+                )
+            continue
+        if info.get("measurable") is False:
+            warnings.append(f"shape of '{info['column']}' not checked: {info['reason']}")
+            continue
+        label = _SHAPE_FAILURE.get(canonical, canonical)
+        if not info["non_blank"]:
+            continue  # kolom kosong sudah ditangani null_profile
+        if info["unshaped"] == info["non_blank"]:
+            blocking.append(
+                f"column '{info['column']}' does not {label} in ANY of its "
+                f"{info['non_blank']:,} non-blank value(s) (e.g. {info['samples'][:3]!r}) "
+                f"— every row failed the {canonical} shape test, which is a mapping "
+                "or type problem, not dirty data"
+            )
+        elif info["unshaped"]:
+            warnings.append(
+                f"{info['unshaped']:,} of {info['non_blank']:,} non-blank values in "
+                f"'{info['column']}' do not {label} ({info['unshaped_pct']:.2f}%), "
+                f"e.g. {info['samples'][:3]!r} — those rows lose this field as linkage evidence"
+            )
+    return blocking, warnings
 
 
 def blocking_source_columns(config_path: str | Path | None = None) -> set[str]:
@@ -58,6 +217,72 @@ def optional_source_columns() -> set[str]:
     } - {COLUMN_MAP[c] for c, _ in ONE_OF}
 
 DELIMITERS = {";": ";", ",": ",", "\t": "\t", "|": "|"}
+
+# Ambang kemiripan nama kolom. 0.7 dipilih karena cukup mengenali variasi
+# umum ("first_nm" -> "first_name", "telp" -> "phone_number") tanpa sampai
+# memetakan kolom yang salah secara diam-diam (mis. "city" -> "state" punya
+# kemiripan rendah dan akan tetap diabaikan). Nilai ini hanya membentuk saran
+# peta di laporan — batch tidak pernah direname otomatis.
+COLUMN_SIMILARITY_THRESHOLD = 0.7
+
+
+def normalized_levenshtein_similarity(a: str, b: str) -> float:
+    """Kemiripan 1.0 - levenshtein_distance/max(len), di kisaran [0, 1].
+
+    Implementasi hitung-tangan dua baris agar proyek tidak bergantung paket baru
+    untuk satu fungsi; dataset kolom biasanya jauh lebih kecil dari data dalamnya.
+    """
+    a, b = (a or "").strip().lower(), (b or "").strip().lower()
+    if a == b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cur[j] = min(
+                prev[j] + 1,          # hapus
+                cur[j - 1] + 1,       # sisipkan
+                prev[j - 1] + (ca != cb),  # substitusi
+            )
+        prev = cur
+    return 1.0 - prev[-1] / max(len(a), len(b))
+
+
+def suggest_column_mappings(df_columns: list[str], threshold: float = COLUMN_SIMILARITY_THRESHOLD) -> list[dict]:
+    """Sarankan pemetaan kolom sumber yang mirip nama kanonis tapi belum cocok persis.
+
+    Ini hanya diagnosis: kolom sumber tetap apa adanya sampai pengguna/pemetingan
+    eksternal (DB_COLUMN_MAP atau UI) menegaskan persamaannya. Batch tidak
+    ditolak karena saran ini.
+    """
+    canonical_targets = [(canonical, source) for canonical, source in COLUMN_MAP.items()]
+
+    available = set(df_columns)
+    exact = {s for _, s in canonical_targets} & available
+    suggestions: list[dict] = []
+
+    for canonical, expected in canonical_targets:
+        # sudah cocok persis -> tidak usah sarankan
+        if expected in available:
+            continue
+        for col in df_columns:
+            if col in exact:
+                continue
+            score = normalized_levenshtein_similarity(col, expected)
+            if score >= threshold:
+                suggestions.append(
+                    {
+                        "canonical": canonical,
+                        "expected_source": expected,
+                        "found_column": col,
+                        "similarity": round(score, 3),
+                    }
+                )
+    # skor tertinggi dulu supaya UI menampilkan kandidat terbaik lebih dahulu
+    suggestions.sort(key=lambda s: s["similarity"], reverse=True)
+    return suggestions
 
 
 def read_csv_any(path: Path) -> tuple[pd.DataFrame, dict]:
@@ -172,6 +397,12 @@ def validate(df: pd.DataFrame) -> dict:
 
     scalar_columns = [c for c in df.columns if not _has_list_values(df[c])]
 
+    date_ev = date_format_evidence(df)
+    shape = shape_report(df, date_ev)
+    shape_blocking, shape_warnings = shape_findings(shape)
+    blocking.extend(shape_blocking)
+    warnings.extend(shape_warnings)
+
     return {
         "status": "rejected" if blocking else "accepted",
         "rows": len(df),
@@ -180,11 +411,13 @@ def validate(df: pd.DataFrame) -> dict:
         "blocking": blocking,
         "warnings": warnings,
         "null_profile": null_report,
+        "shape": shape,
+        "column_suggestions": suggest_column_mappings(sorted(available)),
         "exact_duplicate_rows": int(df.duplicated(subset=scalar_columns).sum())
         if len(df) and scalar_columns
         else 0,
         "duplicate_check_columns": len(scalar_columns),
-        "date_formats": date_format_evidence(df),
+        "date_formats": date_ev,
     }
 
 
@@ -194,6 +427,42 @@ def _has_list_values(series: pd.Series, sample: int = 50) -> bool:
         if isinstance(value, (list, tuple, set, np.ndarray)):
             return True
     return False
+
+
+def validate_payload(payload: bytes, name: str = "upload.csv") -> dict:
+    """Validate a CSV given as in-memory bytes (no temp file on disk).
+
+    Returns the same report shape as validate(), with a "file" metadata block.
+    """
+    # Reuse the encoding-detection logic from read_csv_any.
+    text = None
+    encoding_used = None
+    for encoding in ("utf-8", "utf-8-sig", "latin-1"):
+        try:
+            text = payload.decode(encoding)
+            encoding_used = encoding
+            break
+        except (UnicodeDecodeError, AttributeError):
+            continue
+    if text is None:
+        raise SystemExit(f"{name}: could not decode as utf-8 or latin-1")
+
+    first_line = text.split("\n", 1)[0]
+    best = max(DELIMITERS, key=lambda d: first_line.count(d))
+    if first_line.count(best) == 0:
+        frame = pd.read_csv(io.BytesIO(payload), sep=None, engine="python", low_memory=False)
+        return validate(frame) | {
+            "file": {
+                "name": name,
+                "delimiter": "sniffed",
+                "encoding": encoding_used,
+                "note": "no delimiter found in the header; pandas sniffed the file",
+            }
+        }
+    frame = pd.read_csv(io.BytesIO(payload), sep=best, low_memory=False)
+    return validate(frame) | {
+        "file": {"name": name, "delimiter": DELIMITERS[best], "encoding": encoding_used}
+    }
 
 
 def validate_file(path: Path) -> tuple[dict, pd.DataFrame]:
@@ -258,6 +527,26 @@ def main() -> None:
                 print(f"  {column:14s} {detail} -> MUST ASK: {ev['question']}")
             else:
                 print(f"  {column:14s} {detail} -> detected {ev['detected_order']}")
+
+    shape = report.get("shape", {})
+    if shape:
+        print("\nShape / type checks (blank is missing data, not a shape failure):")
+        for canonical, info in shape.items():
+            if canonical == "customer_pk":
+                verdict = "OK unique" if info["unique_ok"] else (
+                    f"NOT UNIQUE ({info['duplicated']:,} dup) -> update-in-place unsafe"
+                )
+                print(f"  {info['column']:14s} {info['non_blank']:,} rows -> {verdict}")
+            elif info.get("measurable") is False:
+                print(f"  {info['column']:14s} not checked — {info['reason']}")
+            else:
+                print(
+                    f"  {info['column']:14s} {info['shaped']:,}/{info['non_blank']:,} "
+                    f"valid ({100.0 - info['unshaped_pct']:.2f}%), "
+                    f"{info['blank']:,} blank"
+                )
+                if info["samples"]:
+                    print(f"                   e.g. {info['samples'][:3]}")
 
     print(f"\nSaved: {args.report}")
     raise SystemExit(1 if report["blocking"] else 0)

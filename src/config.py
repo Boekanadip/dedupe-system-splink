@@ -276,7 +276,25 @@ DEVICE_ID_ALIASES: tuple[str, ...] = ("device_id",)
 #         "telp":     "phone_number",
 #         "tgl_lahir":"dob",
 #     }
-DB_COLUMN_MAP: dict[str, str] = {}
+DB_COLUMN_MAP: dict[str, str] = {
+    "cust_id": "source_id",
+    "client_id": "client_id",
+    "nama_depan": "first_name",
+    "nama_belakang": "last_name",
+    "e_mail": "email",
+    "email_address": "email",
+    "telp": "phone_number",
+    "no_telp": "phone_number",
+    "telepon": "phone_number",
+    "alamat_lengkap": "address",
+    "kota": "city",
+    "provinsi": "state",
+    "negara": "country",
+    "tanggal_lahir": "dob",
+    "tgl_lahir": "dob",
+    "tanggal_daftar": "signup_date",
+    "jenis_kelamin": "gender",
+}
 
 SOURCE_RECORD_ID_COLUMN = None
 
@@ -297,9 +315,16 @@ DEFAULT_BENCHMARK_RULES: list[tuple[str, list[str]]] = [
     ("phone_prefix", ["phone_pre7"]),
     ("name_prefix", ["last_name_std_pre3", "first_name_std_pre3"]),
     ("name_prefix_state", ["last_name_std_pre3", "state_std"]),
-    ("email_local_name", ["email_local_pre3", "last_name_std_pre3"]),
     ("email_domain_name", ["email_domain_pre4", "last_name_std_pre3", "first_name_std_pre3"]),
     ("city_state_dob_year", ["city_std", "state_std", "dob_year_std"]),
+    # Tambahan blocking rules baru untuk kurangi candidate pairs
+    ("email_domain", ["email_domain_pre4"]),
+    ("city_state_dob", ["city_std", "state_std", "dob_std"]),
+    ("phone_last4", ["phone_std"]),  # 4 digit terakhir telepon
+    # Blocking rules untuk fuzzy match
+    ("email_domain_fuzzy", ["email_domain_pre4"]),
+    ("city_state_dob_fuzzy", ["city_std", "state_std", "dob_std"]),
+    ("name_fuzzy_last4", ["last_name_std_pre3", "phone_last4"]),
 ]
 
 # Backward compat: BENCHMARK_RULES stays importable as the default list.
@@ -326,12 +351,15 @@ def load_benchmark_rules(config_path: str | Path | None = None) -> list[tuple[st
 LAMBDA_RECALL_ASSUMPTION = 1.0
 
 M_ELSE_LEVEL_FLOOR: float | None = 0.05
+
+# Contact agreement is strong evidence of a true match; raise m-prob from 0.60 → 0.75
+CONTACT_M_PROB: float = 0.75
 M_ELSE_LEVEL_FLOOR_BY_FIELD: dict[str, float] = {
     "dob_std": 0.001,        # tanggal lahir beda -> hampir pasti orang berbeda
     "phone_std": 0.001,      # nomor telepon beda -> kuat menolak
     "email_std": 0.005,      # email beda -> cukup kuat (bisa ganti email)
     "first_name_std": 0.02,  # nama bisa salah ketik / ganti
-    "last_name_std": 0.02,
+    "last_name_std": 0.01,
     "address_std": 0.02,     # alamat bisa pindah
     "state_std": 0.02,       # state bisa pindah; log2(m/u)=50 → bukan penolak kuat
     # city/country sengaja TIDAK di-override: memang sering kosong/salah.
@@ -345,7 +373,7 @@ def m_else_floor_for(column: str) -> float | None:
     return M_ELSE_LEVEL_FLOOR_BY_FIELD.get(column, M_ELSE_LEVEL_FLOOR)
 
 
-MATCH_THRESHOLD = 0.9
+MATCH_THRESHOLD = 0.82
 REVIEW_THRESHOLD = 1e-8
 
 _OVERRIDE = OUTPUT_DIR / "thresholds_override.json"

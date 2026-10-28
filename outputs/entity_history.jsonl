@@ -1,0 +1,4 @@
+{"timestamp": "2026-10-02T02:56:06+00:00", "action": "split", "from_entity": "ent_000005", "to_entity": "ent_048381", "records": ["rec_000005"], "reason": "smoke test split force", "actor": "agent", "forced": true}
+{"timestamp": "2026-10-02T02:56:32+00:00", "action": "merge", "from_entity": "ent_048381", "to_entity": "ent_000005", "records": ["rec_000005"], "reason": "restore after smoke test", "actor": "agent", "forced": false}
+{"timestamp": "2026-10-02T02:57:27+00:00", "action": "split", "from_entity": "ent_000005", "to_entity": "ent_048381", "records": ["rec_000005"], "reason": "smoke2 split", "actor": "agent", "forced": true}
+{"timestamp": "2026-10-02T02:57:28+00:00", "action": "merge", "from_entity": "ent_048381", "to_entity": "ent_000005", "records": ["rec_000005"], "reason": "smoke2 merge back", "actor": "agent", "forced": false}

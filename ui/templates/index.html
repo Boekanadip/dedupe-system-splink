@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM Entity Resolution Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            color: #666;
+            margin-top: 5px;
+        }
+        .table-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+        .status-match {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .status-review {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        .status-non-match {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .gamma-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .gamma-0 { background: #28a745; color: white; }  /* exact */
+        .gamma-1 { background: #17a2b8; color: white; }  /* fuzzy */
+        .gamma-2 { background: #ffc107; color: black; }  /* partial */
+        .gamma-3 { background: #6c757d; color: white; }  /* null/other */
+        .gamma-4 { background: #dc3545; color: white; }  /* different */
+        .search-box {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        .filter-buttons {
+            margin-bottom: 20px;
+        }
+        .filter-btn {
+            padding: 8px 16px;
+            margin-right: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+        }
+        .filter-btn:hover {
+            background-color: #0056b3;
+        }
+        .pagination {
+            margin-top: 20px;
+            text-align: center;
+        }
+        .page-btn {
+            padding: 8px 16px;
+            margin: 0 5px;
+            border: 1px solid #ddd;
+            background: white;
+            cursor: pointer;
+        }
+        .page-btn:hover {
+            background-color: #f8f9fa;
+        }
+        .evidence-section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+        .evidence-section.visible {
+            display: block;
+        }
+        .evidence-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 10px;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .evidence-row:hover {
+            background-color: #f8f9fa;
+        }
+        .evidence-field {
+            font-weight: bold;
+        }
+        .evidence-value {
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>CRM Entity Resolution Dashboard</h1>
+        
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <div class="stat-value" id="totalPairs">-</div>
+                <div class="stat-label">Total Pairs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="matches">-</div>
+                <div class="stat-label">Matches</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="review">-</div>
+                <div class="stat-label">Review Needed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="nonMatches">-</div>
+                <div class="stat-label">Non-Matches</div>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <input type="text" class="search-box" id="searchBox" placeholder="Search by Customer ID...">
+            
+            <div class="filter-buttons">
+                <button class="filter-btn" onclick="filterPairs('all')">All</button>
+                <button class="filter-btn" onclick="filterPairs('MATCH')">Matches</button>
+                <button class="filter-btn" onclick="filterPairs('REVIEW')">Review</button>
+                <button class="filter-btn" onclick="filterPairs('NON_MATCH')">Non-Matches</button>
+            </div>
+
+            <table id="pairsTable">
+                <thead>
+                    <tr>
+                        <th>Record ID 1</th>
+                        <th>Record ID 2</th>
+                        <th>Probability</th>
+                        <th>Gamma Levels</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="pairsBody">
+                </tbody>
+            </table>
+            
+            <div class="pagination" id="pagination"></div>
+        </div>
+
+        <div class="evidence-section" id="evidenceSection">
+            <h2>Evidence for Selected Pair</h2>
+            <div id="evidenceContent"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentPage = 1;
+        let currentFilter = 'all';
+        const perPage = 50;
+
+        function getGammaBadge(gamma, field) {
+            if (gamma === -1) return '<span class="gamma-badge gamma-3">-</span>';
+            const badges = {
+                'name': ['exact', 'fuzzy', 'phonetic', 'initials', 'common', 'null', 'diff'],
+                'contact': ['exact', 'fuzzy', 'domain', 'null', 'diff'],
+                'location': ['exact', 'fuzzy', 'state', 'country', 'null', 'diff'],
+                'dob': ['exact', 'year', 'partial', 'null', 'diff']
+            };
+            const label = badges[field] ? (badges[field][gamma] || `L${gamma}`) : `L${gamma}`;
+            return `<span class="gamma-badge gamma-${gamma <= 2 ? gamma : 3}">${label}</span>`;
+        }
+
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const data = await response.json();
+                document.getElementById('totalPairs').textContent = data.total_pairs.toLocaleString();
+                document.getElementById('matches').textContent = data.matches.toLocaleString();
+                document.getElementById('review').textContent = data.review.toLocaleString();
+                document.getElementById('nonMatches').textContent = data.non_matches.toLocaleString();
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        async function loadPairs() {
+            try {
+                let url = `/api/pairs?page=${currentPage}&per_page=${perPage}`;
+                if (currentFilter !== 'all') {
+                    url += `&status=${currentFilter}`;
+                }
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                const tbody = document.getElementById('pairsBody');
+                tbody.innerHTML = '';
+                
+                data.pairs.forEach(pair => {
+                    const row = tbody.insertRow();
+                    row.onclick = () => showEvidence(pair.record_id_l, pair.record_id_r);
+                    row.style.cursor = 'pointer';
+                    
+                    const gammaHtml = `
+                        N:${getGammaBadge(pair.gamma_name, 'name')} 
+                        C:${getGammaBadge(pair.gamma_contact, 'contact')} 
+                        L:${getGammaBadge(pair.gamma_location, 'location')} 
+                        D:${getGammaBadge(pair.gamma_dob, 'dob')}
+                    `;
+                    
+                    row.innerHTML = `
+                        <td>${pair.record_id_l}</td>
+                        <td>${pair.record_id_r}</td>
+                        <td>${(pair.match_probability * 100).toFixed(2)}%</td>
+                        <td>${gammaHtml}</td>
+                        <td class="status-${pair.decision.toLowerCase().replace('_', '-')}">${pair.decision}</td>
+                    `;
+                });
+                
+                const totalPages = Math.ceil(data.total / perPage);
+                const pagination = document.getElementById('pagination');
+                pagination.innerHTML = '';
+                
+                for (let i = 1; i <= Math.min(totalPages, 10); i++) {
+                    const btn = document.createElement('button');
+                    btn.className = 'page-btn';
+                    btn.textContent = i;
+                    btn.onclick = () => { currentPage = i; loadPairs(); };
+                    if (i === currentPage) btn.style.backgroundColor = '#007bff';
+                    pagination.appendChild(btn);
+                }
+            } catch (error) {
+                console.error('Error loading pairs:', error);
+            }
+        }
+
+        async function showEvidence(id1, id2) {
+            try {
+                const response = await fetch(`/api/pair/${id1}/${id2}`);
+                const data = await response.json();
+                
+                const section = document.getElementById('evidenceSection');
+                const content = document.getElementById('evidenceContent');
+                section.classList.add('visible');
+                
+                let html = `
+                    <p><strong>${data.record_id_l}</strong> ↔ <strong>${data.record_id_r}</strong></p>
+                    <p>Probability: ${(data.match_probability * 100).toFixed(2)}% | Status: ${data.decision}</p>
+                    <div class="evidence-row" style="font-weight: bold; background: #f8f9fa;">
+                        <div>Field</div>
+                        <div>Record A</div>
+                        <div>Record B</div>
+                        <div>Gamma Level</div>
+                    </div>
+                `;
+                
+                const fieldNames = {
+                    'first_name': 'Nama Depan',
+                    'last_name': 'Nama Belakang',
+                    'email': 'Email',
+                    'phone': 'Telepon',
+                    'dob': 'Tanggal Lahir',
+                    'address': 'Alamat',
+                    'city': 'Kota',
+                    'state': 'Provinsi',
+                    'country': 'Negara'
+                };
+                
+                for (const [field, info] of Object.entries(data.evidence)) {
+                    const fieldLabel = fieldNames[field] || field;
+                    const valL = info.value_l || '(kosong)';
+                    const valR = info.value_r || '(kosong)';
+                    const gammaBadge = getGammaBadge(info.gamma, field.includes('name') ? 'name' : 
+                        field.includes('phone') || field.includes('email') ? 'contact' :
+                        field.includes('city') || field.includes('state') || field.includes('country') || field.includes('address') ? 'location' : 'dob');
+                    
+                    html += `
+                        <div class="evidence-row">
+                            <div class="evidence-field">${fieldLabel}</div>
+                            <div class="evidence-value">${valL}</div>
+                            <div class="evidence-value">${valR}</div>
+                            <div>${gammaBadge}</div>
+                        </div>
+                    `;
+                }
+                
+                content.innerHTML = html;
+            } catch (error) {
+                console.error('Error loading evidence:', error);
+            }
+        }
+
+        function filterPairs(status) {
+            currentFilter = status;
+            currentPage = 1;
+            loadPairs();
+        }
+
+        document.getElementById('searchBox').addEventListener('input', async (e) => {
+            const query = e.target.value;
+            if (query.length < 2) {
+                loadPairs();
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+                
+                const tbody = document.getElementById('pairsBody');
+                tbody.innerHTML = '';
+                
+                data.results.forEach(pair => {
+                    const row = tbody.insertRow();
+                    row.innerHTML = `
+                        <td>${pair.record_id_l}</td>
+                        <td>${pair.record_id_r}</td>
+                        <td>${(pair.match_probability * 100).toFixed(2)}%</td>
+                        <td>-</td>
+                        <td class="status-${pair.decision.toLowerCase().replace('_', '-')}">${pair.decision}</td>
+                    `;
+                });
+            } catch (error) {
+                console.error('Error searching:', error);
+            }
+        });
+
+        loadStats();
+        loadPairs();
+    </script>
+</body>
+</html>

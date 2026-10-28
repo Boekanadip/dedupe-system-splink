@@ -1,27 +1,3 @@
-"""Single entry point: pull a database table into the pipeline in one call.
-
-Phase 2 of the DB-input work. Before this, feeding the pipeline from a database
-took two manual commands (db_export then incremental). This wraps both behind
-one invocation with a machine-readable summary and a real exit code, so a
-scheduler or CI job can call it and react to the result.
-
-What it does, in order:
-  1. export_batch()  — fetch new rows (watermark-aware), write CSV, register.
-  2. incremental     — stage the batch: score new x new and new x old, write a
-                       merge proposal. Nothing is applied without human review.
-  3. summary         — outputs/job_run_summary.json with runtime, counts, exit
-                       status. The same shape a scheduler would scrape.
-
-Config precedence: CLI flag > environment variable > config file > default.
-Credentials never live in the config file; DB_SOURCE can point at a DSN that
-reads them from the environment on the database side.
-
-Usage:
-    python -m src.job_run --source data/synthetic/crm.duckdb --table crm_customers
-    python -m src.job_run --config config/job.json
-    python -m src.job_run --source ... --table ... --mode apply
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -63,12 +39,7 @@ def _resolve(args: argparse.Namespace, config: dict, key: str, env: str, default
 
 
 def run_incremental(batch_file: str, mode: str, date_order: str) -> dict:
-    """Invoke src.incremental as a subprocess and capture its log.
 
-    A subprocess, not an import, because incremental acquires the pipeline
-    lock, sets PIPELINE_STAGING for its own children, and can exit non-zero.
-    Running it in-process would leak that environment into the caller.
-    """
     command = [sys.executable, "-u", "-m", "src.incremental", "--batch", batch_file]
     if mode == "stage":
         command.append("--stage")
@@ -213,11 +184,7 @@ def main() -> None:
 
 
 def _advance_watermark(source: str, table: str, exported: dict, summary: dict) -> None:
-    """Move the watermark only once the whole job succeeded.
 
-    export_batch deferred this so a failed incremental cannot consume rows and
-    leave the registered batch unreachable by a re-run.
-    """
     mark = exported.get("latest_mark")
     if mark is None:
         return

@@ -95,7 +95,7 @@ pip install -r requirements.txt
 
 Dependency utama project meliputi:
 
-* `splink==4.0.17`
+* `splink==5.0.0`
 * `duckdb`
 * `pandas`
 * `pyarrow`
@@ -619,10 +619,47 @@ Sistem juga melakukan pemeriksaan seperti:
 1. Validasi kolom.
 2. Deteksi delimiter dan encoding.
 3. Pemeriksaan format tanggal.
-4. Registrasi batch.
-5. Pemeriksaan file duplikat menggunakan SHA-256.
-6. Pemrosesan batch dalam staging.
-7. Review batch sebelum hasil digabungkan.
+4. Pemeriksaan bentuk (shape) kolom identitas.
+5. Registrasi batch.
+6. Pemeriksaan file duplikat menggunakan SHA-256.
+7. Pemrosesan batch dalam staging.
+8. Review batch sebelum hasil digabungkan.
+
+## 13.1 Pemeriksaan Bentuk Kolom Identitas
+
+`src.validate_upload.shape_report` memisahkan **data hilang** dari **data salah
+bentuk**. Keduanya terlihat sama jika digabung, padahal penanganannya berbeda:
+
+| Kondisi | Arti | Sifat |
+|---|---|---|
+| Nilai kosong | data hilang — recall turun, terlihat di `null_profile` | bukan kegagalan bentuk |
+| `budi@`, `@gmail.com` | salah bentuk — dua baris dengan nilai sama menembus aturan `email_exact` | kegagalan bentuk |
+| `021-abc` pada `phone_number` | lolos — `normalize_phone` menghasilkan `021` | bukan kegagalan bentuk |
+| Ekstensi `x282` pada telepon | sah, dibuang oleh `normalize_phone` | bukan kegagalan bentuk |
+
+**Tidak ada ambang persentase.** Baseline terukur 2026-10-16 pada CSV 50k dan
+Postgres 2.003 adalah **100% lolos** untuk `email`, `phone`, dan `dob` (0 nilai
+non-kosong gagal). Angka seperti "tolak di bawah 90%" akan jadi angka yang
+dibuat-buat. Karena itu:
+
+- **Blocking hanya untuk bukti kategorikal** — tidak ada satu pun nilai non-kosong
+  yang lolos. Gejalanya salah peta/tipe data, bukan data kotor.
+- Kegagalan **sebagian** menjadi `warnings[]`, bukan `blocking[]`.
+- `customer_pk` kembar menjadi `blocking[]`: pemetaan `customer_pk → record_id`
+  diam-diam membuang satu pihak, lalu menimpa record yang salah pada refresh
+  berikutnya.
+- `dob` yang urutannya belum diketidakpastikan (`date_formats.<col>.needs_answer`)
+  **tidak** dilaporkan sebagai kegagalan bentuk — kolom ditandai `measurable:
+  false`.
+
+Hasil ada di `outputs/upload_validation_report.json` (`shape`, `blocking[]`,
+`warnings[]`). `src.health` memuatinya di `data_quality`.
+
+Untuk memeriksa tabel database tanpa menulis apa pun:
+
+```powershell
+python -m src.db_source --source "postgres://127.0.0.1:5432/crm" --table crm_customers --check --date-order dmy
+```
 
 ---
 
@@ -660,6 +697,7 @@ python -m src.validate_upload <file.csv>
 python -m src.incremental
 python -m src.entity_correction --history
 python -m src.export_linkage --band review
+python -m src.db_source --source <dsn> --table <tbl> --check [--date-order dmy|mdy]
 ```
 
 Perintah-perintah tersebut lebih ditujukan untuk development, evaluasi, dan maintenance daripada demo dasar.

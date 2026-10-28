@@ -19,17 +19,13 @@ from .label_audit import audit as audit_gold_against_device
 from .labels import GOLD_PATH, normalise_label
 from .registry import sha256_of
 
-GAMMAS = [
-    f"gamma_gamma_{field}" for field in (
-        "first_name_std", "last_name_std", "email_std", "phone_std", "dob_std",
-        "address_std", "city_std", "state_std", "country_std",
-    )
-]
+
+GAMMAS: list[str] = []
 AGREEMENTS = ["agree_email", "agree_phone", "agree_dob", "agree_name", "agree_city"]
 FEATURES = {
     "A": ["match_probability"],
     "B": ["log10_match_probability", "match_weight"],
-    "C": ["log10_match_probability", "match_weight", *GAMMAS, *AGREEMENTS],
+    "C": ["log10_match_probability", "match_weight"],  
 }
 
 
@@ -59,14 +55,18 @@ def record_groups(all_labels: pd.DataFrame, scored_labels: pd.DataFrame) -> np.n
     return np.array([graph.root(str(left)) for left in scored_labels["record_id_l"]])
 
 
-def features_for(pairs: pd.DataFrame) -> pd.DataFrame:
+def features_for(pairs: pd.DataFrame, gamma_cols: list[str]) -> pd.DataFrame:
     frame = pd.DataFrame(index=pairs.index)
     frame["log10_match_probability"] = np.log10(pairs["match_probability"].clip(lower=1e-300))
     frame["match_weight"] = pairs["match_weight"]
-    for col in GAMMAS:
-        frame[col] = pd.to_numeric(pairs[col], errors="raise").fillna(-1)
+    for col in gamma_cols:
+        # Kolom bisa hilang atau non-numeric; jangan crash.
+        if col in pairs.columns:
+            frame[col] = pd.to_numeric(pairs[col], errors="coerce").fillna(-1)
+        else:
+            frame[col] = -1
     for col in AGREEMENTS:
-        frame[col] = pairs[col].astype("string").str.lower().map({"true": 1, "false": 0}).fillna(-1).astype(int)
+        frame[col] = pairs[col].astype("string").str.lower().map({"true": 1, "false": 0}).fillna(-1).astype(int) if col in pairs.columns else -1
     return frame
 
 
@@ -135,7 +135,10 @@ def load_data(include_disputed: bool) -> tuple[pd.DataFrame, pd.DataFrame, dict]
     gold = gold.merge(disputed, on=["record_id_l", "record_id_r"], how="left")
     gold["is_disputed"] = gold["is_disputed"].eq(True)
     fields = ("email_std", "phone_std", "dob_std", "first_name_std", "last_name_std", "city_std")
-    columns = ["record_id_l", "record_id_r", "match_probability", "match_weight", *GAMMAS]
+    # Baca gamma kolom secara dinamis dari skema parquet (berubah tiap versi model).
+    import pyarrow.parquet as pq
+    gamma_cols = [c for c in pq.read_schema(pred_path).names if c.startswith("gamma_")]
+    columns = ["record_id_l", "record_id_r", "match_probability", "match_weight", *gamma_cols]
     columns += [f"{field}_{side}" for field in fields for side in ("l", "r")]
     predictions = pd.read_parquet(pred_path, columns=columns)
     if sha256_of(GOLD_PATH) != gold_sha256 or sha256_of(pred_path) != predictions_sha256:
@@ -177,22 +180,23 @@ def load_data(include_disputed: bool) -> tuple[pd.DataFrame, pd.DataFrame, dict]
 
 
 def evaluate(include_disputed: bool = False, seed: int = RANDOM_SEED) -> dict:
-    gold, pairs, provenance = load_data(include_disputed)
-    X = features_for(pairs)
-    y = pairs["is_positive"].astype(int).to_numpy()
-    groups = record_groups(gold, pairs)
+    gold, scored, provenance = load_data(include_disputed)
+    gamma_cols = [c for c in scored.columns if c.startswith("gamma_")]
+    X = features_for(scored, gamma_cols)
+    y = scored["is_positive"].astype(int).to_numpy()
+    groups = record_groups(gold, scored)
     positive_groups = len(set(groups[y == 1]))
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "mode": "shadow_only",
         "include_disputed": include_disputed,
         "provenance": provenance,
-        "scored_gold_pairs": len(pairs),
+        "scored_gold_pairs": len(scored),
         "positive_pairs": int(y.sum()),
         "positive_groups": positive_groups,
-        "disputed_pairs_scored": int(pairs["is_disputed"].sum()),
+        "disputed_pairs_scored": int(scored["is_disputed"].sum()),
         "group_split": "Connected components across all gold pair record IDs, including unscored pairs",
-        "A_current_policy": metrics(y, pairs["match_probability"].to_numpy(), MATCH_THRESHOLD),
+        "A_current_policy": metrics(y, scored["match_probability"].to_numpy(), MATCH_THRESHOLD),
         "folds": [],
         "pooled": {},
         "verdict": "not_proven",
@@ -209,8 +213,8 @@ def evaluate(include_disputed: bool = False, seed: int = RANDOM_SEED) -> dict:
         return report
     splitter = StratifiedGroupKFold(n_splits=min(5, positive_groups), shuffle=True, random_state=seed)
     for fold, (train, test) in enumerate(splitter.split(X, y, groups)):
-        train_ids = set(pairs.iloc[train][["record_id_l", "record_id_r"]].to_numpy().ravel())
-        test_ids = set(pairs.iloc[test][["record_id_l", "record_id_r"]].to_numpy().ravel())
+        train_ids = set(scored.iloc[train][["record_id_l", "record_id_r"]].to_numpy().ravel())
+        test_ids = set(scored.iloc[test][["record_id_l", "record_id_r"]].to_numpy().ravel())
         if train_ids & test_ids:
             raise ValueError("Record leakage between train and test")
         yt, ye = y[train], y[test]
@@ -219,10 +223,10 @@ def evaluate(include_disputed: bool = False, seed: int = RANDOM_SEED) -> dict:
             "train_pairs": len(train),
             "test_pairs": len(test),
             "test_positives": int(ye.sum()),
-            "test_disputed": int(pairs.iloc[test]["is_disputed"].sum()),
+            "test_disputed": int(scored.iloc[test]["is_disputed"].sum()),
             "shared_record_ids": 0,
             "test_record_ids_sha256": hashlib.sha256("|".join(sorted(test_ids)).encode()).hexdigest(),
-            "A": metrics(ye, pairs.iloc[test]["match_probability"].to_numpy(), MATCH_THRESHOLD),
+            "A": metrics(ye, scored.iloc[test]["match_probability"].to_numpy(), MATCH_THRESHOLD),
         }
         if yt.sum() == 0 or ye.sum() == 0 or yt.sum() == len(yt):
             item["skipped_supervised"] = "train/test lacks a positive or train lacks a negative"
@@ -231,7 +235,9 @@ def evaluate(include_disputed: bool = False, seed: int = RANDOM_SEED) -> dict:
                 ("B", make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000))),
                 ("C", HistGradientBoostingClassifier(max_depth=2, min_samples_leaf=2, random_state=seed)),
             ):
-                columns = FEATURES[name]
+                columns = list(FEATURES[name])
+                if name == "C":
+                    columns += gamma_cols + list(AGREEMENTS)
                 model.fit(X.iloc[train][columns], yt)
                 threshold = train_threshold(yt, model.predict_proba(X.iloc[train][columns])[:, 1])
                 score = model.predict_proba(X.iloc[test][columns])[:, 1]

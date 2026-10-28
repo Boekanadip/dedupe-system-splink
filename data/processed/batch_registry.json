@@ -1,0 +1,215 @@
+{
+  "version": 1,
+  "next_start_index": 108427,
+  "batches": [
+    {
+      "batch_id": 1,
+      "file": "batch_0001.csv",
+      "rows": 40000,
+      "start_index": 0,
+      "end_index": 39999,
+      "record_id_range": [
+        "rec_000001",
+        "rec_040000"
+      ],
+      "sha256": "b10a5d1582626fa3008bb5fe16e7e0142ebc9f3aae57c2e833f4d8ad70855b6a",
+      "registered_at": "2026-10-06T15:52:22"
+    },
+    {
+      "batch_id": 2,
+      "file": "batch_0002.csv",
+      "rows": 10000,
+      "start_index": 40000,
+      "end_index": 49999,
+      "record_id_range": [
+        "rec_040001",
+        "rec_050000"
+      ],
+      "sha256": "5580b505d714210325f65e53740fadde08f8f8b0be8b8265ff62ef8ed3fe8bd6",
+      "registered_at": "2026-10-06T15:52:22"
+    },
+    {
+      "batch_id": 3,
+      "file": "batch_0003.csv",
+      "rows": 1000,
+      "start_index": 50000,
+      "end_index": 50999,
+      "record_id_range": [
+        "rec_050001",
+        "rec_051000"
+      ],
+      "sha256": "880434822bf34f4cf22e60129a87c9137146b387f723a6d18b01467436827c8a",
+      "registered_at": "2026-10-06T15:52:22"
+    },
+    {
+      "batch_id": 4,
+      "file": "batch_0005.csv",
+      "rows": 200,
+      "start_index": 51000,
+      "end_index": 51199,
+      "record_id_range": [
+        "rec_051001",
+        "rec_051200"
+      ],
+      "sha256": "125c460c2cf157a732f3173c056fe12ea0fc3050f365c1a0eb61e4e8cf2df2f6",
+      "registered_at": "2026-10-06T15:52:22"
+    },
+    {
+      "batch_id": 5,
+      "file": "batch_0006.csv",
+      "rows": 100,
+      "start_index": 51200,
+      "end_index": 51299,
+      "record_id_range": [
+        "rec_051201",
+        "rec_051300"
+      ],
+      "sha256": "d4b1144ddc0ae6a4bf5bda3205460bdcf2b8e0cf61fb419e87ef42290d895b21",
+      "registered_at": "2026-10-06T15:52:22"
+    },
+    {
+      "batch_id": 6,
+      "file": "batch_0007.csv",
+      "rows": 100,
+      "start_index": 51300,
+      "end_index": 51399,
+      "record_id_range": [
+        "rec_051301",
+        "rec_051400"
+      ],
+      "sha256": "e757daa6d8f457b07e208abc5c3945e891f3b6f9125a65846d6a4b5a35ca1843",
+      "registered_at": "2026-10-06T15:52:22"
+    },
+    {
+      "batch_id": 7,
+      "file": "batch_0008.csv",
+      "rows": 50,
+      "start_index": 51400,
+      "end_index": 51449,
+      "record_id_range": [
+        "rec_051401",
+        "rec_051450"
+      ],
+      "sha256": "3143749aac5e747e801463bf37d0ca78edeb2d1859398e27883b0598fd5391e4",
+      "registered_at": "2026-10-06T15:52:22"
+    },
+    {
+      "batch_id": 8,
+      "file": "batch_0011.csv",
+      "rows": 60,
+      "start_index": 51450,
+      "end_index": 51509,
+      "record_id_range": [
+        "rec_051451",
+        "rec_051510"
+      ],
+      "sha256": "cbb2ed712d1684ce58517eba3fadd6cff0b90e64c20efde90e06d8d314deb126",
+      "registered_at": "2026-10-06T15:52:22"
+    },
+    {
+      "batch_id": 9,
+      "file": "batch_0012.csv",
+      "rows": 45,
+      "start_index": 51510,
+      "end_index": 51554,
+      "record_id_range": [
+        "rec_051511",
+        "rec_051555"
+      ],
+      "sha256": "2fe6f04f65401a68bd89a346b02989b9d7a41e3df6e20edf6639a881c9902394",
+      "registered_at": "2026-10-06T15:52:22"
+    },
+    {
+      "batch_id": 10,
+      "file": "batch_0013.csv",
+      "rows": 300,
+      "start_index": 51555,
+      "end_index": 51854,
+      "record_id_range": [
+        "rec_051556",
+        "rec_051855"
+      ],
+      "sha256": "811095106d1387b5009fbcd3d8caf772c2a1721dedef36f0319b9bd366e9df08",
+      "registered_at": "2026-10-08T08:19:55"
+    },
+    {
+      "batch_id": 11,
+      "file": "batch_0014.csv",
+      "rows": 50000,
+      "start_index": 51855,
+      "end_index": 101854,
+      "record_id_range": [
+        "rec_051856",
+        "rec_101855"
+      ],
+      "sha256": "ee4ed2425fee73b0d3dcca8dc68f8fb1eae751c761d0c5cac1ff4a2ae1f2e265",
+      "registered_at": "2026-10-09T14:20:14"
+    },
+    {
+      "batch_id": 12,
+      "file": "batch_0016.csv",
+      "rows": 2000,
+      "start_index": 101855,
+      "end_index": 103854,
+      "record_id_range": [
+        "rec_101856",
+        "rec_103855"
+      ],
+      "sha256": "cbf466704514fa85cabb6b6f0be9fbbc7b289e2ce6728b23505440d1d0e30009",
+      "registered_at": "2026-10-13T08:20:17"
+    },
+    {
+      "batch_id": 13,
+      "file": "batch_0017.csv",
+      "rows": 3,
+      "start_index": 103855,
+      "end_index": 103857,
+      "record_id_range": [
+        "rec_103856",
+        "rec_103858"
+      ],
+      "sha256": "6718d7daf796835313d9c2350a5027906d97eb39d3a25c1ee255be40ab4f8b9c",
+      "registered_at": "2026-10-13T09:25:46"
+    },
+    {
+      "batch_id": 14,
+      "file": "batch_0019.csv",
+      "rows": 1566,
+      "start_index": 103858,
+      "end_index": 105423,
+      "record_id_range": [
+        "rec_103859",
+        "rec_105424"
+      ],
+      "sha256": "34ae6f6764a1f016ed1817aa6b3f9b36ceb0cff8ec29f4a90af61568e94b6c85",
+      "registered_at": "2026-10-14T11:52:03"
+    },
+    {
+      "batch_id": 15,
+      "file": "batch_0020.csv",
+      "rows": 2003,
+      "start_index": 105424,
+      "end_index": 107426,
+      "record_id_range": [
+        "rec_105425",
+        "rec_107427"
+      ],
+      "sha256": "0201d56261c6bf582b30fdcd16721ba08d5f2b31a7d6c8c83d88672ce189fbda",
+      "registered_at": "2026-10-14T15:24:53"
+    },
+    {
+      "batch_id": 16,
+      "file": "batch_0021.csv",
+      "rows": 1000,
+      "start_index": 107427,
+      "end_index": 108426,
+      "record_id_range": [
+        "rec_107428",
+        "rec_108427"
+      ],
+      "sha256": "6db8e33da607eb1627e56f25c2a48d30cdd7b4e1e5dc637fe2a92580a1ec8119",
+      "registered_at": "2026-10-23T01:33:19"
+    }
+  ],
+  "updated_at": "2026-10-23T09:20:53"
+}

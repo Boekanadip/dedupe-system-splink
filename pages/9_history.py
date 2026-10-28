@@ -1,11 +1,4 @@
-"""Riwayat keputusan per kandidat: umpan balik, penimpaan, label antrean, dan koreksi entity.
-
-Cari pasangan atau catatan untuk menampilkan semua keputusan/model yang pernah
-berkaitan dengannya: umpan balik dari manusia, penimpaan oleh apply_gold,
-antrean pemeriksaan, dan koreksi entity (pemisahan/penggabungan). Halaman ini
-menyediakan riwayat keputusan per kandidat (Peringkat 3) dan keterlihatan
-siklus hidup entity (Peringkat 4).
-"""
+"""Riwayat keputusan per kandidat"""
 from __future__ import annotations
 
 import json
@@ -37,7 +30,7 @@ search_rid = c1.text_input("Kode record (misal rec_000123)", "")
 search_pair = c2.text_input("Kode pasangan (misal rec_000123__rec_000456)", "")
 
 def load_all():
-    """Muat semua sumber audit satu kali."""
+    1,0
     data = {}
     fb = LABELS_DIR / "feedback.csv"
     if fb.exists():
@@ -94,7 +87,7 @@ if search_pair:
                     st.write(f"**{name}**")
                     st.dataframe(hit.dropna(axis=1, how="all"), width="stretch", hide_index=True)
 
-# ---- linimasa per catatan (catatan muncul dalam pasangan mana pun)
+# ---- linimasa per catatan
 if search_rid:
     rid = search_rid.strip()
     st.subheader(f"Jejak waktu untuk record {rid}")

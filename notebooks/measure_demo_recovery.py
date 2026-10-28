@@ -1,17 +1,3 @@
-"""Periksa apakah setiap baris demo masuk ke entity yang sama dengan sumbernya.
-
-Label acuan berasal dari customer_id, yang tetap tersimpan sebagai kolom mentah
-setelah standardisasi dan tidak pernah menjadi kunci blocking atau pembanding.
-Setiap baris batch_0003 merupakan salinan baris batch_0002, sehingga hasil yang
-benar adalah entity_id yang sama dengan catatan batch_0002 ber-customer_id ini.
-
-Pengukuran ini hanya menghitung berapa dari seribu baris demo yang cocok dengan
-entity sumbernya. Pengukuran ini tidak menghitung presisi pada pasangan di luar
-baris demo.
-
-    python notebooks/measure_demo_recovery.py
-"""
-
 from __future__ import annotations
 
 from pathlib import Path

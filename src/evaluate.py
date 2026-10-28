@@ -1,20 +1,3 @@
-"""Empat evaluasi terpisah beserta tingkat operasional dari FR-12.
-
-Bagian 17 DESIGN menegaskan bahwa evaluasi harus memisahkan blocking, linkage,
-keputusan, dan entity, serta "tidak menggabungkan keempatnya menjadi satu
-metrik". Satu angka "akurasi" menyembunyikan lapisan yang gagal: cakupan 100%
-dengan recall 0% tampak sama dengan cakupan 100% dan recall sempurna.
-
-    blocking  apakah pembuatan kandidat MENCAKUP pasangan acuan?
-    linkage   apakah model memberi SKOR yang tepat untuk pasangan tersebut?
-    decision  apakah ambang menghasilkan pembagian MATCH/REVIEW yang dapat diterima?
-    entity    apakah catatan dari satu entity nyata berakhir dalam satu entity?
-
-Setiap bagian melaporkan hal yang diukur dan, secara terpisah, hal yang TIDAK
-dapat dibuktikan. Bagian 20 MASTER_CONTEXT mengharuskan FAKTA dan ASUMSI
-dipisahkan, sehingga kanal acuan yang tidak tersedia dilaporkan sebagai
-`unavailable`, bukan sebagai angka.
-"""
 
 from __future__ import annotations
 
@@ -30,6 +13,7 @@ from .config import (
     OUTPUT_DIR,
     PROCESSED_DATA_PATH,
     REVIEW_THRESHOLD,
+    SMOKE_SAMPLE_SIZE,
     predictions_path,
     read_meta,
     atomic_write_parquet,
@@ -54,6 +38,58 @@ TRUTH_CAVEAT = (
 )
 
 
+def truth_independence(df: pd.DataFrame) -> dict:
+    """Hitung apakah kanal acuan benar-benar independen, bukan sekadar klaim.
+
+    Selama ini "device_ids_std 1:1 dengan customer_id" hanya ditulis sebagai
+    kalimat di TRUTH_CAVEAT. Kalimat dapat basi setelah data berubah; angka ini
+    dihitung ulang tiap run, sehingga laporan tahu sendiri kapan recall-vs-device
+    berhenti menjadi bukti dan menjadi penulisan ulang customer_id.
+
+    Status 'answer_key' berarti kanal itu tidak boleh dikutip sebagai akurasi.
+    Kanal independen yang tersedia saat ini adalah label hasil tinjauan manusia
+    (lihat decision.gold_comparison) — dihasilkan tanpa membaca device_id.
+    """
+    missing = {"device_ids_std", "customer_id"} - set(df.columns)
+    if missing:
+        return {
+            "status": "unavailable",
+            "reason": f"missing columns: {sorted(missing)}",
+        }
+
+    ids = (
+        df[["record_id", "device_ids_std", "customer_id"]]
+        .explode("device_ids_std")
+        .dropna(subset=["device_ids_std", "customer_id"])
+    )
+    ids = ids[ids["device_ids_std"].astype(str).str.len() > 0]
+    if ids.empty:
+        return {"status": "unavailable", "reason": "no record carries both device and customer id"}
+
+    devices_per_customer = ids.groupby("customer_id")["device_ids_std"].nunique()
+    customers_per_device = ids.groupby("device_ids_std")["customer_id"].nunique()
+    one_to_one = bool(
+        (devices_per_customer <= 1).all() and (customers_per_device <= 1).all()
+    )
+    return {
+        "status": "measured",
+        "records_with_device": int(ids["record_id"].nunique()),
+        "distinct_customer_id": int(ids["customer_id"].nunique()),
+        "distinct_device_id": int(ids["device_ids_std"].nunique()),
+        "customers_with_two_devices": int((devices_per_customer > 1).sum()),
+        "devices_shared_by_two_customers": int((customers_per_device > 1).sum()),
+        "one_to_one": one_to_one,
+        "consequence": (
+            "ANSWER KEY: the device channel repeats customer_id, so recall/precision "
+            "against it measures whether the pipeline reproduces the source grouping. "
+            "Cite decision.gold_comparison for an independent accuracy figure."
+            if one_to_one
+            else "NOT 1:1 with customer_id — the device channel carries information "
+            "the source id does not, so it can serve as independent evidence."
+        ),
+    }
+
+
 def _unavailable(what: str, why: str) -> dict:
     return {"status": "unavailable", "what": what, "reason": why}
 
@@ -61,8 +97,8 @@ def _unavailable(what: str, why: str) -> dict:
 # --------------------------------------------------------------------------
 # Lapisan 1 — blocking
 # --------------------------------------------------------------------------
-def evaluate_blocking(df: pd.DataFrame, truth: pd.DataFrame) -> dict:
-    preds_path = active_path(predictions_path(full=True))
+def evaluate_blocking(df: pd.DataFrame, truth: pd.DataFrame, full: bool = True) -> dict:
+    preds_path = active_path(predictions_path(full=full))
     if truth.empty:
         return _unavailable(
             "blocking coverage of true duplicate pairs",
@@ -127,8 +163,13 @@ def _score_distribution(preds: pd.DataFrame) -> dict:
     }
 
 
-def evaluate_linkage(truth: pd.DataFrame, threshold: float, device_records: set[str]) -> dict:
-    preds_path = active_path(predictions_path(full=True))
+def evaluate_linkage(
+    truth: pd.DataFrame,
+    threshold: float,
+    device_records: set[str],
+    full: bool = True,
+) -> dict:
+    preds_path = active_path(predictions_path(full=full))
     if not preds_path.exists():
         return _unavailable("linkage scoring", f"{preds_path.name} not found")
 
@@ -253,11 +294,16 @@ def _gold_section() -> dict:
 # --------------------------------------------------------------------------
 # Lapisan 4 — entity
 # --------------------------------------------------------------------------
-def evaluate_entity(truth: pd.DataFrame) -> dict:
+def evaluate_entity(
+    truth: pd.DataFrame,
+    record_ids: set[str] | None = None,
+) -> dict:
     if not active_path(ENTITY_MAP_PATH).exists():
         return _unavailable("entity evaluation", "entity_map.parquet not found")
 
     entities = pd.read_parquet(active_path(ENTITY_MAP_PATH))[["record_id", "entity_id"]]
+    if record_ids is not None:
+        entities = entities[entities["record_id"].isin(record_ids)]
     lookup = entities.set_index("record_id")["entity_id"]
     sizes = entities.groupby("entity_id").size()
 
@@ -287,7 +333,11 @@ def evaluate_entity(truth: pd.DataFrame) -> dict:
     # Pemeriksaan arah sebaliknya: entity yang memuat dua device id berbeda
     # merupakan salah gabung, yang tidak terdeteksi oleh pemeriksaan apakah
     # pasangan sejati berada dalam kelompok yang sama.
-    records = pd.read_parquet(active_path(PROCESSED_DATA_PATH), columns=["record_id", "device_ids_std"])
+    records = pd.read_parquet(
+        active_path(PROCESSED_DATA_PATH), columns=["record_id", "device_ids_std"]
+    )
+    if record_ids is not None:
+        records = records[records["record_id"].isin(record_ids)]
     if records["device_ids_std"].dropna().empty:
         mixed = None
     else:
@@ -314,6 +364,8 @@ def evaluate_entity(truth: pd.DataFrame) -> dict:
 
 def build(full: bool = True) -> dict:
     df = pd.read_parquet(active_path(PROCESSED_DATA_PATH))
+    if not full and len(df) > SMOKE_SAMPLE_SIZE:
+        df = df.head(SMOKE_SAMPLE_SIZE).copy()
     truth = device_truth_pairs(df)
 
     meta = read_meta(predictions_path(full=full))
@@ -326,12 +378,25 @@ def build(full: bool = True) -> dict:
             "source": "device_ids_std",
             "available": not truth.empty,
             "truth_pairs": len(truth),
+            "independence": (
+                truth_independence(df)
+                | (
+                    {"scope_note": "checked on the smoke subset, not the full dataset"}
+                    if not full
+                    else {}
+                )
+            ),
+            "independent_channel": (
+                "gold_labels (human reviewed) — see decision.gold_comparison"
+            ),
             "caveat": TRUTH_CAVEAT,
         },
-        "blocking": evaluate_blocking(df, truth),
-        "linkage": evaluate_linkage(truth, MATCH_THRESHOLD, records_with_device(df)),
+        "blocking": evaluate_blocking(df, truth, full=full),
+        "linkage": evaluate_linkage(
+            truth, MATCH_THRESHOLD, records_with_device(df), full=full
+        ),
         "decision": evaluate_decision(full),
-        "entity": evaluate_entity(truth),
+        "entity": evaluate_entity(truth, set(df["record_id"])),
     }
 
     runtime = read_meta(ENTITY_MAP_PATH)
@@ -398,6 +463,22 @@ def main() -> None:
     )
     if truth["available"]:
         print(f"  caveat: {truth['caveat']}")
+    indep = truth.get("independence") or {}
+    if indep.get("status") == "measured":
+        print(
+            "  independence: one_to_one={one} ({dev:,} devices / {cid:,} customers) "
+            "-> {verdict}".format(
+                one=indep["one_to_one"],
+                dev=indep["distinct_device_id"],
+                cid=indep["distinct_customer_id"],
+                verdict=(
+                    "ANSWER KEY — do not cite as accuracy"
+                    if indep["one_to_one"]
+                    else "independent of customer_id"
+                ),
+            )
+        )
+        print(f"  independent channel: {truth.get('independent_channel')}")
 
     for name in ("blocking", "linkage", "decision", "entity"):
         _print_layer(name, report[name])

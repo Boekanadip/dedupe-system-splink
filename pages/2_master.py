@@ -1,15 +1,4 @@
-"""Halaman peninjauan catatan master (PRD FR-09, sisi keluaran).
-
-Catatan master adalah keluaran akhir sistem: satu baris per entity dengan nilai
-terbaik untuk setiap kolom. Halaman ini memungkinkan pengguna menelusuri entity,
-melihat kolom yang bertentangan, memeriksa catatan anggotanya, dan memperbaiki
-nilai master.
-
-Perbaikan nilai master ditulis langsung ke master_customers.parquet dan dicatat
-terpisah dari keputusan pasangan. Laporan salah-gabung/salah-pecah dapat
-diterapkan sebagai koreksi keanggotaan eksplisit setelah pengguna memilih record
-atau entity tujuan dan memberi alasan.
-"""
+"""Halaman peninjauan catatan"""
 
 from __future__ import annotations
 

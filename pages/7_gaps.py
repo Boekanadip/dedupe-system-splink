@@ -1,15 +1,4 @@
-"""Halaman celah: data yang tidak pernah muncul di halaman lain.
-
-Dua kelompok yang biasanya luput dari pandangan:
-  1. Record sendirian — record yang tidak pernah cocok dengan siapa pun. Bisa
-     memang customer unik, bisa juga duplikat yang tidak ketahuan. 94% entitas
-     ada di kelompok ini, jadi ini pertanyaan terbesar di hasil akhir.
-  2. Pasangan yang perlu diperiksa tapi belum masuk antrean — antrean hanya
-     sampel, jadi sisanya tidak punya jalur ke keputusan manusia.
-
-Keduanya bisa ditindak di sini: tarik kandidat satu record, atau masukkan
-pasangan yang belum masuk antrean.
-"""
+"""Halaman celah: data yang tidak pernah muncul di halaman lain"""
 
 from __future__ import annotations
 

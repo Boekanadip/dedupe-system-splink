@@ -1,0 +1,1 @@
+"Hanya berikan kode yang diubah atau diperbaiki. Jangan berikan teks pengantar, kesimpulan, permintaan maaf, atau penjelasan kecuali saya memintanya secara eksplisit."

@@ -1,25 +1,3 @@
-"""Pembuatan versi model/konfigurasi (PRD FR-13, bagian 16 MASTER_CONTEXT).
-
-MASTER_CONTEXT menetapkan struktur berkas, sehingga modul ini menulis sesuai
-struktur tersebut:
-
-    models/v20260930_141500/
-        model.json        model Splink yang telah dilatih
-        metadata.json     data yang digunakan untuk melatihnya
-        thresholds.json   kebijakan keputusan yang dievaluasi
-        evaluation.json   hasil skor dan label yang digunakan
-
-Bagian 15 MC: "Model TIDAK boleh dilatih ulang setiap kali CSV baru diterima."
-Model yang tidak pernah disimpan tidak dapat digunakan kembali, dibandingkan
-dengan versi hasil pelatihan ulang, atau dikaitkan dengan label peninjau yang
-dicatat. Karena itu, penyimpanan memenuhi bagian pertama persyaratan tersebut;
-penggunaan kembali (FR-14) adalah bagian kedua dan bergantung pada penyimpanan.
-
-Bagian 16 MC: "Jangan pernah menimpa model produksi yang telah divalidasi tanpa
-pemberitahuan." Karena itu, setiap proses mendapat direktorinya sendiri dan
-`latest.json` berfungsi sebagai penunjuk, bukan salinan.
-"""
-
 from __future__ import annotations
 
 import json
@@ -46,8 +24,6 @@ from .config import (
 MODELS_DIR = PROJECT_ROOT / "models"
 LATEST_POINTER = MODELS_DIR / "latest.json"
 
-# Empat artefak yang disebut pada bagian 16 MASTER_CONTEXT. Direktori versi yang
-# tidak memiliki salah satunya belum layak ditinjau sebagai versi model.
 REQUIRED_FILES = ("model.json", "metadata.json", "thresholds.json", "evaluation.json")
 
 
@@ -66,13 +42,6 @@ def save_version(
     runtime_seconds: float,
     extra_metadata: dict | None = None,
 ) -> Path:
-    """Simpan satu versi model yang tidak dapat diubah dan kembalikan direktorinya.
-
-    Proses sampel disimpan, tetapi tidak pernah menjadi model aktif: inferensi,
-    dasbor, dan pemberian skor inkremental membaca `latest`. Jika diarahkan ke
-    versi sampel 10 ribu baris, model cakupan penuh yang digunakan untuk
-    menyelesaikan 51.555 catatan akan tergantikan.
-    """
     created = datetime.now()
     vid = version_id(created)
     target = version_dir(vid)
@@ -104,9 +73,6 @@ def save_version(
     }
     atomic_write_json(metadata, target / "metadata.json")
 
-    # Ambang disimpan bersama model karena skor tanpa kebijakan keputusan tidak
-    # dapat direproduksi. Meninjau v1 dengan ambang v2 akan diam-diam mengubah
-    # arti MATCH.
     thresholds = {
         "match_threshold": MATCH_THRESHOLD,
         "review_threshold": REVIEW_THRESHOLD,
@@ -144,8 +110,19 @@ def save_version(
     return target
 
 
+def remove_retired_blocking_rules(model: dict) -> dict:
+   
+    cleaned = model.copy()
+    cleaned["blocking_rules_to_generate_predictions"] = [
+        rule
+        for rule in model.get("blocking_rules_to_generate_predictions", [])
+        if "email_local_pre3" not in rule.get("blocking_rule", "")
+    ]
+    return cleaned
+
+
 def load_model_json(path: Path | str) -> dict:
-    """Muat model tersimpan untuk inferensi tanpa melatih ulang (FR-14)."""
+    """Muat model tersimpan untuk inferensi, tanpa aturan blocking yang dihentikan."""
     path = Path(path)
     if path.is_dir():
         path = path / "model.json"
@@ -153,7 +130,7 @@ def load_model_json(path: Path | str) -> dict:
         raise FileNotFoundError(
             f"No model at {path}. Train one first: python -m src.splink_model --full"
         )
-    return json.loads(path.read_text(encoding="utf-8"))
+    return remove_retired_blocking_rules(json.loads(path.read_text(encoding="utf-8")))
 
 
 def latest() -> Path | None:

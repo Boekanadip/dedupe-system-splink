@@ -10,15 +10,6 @@ from .config import COLUMN_MAP, OUTPUT_DIR, RAW_DATA_PATH
 
 
 def load_raw(path: Path = RAW_DATA_PATH) -> pd.DataFrame:
-    """Baca CSV mentah yang pemisah dan pengodeannya belum diketahui.
-
-    Validator menerima pemisah ',' maupun ';' — berkas ekspor klien bisa saja
-    menggunakan koma. Membaca berkas berkoma dengan `sep=";"` yang sebelumnya
-    ditetapkan tetap akan menggabungkan seluruh judul kolom menjadi SATU kolom.
-    Akibatnya, batch dinyatakan DITERIMA lalu gagal pada standardize setelah
-    didaftarkan. Aturan pembacaan ditetapkan di validate_upload.read_csv_any
-    agar validator dan pipeline selalu sepakat mengenai isi berkas.
-    """
     from .validate_upload import read_csv_any
 
     if not path.exists():
@@ -31,13 +22,6 @@ def load_raw(path: Path = RAW_DATA_PATH) -> pd.DataFrame:
 
 
 def load_dataset() -> pd.DataFrame:
-    """Gabungkan semua berkas yang saat ini tercantum dalam registri batch.
-
-    Profiling harus membaca baris yang sama dengan yang akan ditautkan oleh
-    standardize. Saat profiling membaca berkas gabungan sementara registri
-    menunjuk ke dua batch, profil tanpa pemberitahuan menggambarkan dataset yang
-    berbeda dari dataset yang sedang dideduplikasi.
-    """
     from . import registry
 
     paths = registry.source_paths()
@@ -136,14 +120,6 @@ def duplicate_id_report(df: pd.DataFrame, customer_id: str) -> dict:
 
 
 def identifier_coverage(df: pd.DataFrame) -> dict:
-    """Ukur jangkauan maksimum yang mungkin dicapai aturan blocking exact-equi-join.
-
-    Setiap aturan dalam BENCHMARK_RULES mencocokkan kolom terstandardisasi secara
-    persis, sehingga catatan yang tidak memiliki kolom tersebut tidak mungkin
-    ditautkan dengan catatan lain. Tanpa angka ini, "tidak ditemukan kandidat"
-    tidak dapat dibedakan dari "tidak ada duplikat", dan klaim recall tidak
-    memiliki dasar.
-    """
     def null_count(canonical: str) -> int:
         source = COLUMN_MAP[canonical]
         return int(df[source].isna().sum()) if source in df.columns else -1
@@ -155,8 +131,6 @@ def identifier_coverage(df: pd.DataFrame) -> dict:
             & df[COLUMN_MAP["phone"]].isna()
         ).sum()
     )
-    # Dua aturan terkuat adalah email_exact dan phone_exact. Catatan tanpa
-    # keduanya tidak mungkin menjadi kandidat dengan aturan yang ada saat ini.
     return {
         "records": len(df),
         "missing_email": email,

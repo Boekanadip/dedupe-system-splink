@@ -30,11 +30,6 @@ from .config import (
 
 RUN_SUMMARY_PATH = OUTPUT_DIR / "run_summary.json"
 
-# Titik pemulihan: berkas yang mencatat tahap mana yang sudah selesai. Dipakai
-# untuk melanjutkan setelah pengguna menekan Esc atau menutup tab di tengah proses,
-# dilanjutkan dari tahap terakhir yang selesai — bukan dari awal lagi.
-# Tanpa ini, pipeline 7 menit yang terputus di menit ke-6 harus dijalankan
-# ulang seluruhnya.
 CHECKPOINT_PATH = OUTPUT_DIR / ".run_checkpoint.json"
 
 
@@ -73,6 +68,7 @@ STEPS = [
     ("clustering", ["clustering"]),
     ("master_record", ["master_record"]),
     ("evaluate", ["evaluate"]),
+    ("version_gold_scores", ["version_gold_scores"]),
 ]
 
 
@@ -83,11 +79,6 @@ def run_step(name: str, module_args: list[str], timeout: float | None) -> dict:
     try:
         result = subprocess.run(
             command, stdin=subprocess.DEVNULL, stderr=subprocess.STDOUT, timeout=timeout,
-            # PIPELINE_STAGING=1: subprocess menulis ke .staging/ dan membaca
-            # dari .staging/ lewat active_path(), sehingga langkah berikutnya
-            # melihat output langkah sebelumnya — bukan data lama. Pembaca luar
-            # (Streamlit) tidak menyetel env ini, jadi mereka tetap melihat
-            # state yang sudah commit sampai finalize_staged() di akhir run.
             env={**os.environ, "PYTHONIOENCODING": "utf-8:replace", STAGING_ENV: "1"},
         )
     except subprocess.TimeoutExpired:
@@ -170,26 +161,22 @@ def main() -> None:
             steps.append((name, [*module_args, *extra]))
         elif name == "evaluate":
             steps.append((name, module_args if full else [*module_args, "--sample"]))
+        elif name == "version_gold_scores":
+            # Full only: gold comparison needs full-scope predictions.
+            if full:
+                steps.append((name, [*module_args, "--limit", "6"]))
         else:
             steps.append((name, module_args))
 
     results = []
-    # Kunci diambil sebelum tahap pertama dan dilepas di akhir. Tanpanya,
-    # Streamlit dapat membaca parquet yang baru tertulis sebagian lalu gagal —
-    # pernah terjadi pada 2026-10-12 (halaman ambang merusak berkas prediksi 119 MB).
     acquire_pipeline_lock(note=f"run_all scope={'full' if full else 'sample'}")
     try:
-        # Bersihkan staging yatim dari proses sebelumnya yang gagal di tengah jalan.
-        # Tanpa ini, file .staging/ lama bisa terbawa dan menimpa state yang
-        # benar dengan output run yang gagal.
         orphaned = discard_staged()
         if orphaned:
             print(f"Membersihkan {orphaned} file staging yatim dari run sebelumnya.")
         for name, module_args in steps:
             results.append(run_step(name, module_args, step_timeout))
     except BaseException:
-        # Gagal di tengah run: buang semua file staging, jangan sentuh path
-        # asli. Pembaca luar tetap melihat state lama yang utuh.
         discarded = discard_staged()
         if discarded:
             print(f"\nRun gagal — {discarded} file staging dibuang, state lama tetap utuh.")
@@ -197,9 +184,6 @@ def main() -> None:
     finally:
         release_pipeline_lock()
 
-    # Commit: tukar semua file .staging/ ke path aslinya sekaligus. Inilah
-    # titik di mana pembaca luar berpindah dari state lama ke state baru.
-    # Jendela inkonsistensi tinggal mikrosekon, bukan 70-465 detik.
     swapped = finalize_staged()
     if swapped:
         print(f"\nCommit: {swapped} artefak ditukar serentak.")
@@ -252,10 +236,6 @@ def main() -> None:
                 )
             except Exception:
                 total_entities = 0
-            # new_records/new_entities sengaja tetap 0: proses penuh membangun ulang
-            # entity yang sudah ada dan tidak membuat catatan sumber baru. Menulis
-            # jumlah kumulatif di sini akan menghitung ulang setiap batch terdahulu
-            # pada grafik "Batch per minggu" (pola ini dicegah oleh tests/test_smoke.py).
             entry = {
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "batch": f"retrain:{model_version or 'unknown'}",

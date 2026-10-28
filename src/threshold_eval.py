@@ -11,10 +11,6 @@ from .labels import load_labels
 
 THRESHOLDS = [0.5, 0.9, 0.95, 0.99, 0.995, 0.999, 0.9995, 0.9999]
 OUTPUT_DIR = Path(OUTPUT_DIR)
-# Nama keluaran dibedakan berdasarkan sumber label agar evaluasi label acuan
-# tidak menimpa hasil silver dan tampak sebagai pengukuran yang sama. Membaca
-# threshold_evaluation_silver.json untuk proses label acuan dapat membuat hasil
-# silver dikutip sebagai hasil label acuan.
 OUTPUT_BY_SOURCE = {
     "gold": OUTPUT_DIR / "threshold_evaluation_gold.json",
     "silver": OUTPUT_DIR / "threshold_evaluation_silver.json",
@@ -38,6 +34,22 @@ def evaluate_at(pairs: pd.DataFrame, label_col: str, prob_col: str, thresh: floa
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1": round(f1, 4),
+    }
+
+
+def score_support(pairs: pd.DataFrame, label_col: str, prob_col: str) -> dict:
+
+    cuts = [
+        ("p < 0.5", pairs[prob_col] < 0.5),
+        ("0.5 <= p < 0.9", (pairs[prob_col] >= 0.5) & (pairs[prob_col] < 0.9)),
+        ("p >= 0.9", pairs[prob_col] >= 0.9),
+    ]
+    return {
+        name: {
+            "positives": int((mask & (pairs[label_col] == 1)).sum()),
+            "negatives": int((mask & (pairs[label_col] == 0)).sum()),
+        }
+        for name, mask in cuts
     }
 
 
@@ -65,8 +77,7 @@ def main() -> None:
     preds = pd.read_parquet(preds_path)
 
     if not args.full:
-        # Gunakan label yang sama dengan evaluasi; jika tidak, pemeriksaan
-        # cakupan di bawah dapat lolos pada set yang tidak pernah diberi skor.
+    
         labels, _ = load_labels(args.source)
         if labels is not None:
             modelled = set(preds["record_id_l"]) | set(preds["record_id_r"])
@@ -80,9 +91,6 @@ def main() -> None:
                     "subset while ignoring the rest. Use --full."
                 )
 
-    # "auto" mempertahankan prioritas lama terhadap label acuan. Menetapkan
-    # sumber secara eksplisit membuat --source silver tetap dapat digunakan
-    # setelah gold_labels.csv tersedia.
     labels, src = load_labels(args.source)
     if labels is None:
         raise SystemExit(
@@ -104,8 +112,7 @@ def main() -> None:
     else:
         print("GOLD labels: reviewed by a human.")
         if negatives == 0 or positives == 0:
-            # Jika kedua kelas tidak tersedia, salah satu metrik akan bernilai
-            # 1,0 secara otomatis dan tidak dapat dikutip sebagai pencapaian.
+           
             print(
                 f"  CAVEAT: {positives:,} positives / {negatives:,} negatives. A set with a "
                 "single class cannot measure both precision and recall: one of them is 1.0 "
@@ -123,6 +130,19 @@ def main() -> None:
         how="inner",
     )
     merged["label"] = merged["is_positive"].astype(int)
+
+    support = score_support(merged, "label", "match_probability")
+    print("Label support per score region (how many observations back each threshold):")
+    for name, counts in support.items():
+        print(f"  {name:15s} positives={counts['positives']:5d} negatives={counts['negatives']:5d}")
+    scarce = support["p >= 0.9"]["negatives"]
+    if src == "gold" and scarce < 50:
+        print(
+            f"  CAVEAT: only {scarce:,} labelled negatives sit at p >= 0.9, so the sweep "
+            "below compares the same handful of observations at 0.9 and 0.9999. A flat "
+            "curve here means 'no hard negatives in this region', not 'the model is "
+            "sharp'. Add them with: python -m src.review_sample --band match --n 200"
+        )
 
     results = []
     for thresh in THRESHOLDS:
@@ -146,6 +166,7 @@ def main() -> None:
                     if src == "silver"
                     else "GOLD labels — reviewed by a human, but stratified, not a random sample"
                 ),
+                "label_score_support": support,
                 "results": results,
             },
             f,

@@ -1,18 +1,4 @@
-"""Read-only database source for the dedup pipeline.
 
-Why DuckDB: it is already a transitive dependency of Splink (src/incremental.py
-imports duckdb.connect()), so adding a database connection brings no new
-package. A local .duckdb file opens read-only; a remote Postgres/MySQL/SQLite
-is attached through DuckDB's scanner extensions, which are fetched on first
-use and need network access once.
-
-The connector only ever runs SELECT. It never issues write SQL, so a read-only
-database account is enough and a bug here cannot damage the source system.
-
-Column contract: the table is expected to expose the same source column names
-the CSV path uses (the values in config.COLUMN_MAP). `device_id` is accepted
-because config.DEVICE_ID_ALIASES already maps it to `device_id(s)`.
-"""
 
 from __future__ import annotations
 
@@ -30,13 +16,7 @@ WATERMARK_COLUMN = "updated_at"
 
 
 def _apply_column_map(df: pd.DataFrame) -> pd.DataFrame:
-    """Rename DB columns to the names the pipeline expects (config.DB_COLUMN_MAP).
 
-    A database column named `first_nm` would otherwise be invisible to the
-    pipeline, which looks for `first_name` — the batch standardizes but never
-    links, with no error. Renaming here keeps the translation at the connector,
-    so standardize and the blocking rules never need to know the DB's naming.
-    """
     from .config import DB_COLUMN_MAP
 
     if not DB_COLUMN_MAP:
@@ -57,19 +37,7 @@ def _apply_column_map(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalize_dates(df: pd.DataFrame, exclude: set[str] | None = None) -> pd.DataFrame:
-    """Convert DATE/datetime columns to ISO date strings.
 
-    DuckDB returns a DATE column as datetime64 with a 00:00:00 time part.
-    standardize.normalize_date regex-matches the whole value against
-    ^\\d{1,4}[-/.]\\d{1,2}\\2\\d{1,4}$, so the trailing " 00:00:00" breaks the
-    match and every date silently becomes None. Trimming to the date part here
-    keeps the connector inside the pipeline's contract (string dates) without
-    touching standardize.
-
-    `exclude` names columns to leave at full timestamp precision — the
-    watermark column, whose time-of-day is what makes an incremental pull
-    correct. Trimming it to a date would drop every same-day update.
-    """
     exclude = exclude or set()
     for col in df.columns:
         if col in exclude:
@@ -103,6 +71,20 @@ def _ref(con: duckdb.DuckDBPyConnection, source: str, table: str) -> str:
     return f"src.{table}" if "://" in source else table
 
 
+def list_tables(source: str) -> list[str]:
+
+    con = connect(source)
+    try:
+        schema_prefix = "src." if "://" in source else ""
+        rows = con.execute(
+            f"SELECT table_name FROM {schema_prefix}information_schema.tables "
+            "WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'sqlite_master')"
+        ).fetchall()
+        return sorted(r[0] for r in rows)
+    finally:
+        con.close()
+
+
 def _columns(con: duckdb.DuckDBPyConnection, source: str, table: str) -> list[str]:
     ref = _ref(con, source, table)
     return [r[0] for r in con.execute(f"SELECT * FROM {ref} LIMIT 0").description]
@@ -123,14 +105,7 @@ def fetch(
     watermark: str | dict | None = None,
     watermark_column: str = WATERMARK_COLUMN,
 ) -> pd.DataFrame:
-    """Read rows as a DataFrame using the same column names the CSV path uses.
 
-    Ketika watermark diberikan dan tabel memiliki kolom tersebut, hanya baris
-    setelahnya yang diambil. Watermark baru menyimpan (updated_at, last_pk)
-    sehingga baris dengan timestamp yang sama tetapi pk lebih besar tidak
-    terlewat — celah G1: sebelumnya '>' ketat membuat 43 baris bertimestamp
-    kembar berisiko hilang jika insert baru memakai detik yang sama.
-    """
     con = connect(source)
     try:
         ref = _ref(con, source, table)
@@ -176,8 +151,115 @@ def latest_watermark(
         con.close()
 
 
-def _key(source: str, table: str) -> str:
-    return f"{source}::{table}"
+def _check_table(source: str, table: str, date_order: str | None = None) -> dict:
+
+    from .config import COLUMN_MAP, DEVICE_ID_ALIASES
+    from .validate_upload import (
+        blocking_source_columns,
+        optional_source_columns,
+        shape_findings,
+        shape_report,
+        suggest_column_mappings,
+    )
+
+    con = connect(source)
+    try:
+        cols = _columns(con, source, table)
+    finally:
+        con.close()
+
+    blocking = blocking_source_columns()
+    optional = optional_source_columns()
+    mapped = {v: k for k, v in COLUMN_MAP.items()}
+    unmapped = [c for c in cols if c not in mapped]
+    missing_blocking = sorted(blocking - set(cols))
+    missing_optional = sorted(optional - set(cols))
+
+
+    frame = fetch(source, table)
+    sample = frame.head(500)
+    date_ev = {}
+    if date_order:
+        date_ev = {"dob": {"applied_order": date_order}}
+    shape = shape_report(sample, date_ev)
+    shape_blocking, shape_warnings = shape_findings(shape)
+
+    return {
+        "source": source,
+        "table": table,
+        "columns": cols,
+        "n_columns": len(cols),
+        "mapped_columns": {c: mapped[c] for c in cols if c in mapped},
+        "unmapped_columns": unmapped,
+        "missing_blocking": missing_blocking,
+        "missing_optional": missing_optional,
+        "optional_present": sorted(set(cols) & optional),
+        "device_alias_present": sorted(set(cols) & set(DEVICE_ID_ALIASES)),
+        "shape": shape,
+        "shape_blocking": shape_blocking,
+        "shape_warnings": shape_warnings,
+        "column_suggestions": suggest_column_mappings(cols),
+    }
+
+
+def _print_check(report: dict) -> None:
+    print(f"Source: {report['source']}")
+    print(f"Table : {report['table']} ({report['n_columns']} columns)")
+    print()
+    print("Columns:")
+    for c in report["columns"]:
+        tag = "mapped" if c in report["mapped_columns"] else "unmapped"
+        print(f"  {c:24s} {tag}")
+    if report["unmapped_columns"]:
+        print()
+        print("Unmapped — not in COLUMN_MAP, so the pipeline cannot use them:")
+        for c in report["unmapped_columns"]:
+            print(f"  - {c}")
+    print()
+    print("Blocking columns present:")
+    for c in sorted(report["columns"]):
+        if c in report["mapped_columns"]:
+            print(f"  + {c} -> {report['mapped_columns'][c]}")
+    if report["missing_blocking"]:
+        print(f"  MISSING: {report['missing_blocking']}")
+    print()
+    print("Optional columns present:")
+    for c in report["optional_present"]:
+        print(f"  ~ {c}")
+    if report["missing_optional"]:
+        print(f"  absent: {report['missing_optional']}")
+    if report["device_alias_present"]:
+        print(f"  device alias: {report['device_alias_present']}")
+    print()
+    print("Shape / type (500-row sample; blank is missing data, not a failure):")
+    for canonical, info in report["shape"].items():
+        if canonical == "customer_pk":
+            verdict = "OK unique" if info["unique_ok"] else (
+                f"NOT UNIQUE ({info['duplicated']:,} dup) -> update-in-place unsafe"
+            )
+            print(f"  {info['column']:14s} {info['non_blank']:,} rows -> {verdict}")
+        elif info.get("measurable") is False:
+            print(f"  {info['column']:14s} not checked — {info['reason']}")
+        else:
+            print(
+                f"  {info['column']:14s} {info['shaped']:,}/{info['non_blank']:,} "
+                f"valid ({100.0 - info['unshaped_pct']:.2f}%), "
+                f"{info['blank']:,} blank"
+            )
+            if info["samples"]:
+                print(f"                   e.g. {info['samples'][:3]}")
+    if report["shape_blocking"]:
+        print()
+        print("BLOCKING — the table is not usable as-is:")
+        for b in report["shape_blocking"]:
+            print(f"  x {b}")
+    if report["shape_warnings"]:
+        print()
+        print("Warnings:")
+        for w in report["shape_warnings"]:
+            print(f"  ! {w}")
+    if report["shape_blocking"]:
+        raise SystemExit(1)
 
 
 def read_watermark(source: str, table: str) -> str | dict | None:
@@ -189,14 +271,7 @@ def read_watermark(source: str, table: str) -> str | dict | None:
 
 
 def write_watermark(source: str, table: str, value: str | dict) -> None:
-    """Persist the watermark. Written through a temp file so a crash mid-write
-    cannot leave a truncated JSON that a later run would misread.
 
-    `value` could be a plain timestamp (legacy callers) or a dict
-    `{"updated_at": ..., "last_pk": ...}` written by db_refresh / job_run.
-    The dict form is what closes the G1 gap: rows that share the watermark
-    timestamp but carry a larger customer_pk are still fetched.
-    """
     WATERMARK_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = (
         json.loads(WATERMARK_PATH.read_text(encoding="utf-8"))
@@ -207,3 +282,48 @@ def write_watermark(source: str, table: str, value: str | dict) -> None:
     tmp = WATERMARK_PATH.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(tmp, WATERMARK_PATH)
+
+
+def _key(source: str, table: str) -> str:
+    return f"{source}::{table}"
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Inspect a database source without writing anything."
+        )
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "List columns, show which are unmapped, which blocking columns are "
+            "missing, and whether the identity fields have the right shape. "
+            "Read-only: no CSV written, no batch registered."
+        ),
+    )
+    parser.add_argument("--source", required=True, help="DSN or path to a .duckdb file.")
+    parser.add_argument("--table", required=True, help="Table or view to inspect.")
+    parser.add_argument(
+        "--date-order",
+        choices=["auto", "dmy", "mdy"],
+        default="auto",
+        help="Day/month order for ambiguous dates, so the shape check can run.",
+    )
+    args = parser.parse_args()
+
+    if not args.check:
+
+        parser.print_help()
+        raise SystemExit(0)
+
+    order = None if args.date_order == "auto" else args.date_order
+    report = _check_table(args.source, args.table, date_order=order)
+    _print_check(report)
+
+
+if __name__ == "__main__":
+    main()

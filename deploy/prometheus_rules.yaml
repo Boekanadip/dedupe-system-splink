@@ -1,0 +1,85 @@
+
+
+groups:
+  - name: dedup_pipeline
+    rules:
+      - alert: DedupPipelineFailed
+        expr: dedup_alerts_critical > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pipeline kritis — last job gagal"
+          description: "Ada alert kritis di health check. Lihat GET /status."
+
+      - alert: DedupReviewQueueOverload
+        expr: dedup_review_queue_pending > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Antrean review > 500 pending"
+          description: "Reviewer kewalahan. Buka GET /review-queue."
+
+      - alert: DedupRecallBelowTarget
+        expr: dedup_recall < 0.95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Recall @0.9 di bawah 0.95"
+          description: "Duplikat lolos ke NON_MATCH. Lihat threshold_evaluation_gold.json."
+
+      - alert: DedupPrecisionBelowTarget
+        expr: dedup_precision < 0.95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Precision @0.9 di bawah 0.95"
+          description: "False merge naik. Lihat evaluation_report.json."
+
+      - alert: DedupLargestEntityTooBig
+        expr: dedup_largest_entity > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Satu entity > 100 record"
+          description: "Kemungkinan false merge. Lihat GET /entities/{eid}."
+
+      - alert: DedupAutoMatchRateHigh
+        expr: dedup_auto_match_rate > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Auto-match rate > 5%"
+          description: "Investigasi distribusi keputusan."
+
+      - alert: DedupBlockingRecallCeilingLow
+        expr: dedup_blocking_recall_ceiling < 0.99
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Blocking recall ceiling < 0.99"
+          description: "Aturan blocking kehilangan kandidat. Lihat blocking_benchmark.csv."
+
+      - alert: DedupWatermarkStale
+        expr: dedup_watermark_age_hours > 24
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Watermark sumber DB > 24 jam"
+          description: "Pipeline DB ingestion tidak berjalan. Lihat job_run_summary.json."
+
+      - alert: DedupHealthDegraded
+        expr: dedup_health_status{status="degraded"} == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Status health = degraded"
+          description: "Ada peringatan (warning) aktif. Lihat GET /status."

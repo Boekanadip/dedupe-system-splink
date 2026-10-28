@@ -1,19 +1,3 @@
-"""Export a database table to a registered CSV batch.
-
-This is the bridge that lets the existing pipeline consume a database without
-changing Splink, blocking, or standardize: the table is read read-only, written
-to data/raw/batch_NNNN.csv, and registered exactly like an uploaded file.
-Everything downstream (validate, standardize, incremental) is unchanged.
-
-Usage:
-    python -m src.db_export --source data/synthetic/crm.duckdb --table crm_customers
-    python -m src.db_export --source ... --table ... --watermark
-    python -m src.db_export --source ... --table ... --out data/raw/batch_0009.csv
-
---watermark resumes from the last exported updated_at, so repeated calls fetch
-only rows that changed. The watermark is advanced only after a successful
-export, so a failed run re-fetches the same rows instead of skipping them.
-"""
 
 from __future__ import annotations
 
@@ -36,12 +20,7 @@ RAW_DIR = registry.RAW_DIR
 
 
 def register_frame(frame: pd.DataFrame, out: str | None = None) -> dict:
-    """Write a DataFrame to a batch CSV and register it.
 
-    Shared by export_batch (full table fetch) and db_refresh (insert-only
-    subset), so both go through the same already-registered guard and the same
-    record_id allocation.
-    """
     if frame.empty:
         return {"status": "noop", "rows": 0}
 
@@ -92,16 +71,7 @@ def export_batch(
     out: str | None = None,
     defer_watermark: bool = False,
 ) -> dict:
-    """Fetch a table and register it as a batch. Returns a result dict.
 
-    By default the watermark advances after a successful registration, so a
-    failed export re-fetches the same rows instead of skipping them.
-
-    `defer_watermark=True` holds the advance back and returns `latest_mark`
-    instead. job_run uses this so the watermark only moves once the WHOLE job
-    (export + incremental) succeeds — otherwise a failed incremental would
-    consume the rows and leave the batch orphaned, unreachable by a re-run.
-    """
     watermark = read_watermark(source, table) if use_watermark else None
     frame = fetch(source, table, watermark=watermark)
     if frame.empty:
@@ -164,8 +134,10 @@ def main() -> None:
         print(result["message"])
         return
 
-    print(f"Fetched {result['rows']:,} rows x {len(result['columns'])} columns")
-    print(f"Columns: {', '.join(result['columns'])}")
+    columns = result.get("columns", [])
+    print(f"Fetched {result['rows']:,} rows x {len(columns)} columns")
+    if columns:
+        print(f"Columns: {', '.join(columns)}")
     print(f"Written: {result['csv']}")
     print(
         f"Registered batch {result['batch_id']}: {result['batch_file']} "

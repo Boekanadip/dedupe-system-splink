@@ -1,4 +1,3 @@
-"""Provenance checks for saved model-comparison evaluation reports."""
 
 from __future__ import annotations
 

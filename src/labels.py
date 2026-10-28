@@ -18,38 +18,23 @@ from .config import (
     atomic_write_csv,
 )
 
-# Gunakan nama berkas secara eksplisit. Mengambil label berdasarkan urutan glob
-# dapat membuat antrean yang baru ditinjau sebagian terbaca sebagai set yang
-# sudah selesai ditinjau.
+
 SILVER_PATH = LABELS_DIR / "silver_pairs.csv"
 GOLD_PATH = LABELS_DIR / "gold_labels.csv"
 QUEUE_PATH = LABELS_DIR / "review_queue.csv"
-# Ditulis oleh src/review_sample.py. Didefinisikan sebagai jalur biasa, bukan
-# impor, karena review_sample sudah mengimpor REVIEW_FIELDS dari modul ini.
 FP_SAMPLE_PATH = LABELS_DIR / "review_fp_sample.csv"
-
 TRUTHY = {"1", "true", "t", "yes", "y", "match", "positive", "duplicate", "dup"}
-# Tanpa nilai-nilai ini, keputusan "no_match" dari peninjau tidak disimpan atau
-# diterima: promote_gold membuang semua baris yang labelnya tidak tercantum dalam
-# TRUTHY tanpa peringatan. Akibatnya, berkas 100 pasangan yang seluruhnya sudah
-# ditinjau dapat menghasilkan set acuan tanpa satu pun contoh negatif.
 FALSY = {
     "0", "false", "f", "no", "n", "no_match", "non_match", "not_match",
     "different", "beda", "beda_orang", "negative", "reject", "tidak_cocok",
 }
 LABEL_VALUES = TRUTHY | FALSY
 
-# Batas jumlah tinjauan per stratum. Antrean yang tidak mungkin diselesaikan
-# bukanlah antrean yang berguna.
+
 QUEUE_SAMPLE_PER_STRATUM = 200
-# Tabrakan yang hanya berbagi email sudah diketahui berasal dari orang berbeda:
-# 1.596 pasangan dengan email sama memiliki customer_id dan nomor telepon berbeda.
-# Ambil sebagian kecil sebagai sampel.
+
 QUEUE_SAMPLE_LOW_VALUE = 50
 
-# Nilai berdampingan yang dibutuhkan peninjau untuk menilai pasangan. Gunakan
-# kolom terstandardisasi saja: nilai mentah dapat membuat peninjau menilai
-# salah ketiknya, bukan identitas orangnya.
 REVIEW_FIELDS = [
     "first_name_std",
     "last_name_std",
@@ -61,11 +46,6 @@ REVIEW_FIELDS = [
     "address_std",
 ]
 
-# Satu daftar kolom antrean, dipakai semua penulis: build_review_queue,
-# halaman Antrean (bulk-add) dan halaman Celah (enqueue). Dulu tiap penulis
-# menentukan kolomnya sendiri, sehingga tombol tambah massal menyalin hanya
-# record_id + peluang dan menghasilkan 400 baris tanpa bukti — peninjau
-# melihat dua kode record tanpa nama/email/telepon untuk dinilai.
 QUEUE_COLUMNS: list[str] = [
     "record_id_l",
     "record_id_r",
@@ -125,17 +105,6 @@ def _pairs_where(df: pd.DataFrame, where: str) -> pd.DataFrame:
 
 
 def build_silver(df: pd.DataFrame) -> pd.DataFrame:
-    """Pasangan deterministik berpresisi tinggi. Belum ditinjau, jadi bukan label acuan.
-
-    customer_id sengaja TIDAK digunakan sebagai dasar (AGENTS.md melarangnya
-    sebagai satu-satunya acuan duplikat). Nilainya sesuai dengan aturan ini pada
-    seluruh 1.867 pasangan dan dilaporkan terpisah sebagai pemeriksaan kewajaran,
-    bukan sebagai sumber label.
-
-    Label positif mensyaratkan kesesuaian dua pengenal karena email saja dapat
-    berbenturan: 1.596 pasangan dengan email sama memiliki customer_id, nomor
-    telepon, atau tanggal lahir yang berbeda.
-    """
     positives = _pairs_where(
         df,
         """
@@ -152,9 +121,6 @@ def build_silver(df: pd.DataFrame) -> pd.DataFrame:
     positives["label"] = 1
     positives["evidence"] = "phone+dob | email+phone"
 
-    # Nomor telepon atau email sama, tetapi pengenal lain bertentangan: dua orang
-    # berbagi satu kolom kontak. Perbedaan aman terhadap NULL agar nilai kosong di
-    # satu sisi tidak diam-diam dianggap sebagai kecocokan maupun pertentangan.
     negatives = _pairs_where(
         df,
         """
@@ -181,11 +147,7 @@ def build_silver(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def customer_id_agreement(df: pd.DataFrame, silver: pd.DataFrame) -> dict:
-    """Pemeriksaan kewajaran saja: apakah label deterministik sesuai dengan customer_id?
 
-    Dilaporkan karena angka yang rendah berarti aturan silver keliru, bukan
-    karena customer_id menentukan label.
-    """
     cid = _pairs_where(df, 'l."customer_id" = r."customer_id"')
     labelled = silver[["record_id_l", "record_id_r"]].merge(
         cid, on=["record_id_l", "record_id_r"], how="inner"
@@ -201,14 +163,7 @@ def customer_id_agreement(df: pd.DataFrame, silver: pd.DataFrame) -> dict:
 
 
 def agree_fields(df: pd.DataFrame, preds: pd.DataFrame) -> pd.DataFrame:
-    """Catat kolom identitas MANA yang cocok, bukan hanya jumlahnya.
 
-    Hitungan saja dapat menyesatkan: 2.590 pasangan kandidat hanya memiliki
-    tanggal lahir yang sama, yang dapat terjadi pada orang berbeda. Pengelompokan
-    berdasarkan jumlah kesamaan menempatkannya bersama 610 pasangan dengan nama
-    lengkap yang sama, padahal pasangan tersebut benar-benar memerlukan penilaian
-    peninjau.
-    """
     con = duckdb.connect()
     con.register("src", df)
     con.register("pred", preds)
@@ -230,8 +185,7 @@ def agree_fields(df: pd.DataFrame, preds: pd.DataFrame) -> pd.DataFrame:
 
 
 def attach_evidence(df: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
-    """Lengkapi tabel pasangan dengan nilai kolom dari kedua catatan agar
-    peninjau tidak perlu membuka berkas lain untuk menilai pasangan."""
+   
     left = df[["record_id", *REVIEW_FIELDS]].rename(
         columns={**{"record_id": "record_id_l"}, **{c: f"{c}_l" for c in REVIEW_FIELDS}}
     )
@@ -245,25 +199,7 @@ def attach_evidence(df: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
-    """Kelompokkan pasangan untuk ditinjau manusia, dahulukan perbedaan silver/model.
 
-    Dibuat dari keluaran prediksi saat ini. Sampel dikelompokkan berdasarkan
-    strata, bukan diambil acak merata, karena 11.807 pasangan yang dipilih merata
-    sebagian besar akan berupa pasangan yang jelas bukan kecocokan.
-
-    PENGURUTAN (2026-10-12). Sebelumnya antrean diurutkan berdasarkan
-    (stratum, probability), sehingga strata yang "mudah" muncul lebih dahulu,
-    bukan pasangan yang paling mungkin duplikat. Untuk produksi, prioritasnya
-    berbeda dari antrean triase pada umumnya: pasangan dengan BANYAK kolom yang
-    cocok tetapi belum diputuskan LEBIH berisiko jika salah digabungkan (data
-    orang asing dapat mencemari catatan master) daripada pasangan yang hanya
-    cocok pada satu kolom. Karena itu, antrean diurutkan berdasarkan:
-      1. agree_count menurun — jumlah kolom identitas yang cocok (risiko jika salah)
-      2. match_probability menurun — perkiraan model
-    Pasangan dengan email, telepon, nama, dan tanggal lahir yang sama tetapi
-    skornya belum meyakinkan adalah pasangan yang harus lebih dahulu dilihat
-    peninjau manusia.
-    """
     predictions_path = config_predictions_path(full=full)
     if not predictions_path.exists():
         print(
@@ -274,10 +210,6 @@ def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
 
     preds = pd.read_parquet(predictions_path)[["record_id_l", "record_id_r", "match_probability"]]
     silver = build_silver(df)
-
-    # Label dibuat untuk semua baris, tetapi proses model mungkin hanya mencakup
-    # sampel. Pasangan silver di luar baris yang dimodelkan bukan "belum berlabel",
-    # melainkan di luar cakupan; mencampur keduanya akan mengacaukan pengelompokan.
     modelled = set(preds["record_id_l"]) | set(preds["record_id_r"])
     silver_in_scope = silver[
         silver["record_id_l"].isin(modelled) & silver["record_id_r"].isin(modelled)
@@ -293,22 +225,12 @@ def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
         how="left",
     ).merge(agree_fields(df, preds), on=["record_id_l", "record_id_r"], how="left")
 
-    # agree_count = berapa banyak field identitas yang cocok. Dipakai sebagai
-    # prioritas risiko: makin banyak field cocok tanpa keputusan, makin berbahaya
-    # kalau salah gabung (data master jadi tercampur orang lain).
     agree_cols = ["agree_email", "agree_phone", "agree_dob", "agree_name", "agree_city"]
     merged["agree_count"] = merged[agree_cols].fillna(False).sum(axis=1)
 
     strata: list[tuple[str, pd.DataFrame]] = []
-    # Diberi label oleh silver, tetapi bertentangan dengan model. Perbedaan inilah
-    # yang dapat diperiksa dan dikoreksi oleh peninjau.
     strata.append(("silver_positive_low_probability", merged[(merged["label"] == 1) & (merged["match_probability"] < 0.5)]))
     strata.append(("silver_negative_high_probability", merged[(merged["label"] == 0) & (merged["match_probability"] >= 0.5)]))
-    # Terblokir bersama tetapi belum berlabel. Kelompokkan berdasarkan kolom
-    # yang cocok, bukan probabilitas: semua skor di bawah desil tertinggi adalah
-    # 1e-300, sehingga probabilitas tidak membedakan pasangan. Nama atau telepon
-    # yang sama perlu dinilai; dob yang sama saja dapat terjadi karena ulang tahun
-    # kebetulan dan tidak sepadan dengan waktu peninjau.
     unlabelled = merged[merged["label"].isna()]
     strata.append(("unlabelled_high_probability", unlabelled[unlabelled["match_probability"] >= 0.5]))
     strata.append(("unlabelled_same_name", unlabelled[unlabelled["agree_name"]]))
@@ -335,16 +257,11 @@ def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
     queue = pd.concat(frames, ignore_index=True)
     queue = attach_evidence(df, queue)
 
-    # Label sengaja dibiarkan kosong: mengisinya merupakan proses peninjauan.
-    # Label acuan dibuat dengan menyalin berkas ini ke gold_labels.csv setelah
-    # kolom 'label' diisi, bukan dengan sekadar mengganti nama berkas.
     queue["label"] = None
     queue["review_status"] = "pending"
     queue["reviewer"] = None
     queue["reviewer_note"] = None
-    # Prioritas: banyak field cocok dulu (risiko salah gabung tinggi), lalu
-    # peluang model tertinggi. Stratum dipertahankan untuk filtering, bukan
-    # untuk menentukan urutan kerja.
+
     queue = queue.sort_values(
         ["agree_count", "match_probability"], ascending=[False, False]
     )
@@ -360,17 +277,6 @@ def build_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
 
 
 def load_labels(source: str | None = None) -> tuple[pd.DataFrame | None, str]:
-    """Kembalikan label yang ditinjau jika label acuan tersedia, jika tidak label silver, atau None.
-
-    Nama sumber dikembalikan agar pemanggil dapat mencegah keluaran silver
-    disebut "metrik gold".
-
-    `source` menetapkan satu berkas, bukan otomatis mengutamakan gold. Tanpa
-    parameter ini, pemanggil tidak dapat meminta silver setelah
-    gold_labels.csv tersedia, sehingga `threshold_eval --source silver` gagal
-    alih-alih melaporkan sumber yang tidak tersedia. Akibatnya, seolah-olah
-    opsinya rusak.
-    """
     if source in (None, "auto"):
         order = ((GOLD_PATH, "gold"), (SILVER_PATH, "silver"))
     elif source in ("gold", "silver"):
@@ -381,9 +287,7 @@ def load_labels(source: str | None = None) -> tuple[pd.DataFrame | None, str]:
     for path, name in order:
         if not path.exists():
             continue
-        # sep=None mendeteksi pemisah secara otomatis. Berkas yang dikembalikan
-        # dari Excel memakai ';' pada pengaturan desimal berkoma. read_csv(path)
-        # akan membaca seluruh judul kolom sebagai satu nama.
+
         raw = pd.read_csv(path, sep=None, engine="python")
         required = {"record_id_l", "record_id_r"}
         if not required.issubset(raw.columns):
@@ -402,8 +306,7 @@ def load_labels(source: str | None = None) -> tuple[pd.DataFrame | None, str]:
         pairs = raw[["record_id_l", "record_id_r"]].astype(str)
         normalised = raw[label_col].map(normalise_label)
         if name == "gold" and normalised.isna().any():
-            # Salah ketik seperti "yes"/"maybe" jika dibiarkan akan menjadi
-            # keputusan negatif tanpa peringatan dan merusak angka presisi serta recall.
+
             bad = sorted(set(raw[label_col].astype(str)[normalised.isna()]))[:5]
             raise ValueError(
                 f"{path.name}: unrecognised label values {bad}. "
@@ -429,15 +332,7 @@ def save_silver(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def carry_over_reviewed(queue: pd.DataFrame) -> pd.DataFrame:
-    """Pasangkan kembali label yang sudah diberikan untuk pasangan yang sama.
 
-    Antrean dibangun ulang pada setiap proses dari sampel acak, sehingga
-    pembuatannya kembali tidak boleh menghapus penilaian manusia. Proses ulang
-    pipeline pernah menghapus 100 hasil pemeriksaan yang sudah selesai.
-    Membawa label lama tetap aman karena pasangan (record_id_l, record_id_r)
-    merupakan fakta tetap: keputusan match dari peninjau tidak berubah ketika
-    antrean dibuat ulang.
-    """
     if not QUEUE_PATH.exists() or queue.empty:
         return queue
 
@@ -449,9 +344,6 @@ def carry_over_reviewed(queue: pd.DataFrame) -> pd.DataFrame:
     if reviewed.empty:
         return queue
 
-    # Kunci dibandingkan sebagai teks di kedua sisi: Excel mungkin mengubah
-    # rec_000123 menjadi angka, sehingga perbedaan int/str dapat membuang semua
-    # hasil tinjauan yang seharusnya dipertahankan tanpa peringatan.
     keys = ["record_id_l", "record_id_r"]
     queue = queue.copy()
     reviewed = reviewed.copy()
@@ -489,24 +381,11 @@ def save_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
 
 
 def _label_key(value) -> str:
-    """Samakan variasi ejaan seperti 'non-match', 'No Match', dan 'non_match'.
-
-    Peninjau biasanya menulis 'non-match'. Tanpa normalisasi ini, peninjauan
-    lengkap atas 236 baris pernah hanya mempromosikan 11 baris gold tanpa pesan
-    kesalahan. Versi bug sebelumnya diam-diam membuang semua baris 'no_match';
-    penggunaan tanda hubung membuat masalah itu muncul kembali.
-    """
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def normalise_label(value) -> str | None:
-    """Petakan istilah tinjauan yang diterima ke 'match' / 'no_match', atau None.
 
-    None berarti "belum ditinjau atau tidak dipahami". Pemanggil harus
-    memperlakukannya sebagai nilai yang hilang, bukan label negatif: sel kosong
-    yang dihitung sebagai no_match akan meningkatkan tingkat false positive
-    tanpa ada peninjau yang memeriksa pasangan tersebut.
-    """
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         return None
     key = _label_key(value)
@@ -518,31 +397,15 @@ def normalise_label(value) -> str | None:
 
 
 def _read_review(path) -> pd.DataFrame:
-    """Baca berkas tinjauan dengan aman setelah dibuka dan disimpan di Excel dengan desimal berkoma.
 
-    Pengaturan lokal tersebut menyimpan CSV dengan pemisah ';' dan mengubah
-    angka menjadi notasi ilmiah dengan koma desimal: match_probability menjadi
-    '2,92E+11' dan phone_std menjadi '1,83352E+14'. Kolom angka dibaca sebagai
-    teks dan tetap berupa teks setelah proses bolak-balik, sesuai kebutuhan
-    gold_labels.csv.
-    """
     raw = path.read_text(encoding="utf-8")
-    # Setelah disimpan dari Excel, berkas memakai pemisah titik koma. Baris
-    # pertama memiliki 27 titik koma. Deteksi ini sebelum sep=None keliru
-    # menganggap berkas hanya memiliki satu kolom.
     if ";" in raw.split("\n", 1)[0]:
         return pd.read_csv(path, sep=";")
     return pd.read_csv(path, sep=None, engine="python")
 
 
 def _backup_gold() -> Path | None:
-    """Jangan hapus set acuan yang ada tanpa membuat salinan.
 
-    gold_labels.csv adalah satu-satunya berkas yang menyimpan penilaian manusia.
-    Berkas antrean dibangun ulang (dan dapat diganti dengan sampel lain) pada
-    setiap proses. Karena itu, mempromosikan antrean baru di atas berkas gold
-    lama akan menghapus label yang sudah ditinjau tanpa pemberitahuan.
-    """
     if not GOLD_PATH.exists() or GOLD_PATH.stat().st_size == 0:
         return None
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -552,21 +415,6 @@ def _backup_gold() -> Path | None:
 
 
 def promote_gold() -> int:
-    """Salin baris antrean yang sudah ditinjau ke gold_labels.csv.
-
-    Membaca antrean strata DAN sampel false positive agar sampel yang ditinjau
-    untuk memeriksa presisi tidak dibiarkan tanpa digunakan di samping berkas
-    gold. Baris yang belum ditinjau dibuang, bukan dibawa: jika tidak, label
-    kosong akan dibaca sebagai "bukan kecocokan" dan dihitung sebagai false
-    negative.
-
-    Baris gold lama yang pasangannya TIDAK ada dalam proses promosi ini
-    DIPERTAHANKAN (aturan yang sama seperti feedback.csv): label manusia terus
-    terakumulasi. Untuk pasangan yang ditinjau ulang, gunakan label terbaru
-    (keep='last'). Promosi kosong tidak pernah menimpa gold — menghapus 247
-    label yang telah ditinjau hanya karena antrean saat ini kosong merupakan
-    kehilangan data tanpa pemberitahuan.
-    """
     sources = [path for path in (QUEUE_PATH, FP_SAMPLE_PATH) if path.exists()]
     if not sources:
         raise FileNotFoundError(

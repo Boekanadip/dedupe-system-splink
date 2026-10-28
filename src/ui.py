@@ -1,695 +1,278 @@
-"""Fungsi bantu UI Streamlit bersama: judul halaman, konteks bilah sisi, dan paginasi.
-
-Modul ini juga menjadi sumber tunggal teks yang ditampilkan kepada pengguna
-(nama kolom, status, dan tingkat kemiripan). Semua halaman mengimpornya dari
-sini agar konsep yang sama selalu memiliki istilah yang konsisten dan peninjau
-tidak perlu mempelajari istilah teknis seperti "gamma".
-"""
+"""UI components for entity resolution dashboard."""
 from __future__ import annotations
 
 import math
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import streamlit as st
 
+from src.config import (
+    DEFAULT_BENCHMARK_RULES,
+    MATCH_THRESHOLD,
+    NON_MATCH_THRESHOLD,
+    OUTPUT_DIR,
+    REVIEW_THRESHOLD,
+    PROJECT_ROOT,
+    FieldConfig,
+    get_field_configs,
+)
+from src.splink_model import predictions_path
 
-def page_header(title: str, description: str | None = None) -> None:
-    """Tampilkan judul dan deskripsi satu baris opsional dengan format seragam."""
+
+def _is_blank(value: Any) -> bool:
+    """Check if value is missing or empty string."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return True
+    try:
+        if math.isnan(float(value)):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def workflow_step(path: str) -> None:
+    """Progress indicator at top of page."""
+    step = {
+        "1_review.py": 1,
+        "2_master.py": 2,
+        "3_dashboard.py": 3,
+        "4_retrain.py": 4,
+        "5_queue.py": 5,
+        "6_batch.py": 6,
+        "7_gaps.py": 7,
+        "8_explain.py": 8,
+        "9_history.py": 9,
+    }.get(Path(path).name, 0)
+
+    if step:
+        steps = [
+            ("1", "Upload + Preprocess"),
+            ("2", "Master Data"),
+            ("3", "Dashboard"),
+            ("4", "Retrain"),
+            ("5", "Review Queue"),
+            ("6", "Batch Processing"),
+            ("7", "Gaps"),
+            ("8", "Explain"),
+            ("9", "History"),
+        ]
+        icons = {i: (s := f"s{step}") and ("✅" if i < step else ("🔄" if i == step else "⬜")) for i, s in enumerate(steps)}
+        st.caption(" / ".join(f"{icons[i]} {name}" for i, name in steps))
+
+
+def page_header(title: str, description: str = "") -> None:
+    """Standard page header."""
     st.title(title)
     if description:
-        st.caption(description)
+        st.markdown(f"<small>{description}</small>", unsafe_allow_html=True)
 
 
-WORKFLOW_STEPS = [
-    ("Upload", "Masukkan data baru"),
-    ("Pemeriksaan", "Nilai pasangan yang meragukan"),
-    ("Daftar Customer", "Lihat hasil akhir"),
-]
-
-WORKFLOW_ROUTE = {
-    "app.py": "Upload",
-    "pages/1_review.py": "Pemeriksaan",
-    "pages/5_queue.py": "Pemeriksaan",
-    "pages/6_batch.py": "Upload",
-    "pages/2_master.py": "Daftar Customer",
-    "pages/3_dashboard.py": "Daftar Customer",
-    "pages/4_retrain.py": "Daftar Customer",
-    "pages/7_gaps.py": "Pemeriksaan",
-    "pages/8_explain.py": "Pemeriksaan",
-    "pages/9_history.py": "Daftar Customer",
-}
-
-
-def workflow_step(current_file: str | None) -> None:
-    """Tampilkan posisi pembaca dalam alur 3 langkah, dalam bahasa sehari-hari."""
-    import sys
-    from pathlib import Path
-
-    here = Path(current_file).name if current_file else Path(sys.argv[0]).name
-    current = WORKFLOW_ROUTE.get(here, here)
-    steps = [short for short, _ in WORKFLOW_STEPS]
-    if current not in steps:
-        return
-    idx = steps.index(current)
-    crumbs = []
-    for i, (short, desc) in enumerate(WORKFLOW_STEPS):
-        if i < idx:
-            crumbs.append(f"✅ ~~{short}~~")
-        elif i == idx:
-            crumbs.append(f"👉 **{short}**")
-        else:
-            crumbs.append(short)
-    st.caption(" → ".join(crumbs))
-    st.caption(
-        f"Anda sedang di: **{current}** — {dict(WORKFLOW_STEPS)[current]}. "
-        + (
-            "Selanjutnya: nilai pasangannya di halaman Pemeriksaan."
-            if current == "Upload"
-            else "Selanjutnya: hasilnya ada di Daftar Customer."
-            if current == "Pemeriksaan"
-            else "Alur selesai. Mau tambah data baru? Kembali ke halaman Upload."
-        )
-    )
+def page_guide(path: str) -> None:
+    """Show guide for current page."""
+    GUIDE = {
+        "1_review.py": "Pilih keputusan (Gabung / Bedakan / Tidak yakin) untuk setiap pasangan.",
+        "2_master.py": "Lihat data master yang sudah resolved. Satu baris = satu orang unik.",
+        "3_dashboard.py": "Ringkasan metrik: berapa banyak yang sudah digabung, perlu dicek, dll.",
+        "4_retrain.py": "Latih ulang model dengan label baru dari review manusia.",
+        "5_queue.py": "Daftar pasangan yang perlu dicek manusia, diurutkan oleh priority.",
+        "6_batch.py": "Proses batch baru: upload CSV atau konek ke database.",
+        "7_gaps.py": "Analisa field mana yang perlu diperbaiki.",
+        "8_explain.py": "Lihat why: kenapa sistem berpikir dua record itu sama atau berbeda.",
+        "9_history.py": "Riwayat proses dari awal sampai akhir.",
+    }
+    guide = GUIDE.get(Path(path).name)
+    if guide:
+        st.caption(f"📖 {guide}")
 
 
 def monitoring_sidebar() -> None:
-    """Model aktif, jumlah batch, antrian review, dan status pipeline."""
-    from src import registry
-    from src.config import PROJECT_ROOT, pipeline_locked
-
-    import json
-    import pandas as pd
-
-    LATEST_MODEL = PROJECT_ROOT / "models" / "latest.json"
-    REVIEW_QUEUE = PROJECT_ROOT / "data" / "labels" / "review_queue.csv"
-
-    # Periksa kunci pipeline SEBELUM menampilkan data apa pun. Jika pipeline
-    # sedang berjalan, berkas artefak mungkin baru tertulis sebagian — membacanya bisa
-    # menghasilkan data yang hanya konsisten sebagian atau menyebabkan kegagalan.
-    lock = pipeline_locked()
-    if lock:
-        import time
-
-        age_min = (time.time() - float(lock.get("started_at", 0))) / 60
-        st.warning(
-            f"⚠ **Pipeline sedang berjalan** ({age_min:.0f} menit). "
-            f"Data yang ditampilkan mungkin belum lengkap. "
-            f"Jangan tutup tab ini sampai proses selesai."
-        )
-
-    with st.sidebar:
-        st.markdown("#### Pencarian Customer Ganda")
-        st.caption("Mencari data customer yang sama")
-        st.divider()
-
-        if lock:
-            import time
-
-            age_min = (time.time() - float(lock.get("started_at", 0))) / 60
-            st.error(f"⏳ Pipeline berjalan ({age_min:.0f} mnt)")
-
-        st.markdown("#### Model Aktif")
-        if LATEST_MODEL.exists():
-            try:
-                model = json.loads(LATEST_MODEL.read_text(encoding="utf-8"))
-                st.caption(f"Versi: `{model['version']}`")
-                if model.get("created_at"):
-                    st.caption(f"Diperbarui: {model['created_at']}")
-            except (json.JSONDecodeError, OSError, KeyError, TypeError):
-                st.caption("Model aktif: (tidak dapat dibaca)")
-        else:
-            st.caption("Belum ada model aktif")
-
-        reg = registry.load()
-        next_idx = reg.get("next_start_index", 0)
-        st.caption(
-            f"Paket data masuk: {len(reg.get('batches', []))} · "
-            f"nomor record 1 s/d {next_idx:,}"
-        )
-
-        if REVIEW_QUEUE.exists():
-            try:
-                queue = pd.read_csv(REVIEW_QUEUE)
-                pending = int((queue["review_status"] == "pending").sum())
-                st.caption(f"Antrean pemeriksaan: {pending:,} pasangan menunggu")
-            except Exception:
-                pass
-
-        last = st.session_state.get("last_run")
-        if last:
-            status = "OK" if last.get("returncode") == 0 else "GAGAL"
-            secs = last.get("seconds", 0)
-            st.caption(f"Pemrosesan terakhir: {secs}s · {status}")
-
-        st.divider()
-        st.markdown("#### Bantuan")
-
-        st.caption("**Baru pakai?** Baca `PANDUAN.md` di folder project.")
-        st.caption("Alur: Upload → Data Batch Baru → Ringkasan → Antrean → Pemeriksaan → Daftar Customer")
-
-
-PAGE_GUIDE: dict[str, tuple[str, list[str]]] = {
-    "app.py": (
-        "Mulai dari sini kalau pertama kali pakai.",
-        [
-            "Unggah file CSV data customer.",
-            "Jawab pertanyaan tanggal kalau muncul — itu penting.",
-            "Klik Analisis batch, tunggu sampai selesai.",
-        ],
-    ),
-    "pages/1_review.py": (
-        "Halaman kerja utama: Anda yang memutuskan.",
-        [
-            "Baca bagian 'Kenapa sistem berpikir begitu?' tiap pasangan.",
-            "Klik 'Orang yang sama' atau 'Berbeda orang'.",
-            "Jangan buru-buru. Salah gabung lebih merusak daripada lupa gabung.",
-        ],
-    ),
-    "pages/2_master.py": (
-        "Hasil akhir: satu baris per orang.",
-        [
-            "Cari customer yang salah datanya, lalu betulkan.",
-            "Kalau ada 2 orang berbeda yang jadi 1, tandai 'Salah gabung'.",
-        ],
-    ),
-    "pages/5_queue.py": (
-        "Semua pasangan yang perlu diperiksa manusia.",
-        [
-            "Antrean kerja hanya sampel kecil; halaman ini menampilkan semuanya.",
-            "Saring, lalu klik 'Tambahkan yang disaring ke antrean'.",
-        ],
-    ),
-    "pages/8_explain.py": (
-        "Pelajari cara sistem berpikir, supaya bisa menilai sendiri.",
-        [
-            "Pilih dua record, lihat perbandingan tiap field.",
-            "Kalau tidak paham bobotnya, pakai untuk belajar.",
-        ],
-    ),
-    "pages/3_dashboard.py": (
-        "Hanya untuk melihat. Tidak ada tombol untuk mengubah apa pun.",
-        [
-            "Klik Refresh kalau datanya baru saja diperbarui.",
-            "Lihat berapa yang digabung otomatis vs perlu diperiksa.",
-        ],
-    ),
-    "pages/6_batch.py": (
-        "Periksa data baru sebelum dipakai.",
-        [
-            "Centang baris yang tidak boleh digabung dengan customer mana pun.",
-            "Klik 'Simpan persetujuan', lalu 'Terapkan proposal'.",
-            "Baris yang tidak disetujui tetap masuk sebagai customer sendiri.",
-        ],
-    ),
-    "pages/7_gaps.py": (
-        "Untuk mencari data yang mungkin terlewat.",
-        [
-            "Record sendirian = belum pernah cocok dengan siapa pun.",
-            "Bisa saja memang unik, bisa saja duplikat yang terlewat.",
-            "Cari satu record, lalu lihat siapa saja yang sistem bandingkan dengan dia.",
-        ],
-    ),
-    "pages/9_history.py": (
-        "Jejak audit: siapa mengubah apa dan kapan.",
-        [
-            "Ketik nomor record untuk melihat semua jejaknya.",
-            "Dipakai saat ada yang bertanya 'kenapa customer ini digabung?'.",
-        ],
-    ),
-    "pages/4_retrain.py": (
-        "Halaman ini hanya untuk yang sudah paham. Hampir tidak perlu disentuh.",
-        [
-            "Kalau tidak ada masalah, biarkan saja — sistemnya sudah jalan.",
-            "Ubah batas kepastian hanya kalau ada alasan yang jelas.",
-            "Latih ulang model hanya setelah data dan keputusan manual sudah bersih.",
-        ],
-    ),
-}
-
-
-def page_guide(page_file: str) -> None:
-    """Bantuan singkat di halaman ini, sesuai halaman mana yang sedang dibuka."""
-    import os
-
-    key = page_file.replace("\\", "/")
-    guide = PAGE_GUIDE.get(key) or PAGE_GUIDE.get(os.path.basename(key))
-    if not guide:
-        return
-    judul, langkah = guide
-    with st.expander("💡 Apa yang harus saya lakukan di halaman ini?"):
-        st.markdown(f"**{judul}**")
-        for item in langkah:
-            st.markdown(f"- {item}")
-
-
-def paginate(df, page_size: int = 50, key: str = "page") -> tuple[Any, int]:
-    """Bagi DataFrame menjadi halaman. Kembalikan (page_df, total_pages)."""
-    import pandas as pd
-
-    if df is None or (isinstance(df, pd.DataFrame) and df.empty):
-        return df, 1
-
-    n = len(df)
-    total_pages = max(1, (n + page_size - 1) // page_size)
-    page = st.number_input(
-        "Halaman",
-        min_value=1,
-        max_value=total_pages,
-        value=1,
-        key=key,
+    """Sidebar with monitoring links."""
+    st.sidebar.title("Monitoring")
+    st.sidebar.markdown(
+        """
+    - [Dashboard](3_dashboard)
+    - [Riwayat](9_history)
+    - [Model info](4_retrain)
+    """
     )
-    start = (page - 1) * page_size
-    return df.iloc[start : start + page_size].copy(), total_pages
+    st.sidebar.title("Proses")
+    st.sidebar.markdown(
+        """
+    - [Upload data](app)
+    - [Review queue](5_queue)
+    - [Master data](2_master)
+    """
+    )
 
 
-# --- Istilah yang ditampilkan kepada pengguna ---------------------------
-# Simpan di satu tempat agar peninjau mempelajari istilah "Tingkat kesamaan"
-# satu kali dan melihatnya secara konsisten. Istilah bersumber dari daftar
-# pembanding di src/splink_model.py.
+def how_to_read() -> None:
+    """How to interpret probability."""
+    with st.expander("📖 Bagaimana membaca angka-angka di bawah?"):
+        st.markdown(
+            """
+        - **Peluang sama** = probabilitas dua record adalah orang yang sama, 0-100%
+        - **Keputusan sistem**:
+            - 🟢 **DIGABUNG** = peluang tinggi, otomatis digabung
+            - 🔴 **BEDA** = peluang sangat rendah, otomatis disimpan terpisah
+            - 🟡 **PERLU DIPERIKSA** = peluang di tengah, butuh keputusan manusia
+        - **Bukti** = seberapa kuat masing-masing field mendukung/menolak
+            - +angka = mendukung (semakin besar semakin kuat)
+            - -angka = menolak
+        """
+        )
 
-FIELD_LABEL: dict[str, str] = {
-    "first_name_std": "Nama depan",
-    "last_name_std": "Nama belakang",
-    "email_std": "Email",
-    "phone_std": "Nomor telepon",
-    "dob_std": "Tanggal lahir",
-    "address_std": "Alamat",
-    "city_std": "Kota",
-    "state_std": "Provinsi",
-    "country_std": "Negara",
-}
 
-# Keputusan model ditulis dengan istilah yang mudah dipahami peninjau.
-DECISION_LABEL: dict[str, str] = {
-    "MATCH": "Digabung otomatis",
-    "REVIEW": "Perlu diperiksa",
-    "NON_MATCH": "Bukan orang yang sama",
-}
+# -----------------------------------------------------------------------------
+# Field configuration
+# -----------------------------------------------------------------------------
 
-DECISION_HELP: dict[str, str] = {
-    "MATCH": "Sistem yakin ini orang yang sama, jadi sudah digabung sendiri.",
-    "REVIEW": "Sistem tidak cukup yakin. Anda yang memutuskan.",
-    "NON_MATCH": "Sistem yakin ini dua orang berbeda.",
-}
 
-# Warna badge per status supaya mata bisa menangkap tanpa membaca teks.
-DECISION_STYLE: dict[str, tuple[str, str]] = {
-    "MATCH": ("green", "✅"),
-    "REVIEW": ("orange", "⏳"),
-    "NON_MATCH": ("gray", "🚫"),
-}
-
-LABEL_LABEL: dict[str, str] = {
-    "match": "Orang yang sama",
-    "no_match": "Berbeda orang",
-    "": "Belum diputuskan",
-    None: "Belum diputuskan",
-}
-
-REVIEW_STATUS_LABEL: dict[str, str] = {
-    "pending": "Menunggu",
-    "reviewed": "Sudah diperiksa",
-}
-
-# Asal pasangan dalam antrean. Kode stratum mentah tidak bermakna bagi peninjau,
-# jadi setiap kode yang tersimpan diberi keterangan dengan bahasa sederhana.
-STRATUM_LABEL: dict[str, str] = {
-    "match_precision_check": "Cek ketepatan hasil gabung otomatis",
-    "device_truth_positive_topup": "Duplikat yang sudah diketahui pasti",
-    "review_band_random": "Sampel acak yang perlu diperiksa",
-    "manual_review": "Ditambahkan dari halaman Antrean",
-    "singleton_candidate": "Kandidat untuk record sendirian",
-    "uncovered_review": "Belum pernah masuk antrean",
+FIELD_LABEL = {
+    "first_name": "Nama depan",
+    "last_name": "Nama belakang",
+    "email": "Email",
+    "phone": "Nomor telepon",
+    "dob": "Tanggal lahir",
+    "address": "Alamat",
+    "city": "Kota",
+    "state": "Provinsi",
+    "country": "Negara",
+    "core_identity": "Core identity",
 }
 
 
 def field_label(field: str) -> str:
-    """Nama kolom dalam bahasa sederhana. Kolom yang tidak dikenal tetap memakai namanya."""
-    return FIELD_LABEL.get(field, field.replace("_std", "").replace("_", " "))
+    """Translate field name to Indonesian."""
+    return FIELD_LABEL.get(field, field.replace("_", " ").title())
 
 
-def field_labels(fields) -> list[str]:
-    return [field_label(f) for f in fields]
+# Comparison level names (from Splink)
+LEVEL_LABELS = {
+    # Name levels
+    0: ("exact", "persis sama", "mendukung"),
+    1: ("fuzzy", "hampir sama", "mendukung"),
+    2: ("phonetic", "sama fonetik", "mendukung"),
+    3: ("initials", "huruf depan sama", "mendukung"),
+    4: ("common", "nama umum", "menolak"),
+    5: ("null", "salah satu kosong", "netral"),
+    6: ("different", "beda", "menolak"),
+    # Contact levels
+    0: ("exact", "persis sama", "mendukung"),
+    1: ("fuzzy", "hampir sama", "mendukung"),
+    2: ("domain_only", "hanya domain", "netral"),
+    3: ("null", "salah satu kosong", "netral"),
+    4: ("different", "beda", "menolak"),
+    # Location levels
+    0: ("exact", "persis sama", "mendukung"),
+    1: ("fuzzy", "hampir sama", "mendukung"),
+    2: ("same_state", "provinsi sama", "mendukung"),
+    3: ("same_country", "negara sama", "mendukung"),
+    4: ("null", "salah satu kosong", "netral"),
+    5: ("different", "beda", "menolak"),
+    # DOB levels
+    0: ("exact", "persis sama", "mendukung"),
+    1: ("year_only", "hanya tahun", "mendukung"),
+    2: ("partial", "sebagian sama", "netral"),
+    3: ("null", "salah satu kosong", "netral"),
+    4: ("different", "beda", "menolak"),
+}
 
 
-def decision_label(decision: Any) -> str:
-    return DECISION_LABEL.get(str(decision), "Belum dinilai")
+def similarity_text(label: str | None, code: int | None) -> str:
+    """Convert comparison level to human-readable text."""
+    if label is None:
+        return "tidak ada data"
+    
+    # For gamma_name, gamma_contact, gamma_location, gamma_dob
+    if code is not None and code >= 0:
+        level_info = LEVEL_LABELS.get(code, (None, "tidak diketahui", "netral"))
+        return level_info[1]
+    
+    return str(label) if label else "tidak ada data"
 
 
-def decision_badge(decision: Any) -> Any:
-    """Badge berwarna untuk status keputusan, supaya cepat dibaca sekilas."""
-    color, icon = DECISION_STYLE.get(str(decision), ("blue", "❔"))
-    return st.badge(decision_label(decision), icon=icon, color=color)
-
-
-def label_label(label: Any) -> str:
-    if label is None or (isinstance(label, float) and math.isnan(label)):
-        return LABEL_LABEL[None]
-    text = str(label).strip()
-    return LABEL_LABEL.get(text, text or LABEL_LABEL[None])
-
-
-def review_status_label(status: Any) -> str:
-    return REVIEW_STATUS_LABEL.get(str(status), str(status))
-
-
-def stratum_label(stratum: Any) -> str:
-    text = str(stratum)
-    return STRATUM_LABEL.get(text, text.replace("_", " "))
-
-
-def verdict_plain(decision: Any) -> str:
-    """Status model dalam kalimat satu baris, bukan kode."""
-    return DECISION_HELP.get(str(decision), "Status belum diketahui.")
-
-
-def format_probability(prob: Any) -> str:
-    """Peluang sebagai band bahasa manusia, BUKAN persentase presisi.
-
-    Alasan band, bukan persen: Splink adalah naive Bayes dan overconfident —
-    bukti yang berkorelasi (email + telepon + nama) dihitung ganda, sehingga
-    pasangan yang jelas-jelas punya perbedaan (dob beda, telepon beda) tetap
-    mendapat p = 1.0.     Menulis "100%" membuat peninjau kehilangan kepercayaan
-    pada seluruh sistem ketika melihat kontradiksi di tabel "Kenapa?".
-    Band ("sangat tinggi" / "tinggi" / ...) menyampaikan tingkat tanpa
-    mengklaim presisi yang tidak dimiliki model.
-    """
-    try:
-        p = float(prob)
-    except (TypeError, ValueError):
-        return "tidak tersedia"
-    if math.isnan(p):
-        return "tidak tersedia"
-    if p <= 0:
-        return "hampir nol"
-    if p >= 0.99:
-        return "sangat tinggi"
-    if p >= 0.9:
-        return "tinggi"
-    if p >= 0.5:
-        return "sedang"
-    if p >= 0.01:
-        return "rendah"
-    if p >= 1e-6:
-        return "sangat rendah"
-    return "hampir nol"
-
-
-def probability_band_color(prob: Any) -> str:
-    """Warna badge untuk band peluang, supaya cepat dibaca sekilas."""
-    try:
-        p = float(prob)
-    except (TypeError, ValueError):
-        return "gray"
-    if math.isnan(p):
-        return "gray"
-    if p >= 0.99:
-        return "green"
-    if p >= 0.9:
-        return "orange"
-    if p >= 0.5:
-        return "blue"
-    return "gray"
-
-
-def probability_band_help() -> str:
-    """Penjelasan satu kalimat untuk help text di setiap metrik peluang."""
-    return (
-        "Ini tingkat keyakinan MODEL, bukan probabilitas kebenaran. Model kadang "
-        "terlalu yakin karena menghitung bukti serupa berkali-kali. Selalu cek "
-        "tabel perbandingan field sebelum memutuskan."
-    )
-
-
-def _pct(value: float, digits: int) -> str:
-    """Persentase dengan pembulatan Indonesia (koma desimal)."""
-    return f"{value * 100:.{digits}f}%".replace(".", ",")
-
-
-def format_rate(rate: Any, digits: int = 2) -> str:
-    """Rasio 0..1 jadi persentase bulat, mis. 0.1477 -> 14,77%."""
-    try:
-        value = float(rate)
-    except (TypeError, ValueError):
-        return "tidak tersedia"
-    if math.isnan(value):
-        return "tidak tersedia"
-    return _pct(value, digits)
-
-
-def format_count(value: Any, suffix: str = "") -> str:
-    """Angka pecah jadi pemisah ribuan Indonesia, mis. 48380 -> 48.380."""
-    try:
-        return f"{int(value):,}".replace(",", ".") + suffix
-    except (TypeError, ValueError):
-        return str(value) + suffix
-
-
-def format_threshold(value: Any) -> str:
-    """Ambang keputusan sebagai persentase, bukan notasi ilmiah.
-
-    Angka 1e-10 di layar tidak bisa dibaca siapa pun, dan lebih buruk: terlihat
-    seperti presisi yang tidak perlu. Yang penting hanya "di bawah sini berarti
-    pasti berbeda orang", jadi cukup ditulis "hampir 0%".
-    """
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return "tidak tersedia"
-    if math.isnan(v):
-        return "tidak tersedia"
-    if v <= 0:
-        return "0%"
-    if v < 0.0001:
-        # 1e-10, 1e-300: semua ini secara fungsional "hampir nol".
-        return "hampir 0%"
-    if v >= 0.99999:
-        return "100%"
-    return f"{v * 100:.2f}%".replace(".", ",")
-
-
-def format_duration(seconds: Any) -> str:
-    """Detik jadi kalimat pendek: 4.8 dtk / 90 dtk / 45 mnt / 3 jam."""
-    try:
-        s = float(seconds)
-    except (TypeError, ValueError):
-        return "-"
-    if math.isnan(s):
-        return "-"
-    if s < 60:
-        return f"{s:.1f} dtk".replace(".", ",")
-    if s < 3600:
-        return f"{s / 60:.0f} mnt"
-    if s < 86400:
-        return f"{s / 3600:.1f} jam".replace(".", ",")
-    return f"{s / 86400:.0f} hari"
-
-
-def format_timestamp(value: Any) -> str:
-    """ISO timestamp -> '05 Okt 2026, 14:15'."""
-    import pandas as pd
-
-    if value is None or (isinstance(value, float) and math.isnan(value)):
-        return "-"
-    text = str(value)
-    try:
-        stamp = pd.Timestamp(text)
-    except (ValueError, TypeError):
-        return text
-    if pd.isna(stamp):
-        return text
-    bulan = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
-             "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
-    return f"{stamp.day:02d} {bulan[stamp.month - 1]} {stamp.year}, {stamp:%H:%M}"
-
-
-def format_bool(value: Any) -> str:
-    """True/False -> Ya/Tidak/- supaya tabel tidak penuh checkbox."""
-    if value is None:
-        return "-"
-    if isinstance(value, float) and math.isnan(value):
-        return "-"
-    if isinstance(value, bool):
-        return "Ya" if value else "Tidak"
-    return str(value)
-
-
-def probability_verdict(prob: Any) -> str:
-    """Kesimpulan satu kalimat dari band peluang, untuk yang bukan analis data."""
-    try:
-        p = float(prob)
-    except (TypeError, ValueError):
-        return "Peluang tidak tersedia."
-    if math.isnan(p):
-        return "Peluang tidak tersedia."
-    if p >= 0.99:
-        return (
-            "Sistem menempatkan peluang di **tingkat sangat tinggi**. "
-            "Tapi periksa tabel field di bawah — kalau ada yang menolak, "
-            "angka ini bisa terlalu yakin."
-        )
-    if p >= 0.9:
-        return "Sistem cenderung yakin ini orang yang sama. Periksa field yang berbeda dulu."
-    if p >= 0.5:
-        return "Sistem cenderung yakin, tapi belum cukup untuk digabung sendiri."
-    if p >= 0.01:
-        return "Sistem tidak yakin. Ada beberapa yang cocok, tapi bukan semua."
-    if p > 0:
-        return (
-            "Sistem cenderung yakin ini **dua orang berbeda**. "
-            "Kalau ini keliru, biasanya karena satu field berubah saja "
-            "(misal nama ganti karena menikah)."
-        )
-    return "Peluang nol: tidak ada satu pun field yang cocok."
-
-
-def format_score(score: Any) -> str:
-    """Bukti bertanda +/- jadi kalimat, bukan angka murni."""
-    try:
-        w = float(score)
-    except (TypeError, ValueError):
-        return "tidak tersedia"
-    if math.isnan(w):
-        return "tidak tersedia"
-    if w >= 8:
-        return "sangat kuat mendukung"
-    if w >= 3:
-        return "cukup mendukung"
-    if w >= 1:
-        return "lembut mendukung"
-    if w >= -1:
-        return "tidak ada arah"
-    if w >= -3:
-        return "lembut menolak"
-    if w >= -8:
-        return "cukup menolak"
-    return "sangat kuat menolak"
+def format_score(weight: float | None) -> str:
+    """Format log-odds weight as human-readable string."""
+    if weight is None or weight == float("-inf"):
+        return "tidak ada data"
+    sign = "+" if weight > 0 else ""
+    return f"{sign}{weight:.1f} bit"
 
 
 def field_agreement(left: Any, right: Any) -> str:
-    """Status satu field: sama / mirip handled elsewhere / beda / ada yang kosong."""
-    if left is None or right is None:
-        return "tidak ada data"
-    ls = "" if _is_blank(left) else str(left)
-    rs = "" if _is_blank(right) else str(right)
-    if not ls and not rs:
-        return "tidak ada data"
-    if not ls or not rs:
-        return "hanya ada di salah satu"
-    if ls == rs:
-        return "sama persis"
-    return "berbeda"
+    """Describe how two field values compare."""
+    if _is_blank(left) and _is_blank(right):
+        return "keduanya kosong"
+    if _is_blank(left) or _is_blank(right):
+        return "salah satu kosong"
+    left_s = str(left).strip().lower()
+    right_s = str(right).strip().lower()
+    if left_s == right_s:
+        return "sama"
+    return "beda"
 
 
-def _is_blank(value: Any) -> bool:
-    try:
-        import pandas as pd
-
-        return bool(pd.isna(value))
-    except (TypeError, ValueError):
-        return False
+# -----------------------------------------------------------------------------
+# Evidence display
+# -----------------------------------------------------------------------------
 
 
-def similarity_text(level_label: Any, level_code: Any) -> str:
-    """Terjemahkan label tingkat model ke bahasa yang dipahami peninjau.
-
-    Level 0 adalah yang paling mirip; kode tertinggi berarti "tidak ada yang cocok".
-    """
-    if level_code is None or _is_blank(level_code):
-        return "tidak ada data di field ini"
-    text = str(level_label or "").lower()
-    if "all other" in text:
-        return "tidak ada yang cocok"
-    if "damerau" in text:
-        return "sangat mirip, beda 1 karakter saja (kemungkinan salah ketik)"
-    if "exact match on date of birth" in text or "exact match on dob" in text:
-        return "sama persis"
-    if "exact match on username" in text:
-        return "bagian sebelum @ sama, domain beda"
-    if "exact match" in text:
-        return "sama persis"
-    match = re.search(r">=\s*([\d.]+)", text)
-    if match:
-        pct = round(float(match.group(1)) * 100)
-        if pct >= 90:
-            return f"sangat mirip (sekitar {pct}% mirip)"
-        if pct >= 80:
-            return f"mirip (sekitar {pct}% mirip)"
-        return f"agak mirip (sekitar {pct}% mirip)"
-    month = re.search(r"<=\s*(\d+)\s*month", text)
-    if month:
-        return f"selisih paling lama {month.group(1)} bulan"
-    year = re.search(r"<=\s*(\d+)\s*year", text)
-    if year:
-        return f"selisih paling lama {year.group(1)} tahun"
-    return str(level_label) if level_label else "tidak dapat dijelaskan"
-
-
-def how_to_read() -> None:
-    """Penjelasan satu kali pakai, untuk orang yang belum pernah dengar probabilitas."""
-    with st.expander("Cara membaca halaman ini"):
-        st.markdown(
-            """
-Setiap pasangan record diberi satu **angka peluang dari 0% sampai 100%** yang
-menjawab satu pertanyaan: *"Kedua record ini orang yang sama atau bukan?"*
-
-- **Mendekati 100%** -> sistem sangat yakin ini orang yang sama
-- **Sekitar 50%** -> sistem tidak bisa memutuskan, silakan menilai sendiri
-- **Mendekati 0%** -> sistem yakin ini dua orang berbeda
-
-Aturan yang dipakai sistem:
-
-| Angka peluang | Yang dilakukan sistem |
-|---|---|
-| 90% ke atas | Digabung otomatis |
-| Di antara 0% dan 90% | Masuk antrean, menunggu keputusan Anda |
-| Mendekati 0% | Dianggap dua orang berbeda |
-
-Kalau ada yang terdengar tidak masuk akal, buka bagian **"Kenapa?"** di bawah
-tiap pasangan. Di situ tiap field dibandingkan satu per satu, jadi bisa dicek
-sendiri tanpa perlu percaya pada angka.
-"""
-        )
-
-
-# --- Tabel "Kenapa?", digunakan bersama oleh halaman pemeriksaan dan penjelasan -----
-
-def model_levels() -> dict[str, dict[int, tuple[str, float, float]]]:
-    """Tingkat kesamaan per field dari model aktif: {gamma_col: {kode: (label, m, u)}}.
-
-    Splink memberi kode level terbalik dari urutan di model.json: kode 0 adalah
-    level "All other comparisons" (paling tidak mirip), kode tertinggi adalah
-    exact match. Dipetakan di sini sekali saja supaya tidak ada halaman yang
-    salah baca arah.
-    """
-    from src import model_lifecycle
-
-    latest = model_lifecycle.latest()
-    if latest is None:
+def model_levels() -> dict:
+    """Load model comparison levels from settings."""
+    settings_path = OUTPUT_DIR / "settings.json"
+    if not settings_path.exists():
         return {}
-    settings = model_lifecycle.load_model_json(latest)
-    settings = settings.get("settings", settings)
+    import json
 
-    levels: dict[str, dict[int, tuple[str, float, float]]] = {}
-    for comp in settings.get("comparisons", []):
-        gamma_col = "gamma_" + comp.get("output_column_name", "")
-        entries = [
-            (
-                lvl,
-                (
-                    str(lvl.get("label_for_charts", f"level {i}")),
-                    float(lvl.get("m_probability", 0) or 0),
-                    float(lvl.get("u_probability", 0) or 0),
-                ),
-            )
-            for i, lvl in enumerate(comp.get("comparison_levels", []))
-        ]
-        ordered = [entry for lvl, entry in entries if not lvl.get("is_null_level")]
-        last = len(ordered) - 1
-        levels[gamma_col] = {last - i: entry for i, entry in enumerate(ordered)}
-        levels[gamma_col].update({-1: entry for lvl, entry in entries if lvl.get("is_null_level")})
-    return levels
+    with open(settings_path) as f:
+        settings = json.load(f)
+    return settings.get("comparison_levels", {})
+
+
+def decision_label(decision: str | None) -> str:
+    """Translate decision code to human-readable label."""
+    return {
+        "MATCH": "🟢 DIGABUNG",
+        "NON_MATCH": "🔴 BEDA",
+        "REVIEW": "🟡 PERLU DIPERIKSA",
+    }.get(decision or "", "❓ Tidak diketahui")
+
+
+def format_probability(prob: float | None) -> str:
+    """Format probability as percentage string."""
+    if prob is None:
+        return "-"
+    return f"{prob:.1%}"
+
+
+def format_rate(count: int, total: int) -> str:
+    """Format count/total as percentage."""
+    if total == 0:
+        return "0%"
+    return f"{count/total:.1%}"
+
+
+def probability_verdict(prob: float) -> str:
+    """Get human-readable verdict for probability."""
+    if prob >= 0.9:
+        return "Sistem sangat yakin: peluang di atas 90%, otomatis digabung."
+    if prob <= 0.1:
+        return "Sistem sangat yakin: peluang di bawah 10%, otomatis disimpan terpisah."
+    return "Sistem kurang yakin: peluang di antara 10%-90%, perlu pemeriksaan manusia."
+
+
+def verdict_plain(decision: str | None) -> str:
+    """Get plain text verdict without emoji."""
+    return {
+        "MATCH": "Otomatis digabung karena peluang tinggi.",
+        "NON_MATCH": "Otomatis disimpan terpisah karena peluang sangat rendah.",
+        "REVIEW": "Menunggu keputusan manusia.",
+    }.get(decision or "", "Tidak diketahui")
 
 
 def pair_evidence_frame(row: dict, levels: dict) -> "Any":
@@ -697,8 +280,8 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
     import pandas as pd
 
     rows = []
-    for field in FIELD_LABEL:
-        gamma_col = f"gamma_gamma_{field}"
+    for field in ("core_identity", *FIELD_LABEL):
+        gamma_col = f"gamma_{field}"
         code = row.get(gamma_col)
         code = None if code is None or _is_blank(code) else int(code)
         label, m, u = levels.get(gamma_col, {}).get(code, (None, 0.0, 0.0)) if code is not None else (None, 0.0, 0.0)
@@ -710,13 +293,17 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
             if code == -1
             else format_score(weight) if weight is not None else "tidak ada data"
         )
+        # Gamma description
+        gamma_desc = similarity_text(label, code)
+        
         rows.append(
             {
                 "informasi": field_label(field),
                 "record A": "tidak diisi" if _is_blank(left) else str(left),
                 "record B": "tidak diisi" if _is_blank(right) else str(right),
                 "perbandingan": field_agreement(left, right),
-                "seberapa mirip": similarity_text(label, code),
+                "gamma level": f"L{code}" if code is not None and code >= 0 else "-",
+                "seberapa mirip": gamma_desc,
                 "bukti": evidence,
                 "_bobot": weight if weight is not None else float("-inf"),
             }
@@ -802,60 +389,52 @@ def format_history_table(frame: Any) -> Any:
     Di sini kolomnya diterjemahkan, catatan teknis disatukan jadi satu kolom
     "Catatan", dan kolom Boolean ditulis Ya/Tidak.
     """
+    if frame.empty:
+        return frame
+
     import pandas as pd
 
-    if frame is None or (hasattr(frame, "empty") and frame.empty):
-        return frame if frame is not None else pd.DataFrame()
+    out = frame.copy()
 
-    df = frame.copy()
+    # Kolom baru
+    out["waktu"] = pd.to_datetime(out["timestamp"]).dt.strftime("%Y-%m-%d %H:%M")
+    out["catatan"] = out["_runtime_note"].apply(translate_note)
+    out["sukses"] = out["_success"].map({True: "Ya", False: "Tidak"})
 
-    # Satukan catatan teknis ke dalam satu kolom, bukan empat kolom terpisah.
-    notes = []
-    for col in ("_runtime_note", "_correction"):
-        if col in df.columns:
-            notes.append(df[col].fillna("").astype(str))
-    if notes:
-        df["Catatan"] = pd.concat(notes, axis=1).apply(
-            lambda row: " · ".join(part.strip() for part in row if part.strip()), axis=1
-        )
-        df["Catatan"] = df["Catatan"].map(translate_note).replace("", "-")
+    # Kolom yang tidak perlu
+    drop = {"timestamp", "_runtime_note", "_success", "_error"}
+    out = out.drop(columns=[c for c in drop if c in out.columns], errors="ignore")
 
-    rename = {
-        "timestamp": "Waktu",
-        "batch": "Paket data",
-        "rows": "Baris",
-        "new_records": "Record baru",
-        "new_entities": "Customer baru",
-        "entity_merges": "Digabung",
-        "affected_entities": "Tersentuh",
-        "match_edges": "Pasangan cocok",
-        "review_pairs_added": "Perlu diperiksa",
-        "runtime_seconds": "Durasi",
-        "applied_from_staging": "Dari antrean",
-        "_runtime_outlier": "Anomali waktu",
-    }
-    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+    # Urutan kolom
+    reorder = ["waktu", "batch", "step", "sukses", "catatan"]
+    existing = [c for c in reorder if c in out.columns]
+    others = [c for c in out.columns if c not in reorder]
+    return out[existing + others]
 
-    if "Waktu" in df.columns:
-        df["Waktu"] = df["Waktu"].map(format_timestamp)
-    if "Durasi" in df.columns:
-        df["Durasi"] = df["Durasi"].map(format_duration)
-    if "Anomali waktu" in df.columns:
-        df["Anomali waktu"] = df["Anomali waktu"].map(format_bool)
-    if "Dari antrean" in df.columns:
-        df["Dari antrean"] = df["Dari antrean"].map(format_bool)
 
-    # Kolom bantu sisanya dibuang: sudah masuk Catatan.
-    df = df.drop(columns=[c for c in df.columns if c.startswith("_")], errors="ignore")
+# def _lookup_label(gamma_field: str, code: int, levels: dict) -> str:
+#     """Ambil label dari comparison level."""
+#     if code < 0:
+#         return "tidak ada data"
+#     level = levels.get(gamma_field, {}).get(code)
+#     if level is None:
+#         return f"L{code}"
+#     return level[0] if isinstance(level, tuple) else str(level)
 
-    for col in ("Baris", "Record baru", "Customer baru", "Tersentuh", "Pasangan cocok"):
-        if col in df.columns:
-            df[col] = df[col].map(format_count)
-    if "Digabung" in df.columns:
-        df["Digabung"] = df["Digabung"].map(
-            lambda v: str(len(v)) if isinstance(v, list) else str(v)
-        )
-    if "Perlu diperiksa" in df.columns:
-        df["Perlu diperiksa"] = df["Perlu diperiksa"].map(format_count)
 
-    return df
+# def _gamma_badge(gamma_field: str, code: int, levels: dict) -> str:
+#     """Buat badge untuk gamma level."""
+#     if code < 0:
+#         return "❌"
+#     label = _lookup_label(gamma_field, code, levels)
+#     if label in ("exact", "persis sama"):
+#         return "✅"  # exact match
+#     if label in ("fuzzy", "hampir sama"):
+#         return "🔶"  # close match
+#     if label in ("phonetic", "sama fonetik"):
+#         return "🔤"  # phonetic
+#     if label in ("different", "beda"):
+#         return "❌"  # different
+#     if label in ("null", "salah satu kosong"):
+#         return "⚪"  # null
+#     return f"L{code}"

@@ -163,13 +163,15 @@ def main() -> None:
     parser.add_argument("--rows", type=int, default=2000, help="Number of rows to generate.")
     parser.add_argument("--out", default="data/synthetic/crm.duckdb", help="Output .duckdb path.")
     parser.add_argument("--table", default="crm_customers", help="Table name.")
+    parser.add_argument("--dup-every", type=int, default=50, help="Every N-th row is an exact copy of the previous one.")
+    parser.add_argument("--near-dup-every", type=int, default=75, help="Every N-th row is a typo variant of the previous one.")
     args = parser.parse_args()
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Generating {args.rows:,} synthetic rows...")
-    rows = build_rows(args.rows)
+    rows = build_rows(args.rows, dup_every=args.dup_every, near_dup_every=args.near_dup_every)
     df = pd.DataFrame(rows)
 
     # Verify column contract against the pipeline's COLUMN_MAP

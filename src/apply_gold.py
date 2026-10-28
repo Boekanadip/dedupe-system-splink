@@ -1,31 +1,3 @@
-"""Terapkan label acuan dari peninjau pada kolom keputusan (FR-09: label -> hasil akhir).
-
-Pipeline standalone hanya memutuskan dari threshold. Setelah manusia promote
-label ke gold, pasangan REVIEW yang ditandai match tidak pernah masuk entity —
-modul ini menutup jalur itu:
-
-  gold match    + decision != MATCH     -> MATCH     (persetujuan manusia)
-  gold no_match + decision == REVIEW    -> NON_MATCH (manusia menutup kasus)
-  gold no_match + decision == MATCH     -> TIDAK diturunkan otomatis: itu
-      berarti manusia menolak keputusan di atas threshold, yang akan melanggar
-      invariant smoke test (P >= threshold => MATCH). Dilaporkan sebagai
-      konflik model-manusia untuk retrain / peninjauan threshold.
-
-Guard per pasangan (override manusia DITOLAK, bukan dipaksa):
-  * device conflict — kedua sisi punya device id DAN beda. Menambah pasangan
-    ini ke satu entity membuat entity mencampur dua device id (jawaban kunci
-    dataset ini) dan smoke test gagal. Pasangan seperti ini dilaporkan.
-  * Tidak ada hal lain yang diubah tanpa pemberitahuan: kolom
-    match_probability TIDAK disentuh.
-
-Setiap penerapan dicatat ke outputs/human_overrides.jsonl (pair, keputusan
-lama, label, waktu, model_version) — audit trail untuk halaman riwayat.
-
-Run:
-    python -m src.apply_gold                 # dry-run (cetak rencana)
-    python -m src.apply_gold --apply         # tulis keputusan
-    python -m src.apply_gold --apply --recluster   # lalu clustering+master+evaluate
-"""
 from __future__ import annotations
 
 import argparse
@@ -62,7 +34,7 @@ def device_sets(records: pd.DataFrame) -> dict[str, frozenset]:
 
 
 def plan() -> pd.DataFrame:
-    """Satu baris per pasangan acuan yang akan berubah, beserta hasil pemeriksaan pengamannya."""
+    
     labels, src = load_labels()
     if labels is None or src != "gold":
         raise SystemExit("No gold labels. Promote first: python -m src.labels --promote")

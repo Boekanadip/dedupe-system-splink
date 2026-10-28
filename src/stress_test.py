@@ -1,25 +1,3 @@
-"""Ukur pemulihan duplikat yang sengaja dirusak.
-
-ALASAN
-Pada berkas bersih, setiap kelompok duplikat memiliki email, telepon, tanggal
-lahir, alamat, dan device id yang sama. Karena itu, probabilitas kecocokan
-terbagi menjadi dua nilai ekstrem (1.0 atau 1e-300), rentang REVIEW kosong, dan
-recall berdasarkan device mencapai 100%. Ini merupakan sifat data, bukan bukti
-bahwa linker mampu menangani kerusakan. README menjelaskan hal tersebut; modul
-ini menghasilkan pengukuran yang belum tersedia.
-
-FUNGSI
-Ambil pasangan dengan device id sama, rusak SATU sisi pada setiap pasangan
-menggunakan jenis kesalahan yang terdokumentasi, jalankan ulang model produksi
-tanpa perubahan, lalu laporkan jumlah salinan rusak yang masih tertaut ke
-pasangan asalnya serta jumlah pasangan yang masuk rentang review, alih-alih
-memperoleh keputusan keliru dengan keyakinan tinggi.
-
-BATASAN
-Kerusakan dibuat secara sintetis dan hanya berada di memori — tidak ada berkas
-dataset yang dibuat atau diubah. Angka ini menggambarkan model pada catatan yang
-sengaja dirusak, bukan pada data kotor milik klien.
-"""
 
 from __future__ import annotations
 
@@ -36,13 +14,8 @@ from .splink_model import train_and_predict
 
 STRESS_PATH = OUTPUT_DIR / "stress_test.json"
 
-# 9xxxxx menempatkan baris rusak setelah semua record_id nyata, sehingga nomor
-# entity untuk catatan yang tidak diubah tetap sama.
-CORRUPTED_PREFIX = "rec_9"
 
-# Baris yang dirusak tidak boleh menggabungkan dua duplikat nyata satu sama lain.
-# Device id asli tetap dipakai, sehingga baris hanya dapat bergabung dengan
-# kelompok asal salinannya.
+CORRUPTED_PREFIX = "rec_9"
 CORRUPT_FIELDS = [
     "first_name_std",
     "last_name_std",
@@ -100,16 +73,6 @@ def _corrupt_value(rng: random.Random, value: str, kind: str) -> str:
         return f"{year:04d}-{day:02d}-{month:02d}"
     return text
 
-
-# Rusak salah satu sisi pada kolom identitas dengan peluang masing-masing.
-# Merusak satu kolom saja tidak memberi informasi: pada berkas bersih, kolom
-# city/address/state tetap cocok persis dan semua salinan kembali dengan p=1,0
-# tanpa pasangan dalam rentang pemeriksaan. Kasus yang informatif adalah
-# duplikat yang berbeda pada BEBERAPA kolom sekaligus, sehingga pemulihan
-# dilaporkan berdasarkan jumlah kolom yang dirusak.
-#
-# dob tidak selalu dirusak: ini sinyal terkuat yang tersisa. Jika selalu utuh,
-# pengujian tidak mungkin gagal.
 FIELD_OPS: list[tuple[str, list[str], float]] = [
     ("last_name_std", ["double_letter", "drop_letter", "swap_letters"], 1.0),
     ("first_name_std", ["uppercase", "drop_letter"], 1.0),
@@ -135,9 +98,7 @@ def corrupt(df: pd.DataFrame, n_pairs: int, seed: int) -> tuple[pd.DataFrame, pd
     manifest = []
 
     for i, (left, right) in enumerate(zip(take["record_id_l"], take["record_id_r"]), start=1):
-        # Rusak sisi kanan saja; sisi kiri tetap bersih. Dengan begitu, pemulihan
-        # berarti "tetap terhubung ke catatan yang tidak diubah", bukan "terhubung
-        # ke salah ketik lain".
+    
         original = right
         row = by_id.loc[original].copy()
         record_id = f"{CORRUPTED_PREFIX}{i:05d}"
@@ -187,10 +148,6 @@ def main() -> None:
     n = len(frame)
     print(f"Clean rows: {len(df):,} | corrupted copies: {len(manifest)} | modelling rows: {n:,}")
     print("Corruption is synthetic and in memory only; no dataset file is written.")
-
-    # Kerangka data yang dirusak sengaja mendapat model terlatih sendiri: baris
-    # rusak merupakan observasi tambahan. Memakai ulang model produksi hanya
-    # mengukur kemampuan model yang dilatih tanpa kerusakan dalam menghadapinya.
     pred_df, _ = train_and_predict(frame)
 
     key = ["record_id_l", "record_id_r"]
@@ -202,8 +159,6 @@ def main() -> None:
     wanted["record_id_r"] = hi
 
     joined = wanted.merge(pred_df[[*key, "match_probability", "match_weight"]], on=key, how="left")
-    # Pasangan yang tidak pernah dihasilkan oleh aturan blocking bukan berskor
-    # rendah; pasangan itu sama sekali tidak memiliki skor.
     joined["scored"] = joined["match_probability"].notna()
     joined["recovered"] = joined["match_probability"] >= args.threshold
 

@@ -1,15 +1,10 @@
 # %% [markdown]
 # # 01 — Profiling Data
-# Jalankan berkas ini sebagai notebook Jupyter di VS Code.
-# Perbarui `src/config.py` terlebih dahulu jika nama kolom CSV berbeda.
 
 # %%
 import pathlib
 import sys
 
-# Temukan folder utama proyek dari lokasi berkas ini agar tetap berfungsi dari
-# direktori kerja mana pun. sys.path.append(os.path.abspath('..')) bergantung
-# pada direktori kerja saat ini.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import pandas as pd
@@ -77,4 +72,3 @@ for c in cols_to_inspect:
 
 # %% [markdown]
 # Langkah berikutnya: buat standardisasi konservatif dan fitur pencocokan.
-# Jangan latih Splink terlebih dahulu.
