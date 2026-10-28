@@ -4,9 +4,9 @@
 
 Sistem **CRM Entity Resolution & Deduplication** untuk mendeteksi, mengevaluasi, dan mengelola duplikasi data pelanggan menggunakan pendekatan *probabilistic record linkage*.
 
-Pipeline utama:
+Secara garis besar:
 
-<img width="1720" height="3660" alt="Image" src="https://github.com/user-attachments/assets/e1488efd-203f-44c1-a865-bfc1082ee8a9" />
+<img width="576" height="274" alt="Image" src="https://github.com/user-attachments/assets/d2e68744-cc55-4b2a-8e71-8785df8c22dd" />
 
 ---
 
