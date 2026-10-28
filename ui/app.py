@@ -1,144 +1,186 @@
-"""Flask dashboard for CRM entity resolution."""
-from flask import Flask, render_template, jsonify, request
-from pathlib import Path
+"""Streamlit dashboard for CRM entity resolution."""
+import os
+import streamlit as st
+import requests
 import pandas as pd
+from pathlib import Path
 
-app = Flask(__name__)
+# Configuration
+API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
 # Paths
 PROJECT_DIR = Path(__file__).parent.parent
 PREDICTIONS_PATH = PROJECT_DIR / "outputs" / "splink_predictions.parquet"
 
-# Load predictions
+st.set_page_config(page_title="CRM Entity Resolution Dashboard", layout="wide")
+
+# Load local predictions if available
 _predictions_df = None
 
-def get_predictions():
+def get_local_predictions():
     global _predictions_df
     if _predictions_df is None and PREDICTIONS_PATH.exists():
         _predictions_df = pd.read_parquet(PREDICTIONS_PATH)
     return _predictions_df
 
-@app.route('/')
-def index():
-    """Main dashboard page."""
-    return render_template('index.html')
 
-@app.route('/api/stats')
-def stats():
-    """Get statistics."""
-    df = get_predictions()
-    if df is None:
-        return jsonify({'error': 'No predictions found'})
+def fetch_api_data(endpoint):
+    """Fetch data from FastAPI."""
+    try:
+        response = requests.get(f"{API_URL}{endpoint}", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return None
+
+
+st.title("CRM Entity Resolution Dashboard")
+
+# Sidebar
+st.sidebar.header("Navigation")
+page = st.sidebar.radio("Page", ["Overview", "Review Queue", "Pair Explorer", "Model Info"])
+
+# Overview Page
+if page == "Overview":
+    st.header("Overview")
     
-    return jsonify({
-        'total_pairs': len(df),
-        'matches': int(len(df[df['decision'] == 'MATCH'])),
-        'review': int(len(df[df['decision'] == 'REVIEW'])),
-        'non_matches': int(len(df[df['decision'] == 'NON_MATCH'])),
-        'avg_probability': float(df['match_probability'].mean()),
+    col1, col2, col3 = st.columns(3)
+    
+    # Stats from API or local
+    api_stats = fetch_api_data("/api/stats")
+    
+    if api_stats:
+        total = api_stats.get("total_pairs", 0)
+        matches = api_stats.get("matches", 0)
+        review = api_stats.get("review", 0)
+        non_matches = api_stats.get("non_matches", 0)
+    else:
+        df = get_local_predictions()
+        if df is not None:
+            total = len(df)
+            matches = len(df[df["decision"] == "MATCH"])
+            review = len(df[df["decision"] == "REVIEW"])
+            non_matches = len(df[df["decision"] == "NON_MATCH"])
+        else:
+            total = matches = review = non_matches = 0
+    
+    with col1:
+        st.metric("Total Pairs", total)
+    with col2:
+        st.metric("Matches", matches, delta_color="normal")
+    with col3:
+        st.metric("Review Required", review, delta_color="inverse")
+    
+    st.metric("Non-Matches (Auto-Rejected)", non_matches)
+    
+    # Probability distribution
+    st.subheader("Match Probability Distribution")
+    
+    df = get_local_predictions()
+    if df is not None:
+        prob = df["match_probability"]
+        
+        # Create histogram data
+        import plotly.express as px
+        fig = px.histogram(
+            df,
+            x="match_probability",
+            nbins=50,
+            title="Match Probability Distribution",
+            labels={"match_probability": "Probability", "count": "Count"}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Decision summary
+        st.subheader("Decision Summary")
+        decision_counts = df["decision"].value_counts()
+        st.bar_chart(decision_counts)
+
+# Review Queue Page
+elif page == "Review Queue":
+    st.header("Review Queue")
+    
+    api_pairs = fetch_api_data("/api/pairs?status=REVIEW&page=1&per_page=50")
+    
+    if api_pairs and "pairs" in api_pairs:
+        pairs = api_pairs["pairs"]
+        st.write(f"Found {len(pairs)} pairs for review")
+        
+        for i, pair in enumerate(pairs[:10]):
+            with st.expander(f"Pair {i+1}: {pair['record_id_l']} ↔ {pair['record_id_r']} (Prob: {pair['match_probability']:.3f})"):
+                st.info(f"Probability: {pair['match_probability']:.4f}")
+                st.info(f"Decision: {pair['decision']}")
+    
+    else:
+        st.warning("No REVIEW pairs found or API not accessible")
+
+# Pair Explorer Page
+elif page == "Pair Explorer":
+    st.header("Pair Explorer")
+    
+    search_id = st.text_input("Search Record ID")
+    
+    if search_id:
+        api_result = fetch_api_data(f"/api/search?q={search_id}")
+        
+        if api_result and "results" in api_result:
+            results = api_result["results"]
+            st.write(f"Found {len(results)} results")
+            
+            for pair in results[:10]:
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    st.metric("Prob", f"{pair['match_probability']:.4f}")
+                with col2:
+                    st.write(f"{pair['record_id_l']} ↔ {pair['record_id_r']}")
+                    stbadge = "✅ MATCH" if pair['decision'] == "MATCH" else ("⚠️ REVIEW" if pair['decision'] == "REVIEW" else "❌ NON_MATCH")
+                    st.write(f"Status: {stbadge}")
+    
+    else:
+        st.info("Enter a record ID to search")
+
+# Model Info Page
+elif page == "Model Info":
+    st.header("Model Information")
+    
+    st.subheader("Current Model Version")
+    st.code("v20261027_161903", language="text")
+    
+    st.subheader("Threshold Configuration")
+    st.json({
+        "auto_match": "> 0.95",
+        "auto_non_match": "< 0.01",
+        "review": "0.01 - 0.95"
     })
-
-@app.route('/api/pairs')
-def pairs():
-    """Get pairs with pagination."""
-    df = get_predictions()
-    if df is None:
-        return jsonify({'error': 'No predictions found'})
     
-    status = request.args.get('status')
-    if status:
-        df = df[df['decision'] == status.upper()]
-    
-    page = int(request.args.get('page', 1))
-    per_page = int(request.args.get('per_page', 50))
-    start = (page - 1) * per_page
-    end = start + per_page
-    
-    df_page = df.iloc[start:end]
-    
-    # Include gamma columns for evidence
-    result = []
-    for _, row in df_page.iterrows():
-        result.append({
-            'record_id_l': row['record_id_l'],
-            'record_id_r': row['record_id_r'],
-            'match_probability': float(row['match_probability']),
-            'decision': row['decision'],
-            'gamma_name': int(row.get('gamma_name', -1)) if pd.notna(row.get('gamma_name')) else -1,
-            'gamma_contact': int(row.get('gamma_contact', -1)) if pd.notna(row.get('gamma_contact')) else -1,
-            'gamma_location': int(row.get('gamma_location', -1)) if pd.notna(row.get('gamma_location')) else -1,
-            'gamma_dob': int(row.get('gamma_dob', -1)) if pd.notna(row.get('gamma_dob')) else -1,
-        })
-    
-    return jsonify({
-        'pairs': result,
-        'total': len(df),
-        'page': page,
-        'per_page': per_page
+    st.subheader("Evaluation Results (Threshold 0.86)")
+    st.json({
+        "Recall": "0.9886",
+        "Precision": "0.9263",
+        "F1 Score": "0.9564"
     })
+    
+    st.subheader("Blocking Rules")
+    rules = [
+        "first_name + last_name + email",
+        "first_name + last_name + phone",
+        "first_name + last_name + city + state",
+        "email_domain + city + state + dob",
+        "phone_last4 + city + state + dob",
+        "first_name + last_name + city",
+        "first_name + email + phone",
+        "last_name + email + phone",
+        "email + phone + city",
+        "first_name + last_name + dob",
+        "email_domain + phone_last4",
+        "city + state + dob",
+        "phone_last4 + dob",
+        "first_name + last_name + email_domain"
+    ]
+    st.write(f"Total: {len(rules)} rules")
+    for i, rule in enumerate(rules[:5]):
+        st.code(f"{i+1}. {rule}", language="text")
 
-@app.route('/api/pair/<id1>/<id2>')
-def pair_detail(id1, id2):
-    """Get detail for specific pair."""
-    df = get_predictions()
-    if df is None:
-        return jsonify({'error': 'No predictions found'})
-    
-    mask = (
-        (df['record_id_l'] == id1) & (df['record_id_r'] == id2) |
-        (df['record_id_l'] == id2) & (df['record_id_r'] == id1)
-    )
-    row = df[mask]
-    if row.empty:
-        return jsonify({'error': 'Pair not found'}), 404
-    
-    row = row.iloc[0]
-    
-    # Build full evidence with gamma levels
-    evidence = {}
-    for field in ['first_name', 'last_name', 'email', 'phone', 'dob', 'address', 'city', 'state', 'country']:
-        gamma_col = f'gamma_{field}'
-        std_l = f'{field}_std_l'
-        std_r = f'{field}_std_r'
-        evidence[field] = {
-            'value_l': str(row.get(std_l, '')) if pd.notna(row.get(std_l)) else None,
-            'value_r': str(row.get(std_r, '')) if pd.notna(row.get(std_r)) else None,
-            'gamma': int(row.get(gamma_col, -1)) if pd.notna(row.get(gamma_col)) else -1,
-        }
-    
-    return jsonify({
-        'record_id_l': row['record_id_l'],
-        'record_id_r': row['record_id_r'],
-        'match_probability': float(row['match_probability']),
-        'decision': row['decision'],
-        'evidence': evidence,
-    })
-
-@app.route('/api/search')
-def search():
-    """Search customer by ID."""
-    df = get_predictions()
-    if df is None:
-        return jsonify({'error': 'No predictions found'})
-    
-    query = request.args.get('q', '')
-    if not query:
-        return jsonify({'results': []})
-    
-    mask = (df['record_id_l'].str.contains(query, na=False)) | (df['record_id_r'].str.contains(query, na=False))
-    results = df[mask].head(20)
-    
-    return jsonify({
-        'results': [
-            {
-                'record_id_l': row['record_id_l'],
-                'record_id_r': row['record_id_r'],
-                'match_probability': float(row['match_probability']),
-                'decision': row['decision']
-            }
-            for _, row in results.iterrows()
-        ]
-    })
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+st.sidebar.markdown("---")
+st.sidebar.info("CRM Entity Resolution System v1.0")

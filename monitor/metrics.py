@@ -1,11 +1,21 @@
 """Monitoring and alerting metrics for CRM entity resolution."""
 import json
-from datetime import datetime, timedelta
+import os
+import requests
+from datetime import datetime
 from pathlib import Path
+
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Load .env file
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 from src.db import get_connection
 
 METRICS_FILE = Path("outputs/metrics.json")
+API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
 
 def get_db_stats():
@@ -83,10 +93,29 @@ def check_alerts(stats):
     return alerts
 
 
+def send_alert(alerts):
+    """Send alerts to monitoring system (Slack, Email, etc.)."""
+    for alert in alerts:
+        severity = alert.get("severity", "info")
+        message = alert.get("message", "")
+        
+        # Log to console
+        print(f"[{severity.upper()}] {message}")
+        
+        # TODO: Add Slack/Email integration
+        # if severity == "critical":
+        #     slack_webhook = os.environ.get("SLACK_WEBHOOK")
+        #     if slack_webhook:
+        #         requests.post(slack_webhook, json={"text": message})
+
+
 def collect_metrics():
     """Collect and save metrics."""
     stats = get_db_stats()
     alerts = check_alerts(stats)
+    
+    # Send alerts
+    send_alert(alerts)
     
     metrics = {
         "timestamp": datetime.utcnow().isoformat(),

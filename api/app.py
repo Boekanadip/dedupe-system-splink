@@ -83,6 +83,17 @@ def pair_detail(id1: str, id2: str):
         "decision": row["decision"]
     })
 
+@app.get("/health")
+def health():
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "timestamp": pd.Timestamp.utcnow().isoformat(),
+        "predictions_loaded": _predictions_df is not None,
+        "predictions_count": len(_predictions_df) if _predictions_df is not None else 0
+    }
+
+
 @app.get("/api/search")
 def search(q: str = Query("", min_length=1)):
     """Search record by ID."""

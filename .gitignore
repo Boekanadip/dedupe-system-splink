@@ -1,94 +1,37 @@
-# gitignore untuk CRM Entity Resolution System
-# Generated untuk Windows + Python + PostgreSQL
-
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual Environment
+.venv/
 venv/
-.env/
-.env.*
-!env/.gitkeep
-!venv/.gitkeep
 
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
-*.swo
-*~
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment/credentials (SENSITIVE)
+# Project specific
+outputs/*.parquet
+outputs/*.tmp
+outputs/.pipeline_running
+*.log
 .env
-.env.local
-.env.*.local
-secrets.env
-credentials.json
-*.pem
-*.key
-*.crt
+
+# Testing
+.pytest_cache/
+.coverage
 
 # Jupyter
 .ipynb_checkpoints/
-*.ipynb
 
-# Temporary files
-*.tmp
-*.bak
-body.json
-blocking_output.txt
-threshold_output.txt
-pytest_out.txt
-*.log
-
-# Data - raw CSVs (private)
-data/*.csv
-data/raw/*.csv
-data/processed/*.csv
-data/synthetic/*.csv
-data/demo/*.csv
-!data/.gitkeep
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-!data/labels/.gitkeep
-
-# Outputs - large files (reproducible, don't commit)
-outputs/*.parquet
-outputs/*.json
-outputs/*.md
-outputs/*.csv
-outputs/metrics.json
-outputs/*.html
-!outputs/.gitkeep
-
-# Models - binary artifacts
-models/*.pkl
-models/*.bin
-models/*.sav
-models/*.joblib
-models/v20261027_161903/model.json
-!models/.gitkeep
-!models/latest.json
-
-# Docker
-Dockerfile
-docker-compose.yml
-.dockerignore
-
-# Streamlit
-.streamlit/secrets.toml
-
-# Build artifacts
-dist/
-build/
-*.egg-info/
+# Environment variables
+.env
+.env.local
