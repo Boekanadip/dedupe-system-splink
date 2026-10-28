@@ -26,6 +26,7 @@ python -m venv .venv
 .venv\Scripts\activate
 # Linux / macOS:
 source .venv/bin/activate
+
 4. **Install dependensi**  
 pip install -r requirements.txt
 pip install -r requirements-dev.txt   # untuk pengembangan & testing
