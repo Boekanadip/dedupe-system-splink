@@ -220,8 +220,9 @@ def model_info():
     return JSONResponse({
         "model_version": model_data.get("model_version"),
         "trained_at": model_data.get("trained_at"),
-        "threshold_match": model_data.get("threshold_match", 0.95),
-        "threshold_non_match": model_data.get("threshold_non_match", 0.01),
+        "threshold_match": model_data.get("threshold_match", 0.84),
+        "threshold_review": model_data.get("threshold_review", 0.35),
+        "threshold_non_match": model_data.get("threshold_non_match", 0.35),
         "status": "loaded"
     })
 

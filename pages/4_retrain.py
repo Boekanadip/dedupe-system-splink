@@ -568,7 +568,7 @@ if preds_path.exists() and silver_path.exists():
             "dan semakin banyak yang menunggu Anda periksa."
         )
         model_dir = MODELS_DIR / cur if cur else None
-        cur_match, cur_review = 0.9, 1e-10
+        cur_match, cur_review = 0.84, 0.35
         if model_dir and (model_dir / "thresholds.json").exists():
             tfile = json.loads((model_dir / "thresholds.json").read_text(encoding="utf-8"))
             cur_match = tfile.get("match_threshold", cur_match)

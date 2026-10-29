@@ -147,8 +147,8 @@ review_queue     681   (386 sudah diperiksa, 295 pending)
 
 | Jalur | Mekanisme | Jumlah |
 |---|---|---|
-| Pita biasa | `1e-8 ≤ P < 0.9` | ~4.570 |
-| Override aturan 1 | `P ≥ 0.9` tapi email+nama+alamat identik & dob beda/kosong → dipaksa REVIEW | 15 |
+| Pita biasa | `0.35 ≤ P < 0.84` | ~14 (pada gold berskor) |
+| Override aturan 1 | `P ≥ 0.84` tapi email+nama+alamat identik & dob beda/kosong → dipaksa REVIEW | 15 |
 | Kebalikannya | 0 field identitas cocok → dipaksa NON_MATCH walau `P > 1e-8` | 112 |
 
 Distribusi skor di REVIEW:
@@ -167,10 +167,11 @@ Antrian sudah diurutkan benar (`labels.py:324`):
 `sort_values(["agree_count","match_probability"], descending)` — jadi 15 kasus
 berbahaya (banyak field cocok) muncul paling atas.
 
-**Ide yang BELUM dievaluasi:** menaikkan `REVIEW_THRESHOLD` dari `1e-8` ke
-`1e-6` akan membuang ~4.075 noise. TAPI smoke test mencatat
-`lowest gold positive 1.555e-08` — artinya `1e-6` **akan** membuang gold
-positive. Jangan naikkan tanpa eksperimen di gold set.
+**Ide yang SUDAH dievaluasi (per 2026-10-29):** `REVIEW_THRESHOLD` kini
+`0.35`, bukan `1e-8`. Gold positif terendah berskor `1.12e-10` (2 pasangan di
+stratum `unlabelled_same_email`) tetap di bawah `0.35` → masih 2 FN. Angka FN ini
+identik dengan threshold `0.5`–`0.95`, jadi menaikkan floor tidak menambah FN
+baru pada gold; yang berubah hanya distribusi pita REVIEW.
 
 ### 4.3 Enam temuan inspeksi — status
 
@@ -180,7 +181,7 @@ positive. Jangan naikkan tanpa eksperimen di gold set.
 | 2 | `BENCHMARK_RULES` hardcoded → `SystemExit` kalau `dob` hilang → multi-client gagal | Sedang (PoC aman) | Belum |
 | 3 | `m_else_level_floor` per-kolom belum ada baseline eksperimen (config sendiri menulis "ASSUMPTION") | Tinggi — false negative diam-diam | Belum |
 | 4 | `corruption_score` cacat utk kolom tanggal | Sedang | ✅ **Sudah diperbaiki hari ini** |
-| 5 | `REVIEW_THRESHOLD 1e-8` → 4.585 pasangan | Tinggi | Belum — lihat §4.2 |
+| 5 | `REVIEW_THRESHOLD 0.35` → pita REVIEW ~14 pada gold (sebelumnya `1e-8` → 4.585) | Tinggi | ✅ **Sudah dievaluasi** — lihat §4.2 |
 | 6 | TF dihitung pada subset, bukan corpus penuh | Rendah (sudah diukur: 12/1.172) | Belum — kaitkan dengan §2 P2 |
 
 **Catatan soal #1:** `batch_eval.py:72` sudah mengukur

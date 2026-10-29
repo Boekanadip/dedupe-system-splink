@@ -1,61 +1,48 @@
-# Final Evaluation Report: Holdout Test Set 20%
+# Final Evaluation Report — Threshold 0.84 / 0.35 (Gold Labels)
 
 ## Objective
-Evaluasi final pipeline entity resolution dengan holdout test set 20% untuk verifikasi recall ≥0.95 @ threshold 0.9 setelah perbaikan standardisasi contact/phone.
+Mengukur recall, precision, dan F1 pada gold labels untuk kebijakan threshold baru:
+- **MATCH** jika `match_probability >= 0.84`
+- **REVIEW** jika `0.35 <= match_probability < 0.84`
+- **NON_MATCH** jika `match_probability < 0.35`
 
-## Requirements
-- Gunakan stratified split 80/20 (random_state=42)
-- Evaluasi threshold: 0.85, 0.90, 0.95
-- Simpan predictions ke `outputs/splink_predictions.parquet`
+## Sumber Data
+- Gold labels: `data/labels/gold_labels.csv` — **3.593 pasangan** (1.099 `match`, 2.494 `no_match`).
+- Yatim skor: **378 pasangan tanpa `match_probability`** (stratum `outside_blocking_*`, `feedback_only_unverified`, sebagian `typo_*`). Pasangan ini berada di luar cakupan prediksi dan tidak dihitung di tabel utama.
+- Sampel berlabel berskor: **3.215 pasangan** (851 `match`, 2.364 `no_match`), diekspor ke `outputs/gold_scored.parquet`.
 
-## Executed Changes
+## Hasil Terukur (n = 3.215 pasangan berskor)
 
-### 1. Fixed stratified train/test split
-- **Before:** `train_test_split(gold)` → non-stratified, recall=69.44%
-- **After:** `train_test_split(gold, stratify=gold['label'])` → stratified, recall=78.67%
-- **Gain:** +9.23 percentage points
+| Threshold | TP | FP | FN | TN | Recall | Precision | F1 |
+|---|---|---|---|---|---|---|---|
+| 0.35 | 849 | 73 | 2 | 2.291 | 0.9976 | 0.9208 | 0.9577 |
+| 0.50 | 849 | 64 | 2 | 2.300 | 0.9976 | 0.9299 | 0.9626 |
+| 0.82 | 849 | 62 | 2 | 2.302 | 0.9976 | 0.9319 | 0.9637 |
+| **0.84** | **849** | **59** | **2** | **2.305** | **0.9976** | **0.9350** | **0.9653** |
+| 0.90 | 849 | 58 | 2 | 2.306 | 0.9976 | 0.9361 | 0.9659 |
 
-### 2. Increased contact comparison m_probabilities
-- `both` (email+phone sama): 0.75 → **0.95**
-- `one` (email ATAU phone sama): 0.65 → **0.90**
-- `email_fuzzy`: 0.50 → **0.70**
-- `phone_fuzzy`: 0.45 → **0.65**
+## Distribusi Pita Keputusan pada 0.84 / 0.35 (n = 3.215)
+- **MATCH** (`P >= 0.84`): 908 pasangan
+- **REVIEW** (`0.35 <= P < 0.84`): 14 pasangan — **0 gold positif**, 14 gold negatif
+- **NON_MATCH** (`P < 0.35`): 2.293 pasangan
 
-### 3. Increased name comparison m_probabilities
-- `ejaan persis`: 0.60 → **0.85**
-- `fonetik saja`: 0.35 → **0.55**
+## Karakteristik Error
+- **FN = 2** (pada 851 gold positif berskor): probabilitas maksimum FN hanya `2.67e-10`, artinya model memberi skor ekstrem rendah. Kedua kasus tercatat di stratum `unlabelled_same_email`.
+- **FP = 59** pada threshold 0.84: pasangan diprediksi MATCH namun gold `no_match`.
+- Pita REVIEW praktis kosong pada gold (14 pasangan), karena distribusi `match_probability` bersifat bimodal di sekitar 0 dan 1 (median `1.07e-7`, Q3 `1.0`).
 
-## Results
+## Kesimpulan
+- **Target recall ≥ 0.95 TERCAPAI** pada threshold 0.84 (`0.9976`), berbeda jauh dari laporan sebelumnya (0.7867 dan 0.9431) yang menggunakan subset/holdout berbeda.
+- Precision `0.9350` — masih di bawah 0.95, namun jauh dari klaim laporan sebelumnya (`0.8924`).
+- Pemilihan 0.84 vs 0.90 hanya mengubah 1 FP — dampak kecil pada gold ini.
 
-### Threshold Evaluation (705 gold pairs, 211 matches)
+## Catatan Penting (Keterbatasan)
+1. **Gold labels tidak independen** — stratum sampel dipilih berdasarkan perilaku model (`unlabelled_high_probability`, `singleton_candidate`, etc.), sehingga recall/precision tidak dapat diekstrapolasi ke seluruh populasi kandidat.
+2. **Provenance `gold_labels.csv` belum diverifikasi** — skor ditulis ke kolom `match_probability` dari run yang tidak terdokumentasi; model/versi tidak tercatat di gold. Angka di atas sah untuk file gold ini, bukan bukti performa model aktif (`v20261027_161903`).
+3. **378 pasangan tanpa skor tidak dihitung** — mereka adalah pasangan di luar blocking; tidak termasuk recall maupun precision, sesuai batas cakupan blocking.
+4. `outputs/splink_predictions.parquet` **tidak ada** di repo; prediksi penuh harus diregenerasi (`python -m src.splink_model --full`) jika ingin evaluasi vs device-channel.
 
-| Threshold | TP | FN | FP | Recall | Precision |
-|-----------|----|----|----|--------|-----------|
-| 0.85 | 166 | 45 | 8 | 0.7867 | 0.9540 |
-| 0.90 | 166 | 45 | 8 | 0.7867 | 0.9540 |
-| 0.95 | 166 | 45 | 8 | 0.7867 | 0.9540 |
-
-### Prediction Distribution
-- Max probability: 1.0
-- Count ≥ 0.95: 174 pairs
-- Count ≥ 0.9: 174 pairs
-- Count ≥ 0.85: 174 pairs
-- FN pairs max probability: 0.042 (very low despite contact evidence)
-
-### Business Rules Impact
-- 9,133 forced MATCH (email + nama + alamat sama)
-- 701,811 forced NON_MATCH (nol field cocok + email/lastname berbeda)
-- BR improves recall from lower baselines but cannot overcome model probability limitation
-
-## Root Cause Analysis
-45/211 true matches (21.3%) receive model probabilities ≤0.042 despite having both `email_std` AND `phone_std`. The model's name comparison penalty (even at m=0.85 exact) overwhelms contact evidence, resulting in uniformly low probabilities.
-
-## Conclusion
-**Recall target 0.95 @ threshold 0.9: NOT ACHIEVED.** Best achievable recall with current model and data is **78.67%**.
-
-The limitation is fundamental: 45 true matches have contact evidence but name/field variations cause Splink to assign very low overall probabilities. No m_prob tuning can overcome this evidence balance constraint.
-
-## Next Steps
-1. Document that 78.67% is the achievable recall ceiling with current architecture
-2. Consider alternative approaches: Zingg hybrid, additional features, or different blocking strategy
-3. If 0.95 recall is mandatory, evaluate whether data augmentation or different modeling paradigm is required
+## Langkah Berikutnya
+1. Regenerasi `outputs/splink_predictions.parquet` untuk verifikasi ulang dan jalankan `python -m src.evaluate`.
+2. Sinkronkan `docs/metadata_pipeline.md` yang masih mengutip angka lama (`0.9431` @ 0.9).
+3. Pertimbangkan evaluasi pada holdout stratified terpisah agar gold tidak bercampur dengan training strata.

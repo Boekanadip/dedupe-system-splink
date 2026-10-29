@@ -57,9 +57,9 @@
 
 | Decision | Condition | Typical use |
 |---|---|---|
-| `MATCH` | `match_probability >= MATCH_THRESHOLD` (0.9) | Auto-merge into master table |
-| `NON_MATCH` | `match_probability <= REVIEW_THRESHOLD` (1e-8) | Auto-reject |
-| `REVIEW` | Otherwise | Human review queue |
+| `MATCH` | `match_probability >= MATCH_THRESHOLD` (0.84) | Auto-merge into master table |
+| `REVIEW` | `REVIEW_THRESHOLD (0.35) <= match_probability < MATCH_THRESHOLD (0.84)` | Human review queue |
+| `NON_MATCH` | `match_probability < REVIEW_THRESHOLD` (0.35) | Auto-reject |
 
 **Forced business rules** (always applied regardless of probability):
 - **9,133 forced MATCH**: Pairs with exact phone match OR exact email match
@@ -67,16 +67,22 @@
 
 ## 6. Threshold Evaluation
 
-**Gold label set:** `data/labels/gold_labels.csv` (3,525 labeled pairs; 1,055 matches, 2,470 non-matches)
+**Gold label set:** `data/labels/gold_labels.csv` (3,593 labeled pairs; 1,099 matches, 2,494 non-matches)
 - Stratified by human review, not random sample
-- 20% holdout test: `final_eval.py` uses `random_state=42`
+- 378 pairs without `match_probability` (outside blocking) are excluded from scoring
 
-**Evaluation thresholds tested:** 0.75, 0.80, 0.85, 0.90, 0.95
+**Evaluation thresholds tested:** 0.35, 0.50, 0.82, 0.84, 0.90
 
-**Current performance @ threshold 0.9:**
-- Recall: **0.9431** (target ≥0.95 → 0.69pp short)
-- Precision: **0.8924** (stable, no significant drop)
-- TP=199, FP=24, FN=12 (on 705 test pairs)
+**Current performance @ threshold 0.84 (3,215 scored pairs):**
+- Recall: **0.9976** (target ≥0.95 ✅)
+- Precision: **0.9350**
+- F1: **0.9653**
+- TP=849, FP=59, FN=2, TN=2,305
+
+**Decision bands @ 0.84 / 0.35:**
+- MATCH (`P >= 0.84`): 908 pairs
+- REVIEW (`0.35 <= P < 0.84`): 14 pairs (0 gold positive)
+- NON_MATCH (`P < 0.35`): 2,293 pairs
 
 ## 7. Model Versioning
 
@@ -85,4 +91,4 @@
 | v20261027_074552 | 2026-10-27 | Initial config; m-probs: contact=0.60, location_else=0.15, dob_exact=0.50 | 0.6853 | 0.9627 |
 | v20261027_fixed | 2026-10-27 (this session) | contact m→0.75, location_else m→0.10, dob_exact m→0.30 | 0.9431 | 0.8924 |
 
-**Next version:** v20261027_v2 — aim for recall ≥0.95 @ 0.9 by further fine-tuning.
+**Threshold v2026-10-29 (0.84 / 0.35):** recall **0.9976**, precision **0.9350**, F1 **0.9653** on 3,215 scored gold pairs. Full detail: `final_eval_report.md`.

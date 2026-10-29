@@ -242,10 +242,10 @@ if not preds.empty:
     probs = pd.to_numeric(preds["match_probability"], errors="coerce").dropna().clip(0, 1)
     thresholds = report.get("decision", {}).get("thresholds", {})
     review_threshold = float(
-        prediction_meta.get("review_threshold", thresholds.get("review", 1e-8))
+        prediction_meta.get("review_threshold", thresholds.get("review", 0.35))
     )
     match_threshold = float(
-        prediction_meta.get("match_threshold", thresholds.get("match", 0.9))
+        prediction_meta.get("match_threshold", thresholds.get("match", 0.84))
     )
     bins = sorted(
         {

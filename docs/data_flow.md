@@ -41,9 +41,9 @@ data/raw/crm_50000_customers_dirty_v.csv
           │           decision: MATCH / REVIEW / NON_MATCH
           │           forced rules: 9.1K MATCH, 702K NON_MATCH
           ▼
-[Thresholding] ──► MATCH_THRESHOLD (0.9) ──►
-          │           REVIEW_THRESHOLD (1e-8)
-          │           recall@0.9: 0.9431 (target ≥0.95)
+[Thresholding] ──► MATCH_THRESHOLD (0.84) ──►
+          │           REVIEW_THRESHOLD (0.35)
+          │           recall@0.84: 0.9976 / precision 0.9350 (target ≥0.95)
           ▼
 [Outputs] ──► splink_predictions.parquet
           │           master_customers.parquet
@@ -63,8 +63,8 @@ data/raw/crm_50000_customers_dirty_v.csv
 | `splink_predictions_sample.parquet` | `outputs/` | 10K-row sample for inspection |
 | `entity_map.parquet` | `outputs/` | Mapped record_ids → entity_id (resolved entities) |
 | `master_customers.parquet` | `outputs/` | Deduplicated customer table (one row per entity) |
-| `gold_labels.csv` | `data/labels/` | 3,525 labeled pairs (1,055 match, 2,470 non-match) |
-| `thresholds_override.json` | `outputs/` | MATCH_THRESHOLD=0.9, REVIEW_THRESHOLD=1e-8 |
+| `gold_labels.csv` | `data/labels/` | 3,593 labeled pairs (1,099 match, 2,494 non-match) |
+| `thresholds_override.json` | `outputs/` | MATCH_THRESHOLD=0.84, REVIEW_THRESHOLD=0.35 |
 
 ## Data Integrity Rules (per AGENTS.md)
 

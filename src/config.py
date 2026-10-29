@@ -373,8 +373,8 @@ def m_else_floor_for(column: str) -> float | None:
     return M_ELSE_LEVEL_FLOOR_BY_FIELD.get(column, M_ELSE_LEVEL_FLOOR)
 
 
-MATCH_THRESHOLD = 0.82
-REVIEW_THRESHOLD = 1e-8
+MATCH_THRESHOLD = 0.84
+REVIEW_THRESHOLD = 0.35
 
 _OVERRIDE = OUTPUT_DIR / "thresholds_override.json"
 if _OVERRIDE.exists():

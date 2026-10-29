@@ -67,8 +67,8 @@ Sumber: file yang sudah ditulis pipeline hari ini. Backend tinggal scrape, tidak
 
 | Metrik | Sumber | Key | Tipe | Alert |
 |---|---|---|---|---|
-| Precision @ 0.9 | `outputs/threshold_evaluation_gold.json` | `results[threshold=0.9].precision` | rate | < 0,95 → false merge naik |
-| Recall @ 0.9 | idem | `results[threshold=0.9].recall` | rate | < 0,95 → duplikat lolos |
+| Precision @ 0.84 | `outputs/threshold_evaluation_gold.json` | `results[threshold=0.84].precision` | rate | < 0,95 → false merge naik |
+| Recall @ 0.84 | idem | `results[threshold=0.84].recall` | rate | < 0,95 → duplikat lolos |
 | Jumlah gold | idem | `positives + negatives` | count | tidak tumbuh → tidak ada review baru masuk |
 | Skor positif terendah | tests `review_floor_drops_no_gold_positive` | `min(match_probability)` gold positive | rate | turun di bawah `REVIEW_THRESHOLD` → floor terlalu tinggi |
 
@@ -155,9 +155,9 @@ Backend baca ini untuk lineage, jangan parse parquet untuk dapat metadata.
 
 | Konstanta | Nilai | Makna | Sumber |
 |---|---|---|---|
-| `MATCH_THRESHOLD` | 0.9 | `p >= 0.9` → auto-MERGE | `config.py` |
-| `REVIEW_THRESHOLD` | 0.45 | `0.45 <= p < 0.9` → REVIEW | `config.py` |
-| — | `p < 0.45` | NON_MATCH | — |
+| `MATCH_THRESHOLD` | 0.84 | `p >= 0.84` → auto-MERGE | `config.py` |
+| `REVIEW_THRESHOLD` | 0.35 | `0.35 <= p < 0.84` → REVIEW | `config.py` |
+| — | `p < 0.35` | NON_MATCH | — |
 
 Override: `outputs/thresholds_override.json` (`match_threshold`, `review_threshold`).
 Pipeline membaca override ini otomatis saat import.
@@ -294,6 +294,6 @@ Kalau ada, **seluruh pipeline** (validasi, standardize, blocking, model) otomati
 
 - `entity_id` hanya stabil selama `batch_registry.json` tidak berubah. Registry berubah → ID bisa geser. Downstream yang menyimpan `entity_id` harus siap re-mapping via `record_id`.
 - Gold labels **stratified by model behavior**, bukan sampel acak. Precision/recall dari gold tidak boleh diekstrapolasi ke seluruh populasi.
-- Threshold (0.9 / 1e-8) dipilih dari evaluasi pada gold set saat ini. Kalau distribusi data berubah, ukur ulang sebelum ubah.
+- Threshold (0.84 / 0.35) dipilih dari evaluasi pada gold set saat ini. Kalau distribusi data berubah, ukur ulang sebelum ubah.
 - `m_else_level_floor` untuk `dob_std` (0.001) adalah **asumsi**, belum diuji secara aislasi terhadap gold. Dampak terukur: 0 gold positive hilang di run saat ini, tapi belum ada A/B test.
 - Sistem unsupervised — tidak ada train/test split klasik. Evaluasi pakai gold labels yang di-review manusia.

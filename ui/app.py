@@ -149,9 +149,9 @@ elif page == "Model Info":
     
     st.subheader("Threshold Configuration")
     st.json({
-        "auto_match": "> 0.95",
-        "auto_non_match": "< 0.01",
-        "review": "0.01 - 0.95"
+        "auto_match": ">= 0.84",
+        "review": "0.35 - 0.84",
+        "auto_non_match": "< 0.35"
     })
     
     st.subheader("Evaluation Results (Threshold 0.86)")
