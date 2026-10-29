@@ -8,129 +8,45 @@ Secara garis besar:
 
 <img width="576" height="274" alt="Image" src="https://github.com/user-attachments/assets/d2e68744-cc55-4b2a-8e71-8785df8c22dd" />
 
----
-## Installation & Setup
+## Instalasi
 
-1. **Persyaratan**  
-   - Python 3.9 or newer  
-   - Git (opsional, untuk clone repo)  
-   - Docker (opsional, jika ingin jalankan PostgreSQL + API + UI sekaligus)
+1. Clone repository
+2. Install dependensi: `pip install -r requirements.txt`
+3. Jalankan Docker: `docker-compose up -d`
+4. Jalankan aplikasi: `streamlit run pages/upload.py`
 
-2. **Clone repository**  
-   ```bash
-   git clone https://github.com/Boekanadip/dedupe-system-splink.git
-   cd dedup-system-splink
-3. **Buat virtual environment (disarankan)**  
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux / macOS:
-source .venv/bin/activate
+## Struktur Folder
 
-4. **Install dependensi**  
-pip install -r requirements.txt
-pip install -r requirements-dev.txt   # untuk pengembangan & testing
-5. **Jalankan sistem**  
-- **Quick start (Windows PowerShell)**  
-.\quickstart.ps1
-*Script ini akan: membuat venv, menginstall paket, mulai Docker‑Compose (PostgreSQL + API + UI), dan buka UI Streamlit.*
-- **Manual step‑by‑step**  
-make start          # start Docker Compose (PostgreSQL, API, UI)
-make train          # training Splink model
-make predict        # batch prediction
-make api            # FastAPI di http://localhost:8000
-make ui             # Streamlit di http://localhost:8501
-make test           # run all tests
-## 6. Struktur Folder dan Kegunaan File
-
-Berikut struktur direktori repository beserta fungsi setiap file dan folder utama.
-
-```text
-/
-├── .gitignore
-├── .env.example
-├── Dockerfile.api
-├── Dockerfile.ui
-├── docker-compose.yml
-├── Makefile
-├── quickstart.ps1
-├── stop.ps1
-├── README.md
-│
-├── src/
-│   ├── __init__.py
-│   ├── config.py
-│   ├── db.py
-│   ├── standardize.py
-│   ├── splink_model.py
-│   └── validate_upload.py
-│
-├── scripts/
-│   ├── batch_predict.py
-│   └── run_pipeline.py
-│
-├── api/
-│   └── app.py
-│
-├── ui/
-│   └── app.py
-│
-├── pages/
-│   ├── 1_review.py
-│   ├── 5_queue.py
-│   ├── 6_batch.py
-│   └── upload.py
-│
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py
-│   ├── test_schema_validation.py
-│   ├── test_system.py
-│   └── test_verification.py
-│
-├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── labels/
-│
-├── outputs/
-│   ├── master_customers.parquet
-│   ├── entity_map.parquet
-│   └── splink_predictions.parquet
-│
-└── docs/
-    ├── prd.md
-    ├── design.md
-    └── agents.md
+```
+├── .opencode/        <-- Folder implementasi AI agent (tidak dipush ke GitHub)
+├── .gitignore        <-- File ignore Git
+├── .env.example      <-- Contoh variabel environment
+├── config/           <-- Konfigurasi Splink dan blocking rules
+├── data/             <-- Data mentah dan hasil processing
+├── outputs/          <-- File output (parquet, results)
+├── scripts/          <-- Script batch dan otomasi
+├── src/              <-- Source code utama
+│   └── config.py     <-- Column mapping dan konfigurasi
+├── tests/            <-- Test suite
+├── pages/            <-- Aplikasi Streamlit
+├── api/              <-- FastAPI endpoints
+├── ui/               <-- Antarmuka pengguna
+├── docker/           <-- Konfigurasi Docker
+├── .env              <-- Environment variables (lokal)
+├── Makefile          <-- Perintah build dan testing
+├── requirements.txt  <-- Dependensi Python
+└── README.md         <-- Dokumentasi ini
 ```
 
-### Fungsi File dan Direktori
+## Kegunaan File Utama
 
-#### File konfigurasi dan operasional
-
-| File | Fungsi |
-|---|---|
-| `.gitignore` | Menentukan file dan direktori yang tidak dilacak Git, seperti `.env`, `.venv`, serta artefak hasil generate yang dikecualikan. |
-| `.env.example` | Template variabel environment untuk konfigurasi aplikasi tanpa menyertakan kredensial asli. |
-| `Dockerfile.api` | Instruksi untuk membangun image Docker service FastAPI. |
-| `Dockerfile.ui` | Instruksi untuk membangun image Docker service Streamlit. |
-| `docker-compose.yml` | Mengatur service PostgreSQL, API, dan UI melalui Docker Compose. |
-| `Makefile` | Menyediakan pintasan perintah untuk menjalankan build, test, dan otomatisasi pipeline. |
-
-### 7. Point‑point penting (ringkas)
-
-- **Schema validation fleksibel**: hanya `first_name` & `last_name` wajib; harus ada **salah satu** dari `email` **atau** `phone`. Kolom lainnya opsional.  
-- **Blocking rules**: 14 aturan di `src/config.py` mengurangi kandidat dari O(N^2) menjadi ratusan ribu.  
-- **Decision threshold**:  
-  - `>= 0.84` -> **AUTO MATCH** (langsung dimasukkan cluster)  
-  - `<= 0.35` -> **AUTO NON_MATCH** (disimpan untuk audit, **tidak dibuang**)  
-  - `0.35 - 0.84` -> **REVIEW MANUAL** (butuh konfirmasi manusia)  
-- **Human review**: opsional, hasil disimpan di `data/labels/feedback.csv` & `gold_labels.csv`.  
-- **Monitoring & retrain**: metrik match/review rate, alert saat threshold dilanggar, retrain harian/mingguan atau manual via `pages/4_retrain.py`.
-
-### 8. Langkah selanjutnya
-
-- Buka `http://localhost:8501` untuk melihat UI Streamlit.  
-- Coba upload CSV minimal kolom `first_name`, `last_name`, dan `email` / `phone`.  
-- Lihat hasil di FastAPI (`http://localhost:8000/docs`) dan dashboard.  
-- Jalankan `make test` sebelum distribusi ke environment produksi.
+- `src/config.py` - Konfigurasi column mapping Splink dan 14 blocking rules
+- `scripts/batch_predict.py` - Script prediksi batch harian
+- `pages/1_review.py` - Review pasangan ambiguitas secara manual
+- `pages/5_queue.py` - Antrean pasangan REVIEW yang pending
+- `pages/6_batch.py` - Batch review sebelum digabung ke master
+- `api/app.py` - REST API endpoint untuk aplikasi eksternal
+- `ui/app.py` - Dashboard Streamlit interaktif
+- `docker-compose.yml` - Layanan PostgreSQL, Streamlit, dan lainnya
+- `Makefile` - Target build, test, dan pipeline otomatisasi
+- `.env.example` - Contoh variabel environment untuk development

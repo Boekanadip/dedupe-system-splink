@@ -35,3 +35,6 @@ outputs/.pipeline_running
 # Environment variables
 .env
 .env.local
+
+# AI Agent implementation (local only)
+.opencode/
