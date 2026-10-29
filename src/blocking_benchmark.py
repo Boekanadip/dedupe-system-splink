@@ -109,18 +109,19 @@ def main() -> None:
             f"both records inside this run's {len(df):,} rows"
         )
 
+    truth_pairs = device_truth_pairs(df)
     con = duckdb.connect()
     con.register("src", df)
-
-
-    con.register("truth", device_truth_pairs(df))
+    con.register("truth", truth_pairs)
     truth_total = con.execute("SELECT COUNT(*) FROM truth").fetchone()[0]
 
     def device_truth_coverage(pairs: pd.DataFrame) -> tuple[int, float | None]:
         if not truth_total:
             return 0, None
-        con.register("pairs_temp", pairs)
-        kept = con.execute(
+        tmp = duckdb.connect()
+        tmp.register("pairs_temp", pairs)
+        tmp.register("truth", truth_pairs)
+        kept = tmp.execute(
             """
             SELECT COUNT(*) FROM truth t
             WHERE EXISTS (
@@ -129,7 +130,7 @@ def main() -> None:
             )
             """
         ).fetchone()[0]
-        con.unregister("pairs_temp")
+        tmp.close()
         return kept, round(100.0 * kept / truth_total, 3)
 
     print(f"Device-truth pairs (denominator for the non-tautological column): {truth_total:,}")

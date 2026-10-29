@@ -11,10 +11,11 @@ from datetime import datetime
 import psycopg2
 from psycopg2.extras import execute_values
 
+from src.config import MATCH_THRESHOLD, REVIEW_THRESHOLD
 from src.db import get_connection
 
-THRESHOLD_MATCH = 0.95
-THRESHOLD_NON_MATCH = 0.01
+THRESHOLD_MATCH = MATCH_THRESHOLD
+THRESHOLD_NON_MATCH = REVIEW_THRESHOLD
 
 def main():
     print("=" * 50)
@@ -99,9 +100,9 @@ def main():
     print("PREDICTION SUMMARY")
     print("=" * 50)
     print(f"Total pairs: {len(df):,}")
-    print(f"MATCH (>=0.95): {match_count:,}")
+    print(f"MATCH (>={THRESHOLD_MATCH}): {match_count:,}")
     print(f"REVIEW ({THRESHOLD_NON_MATCH}-{THRESHOLD_MATCH}): {review_count:,}")
-    print(f"NON_MATCH (<0.01): {non_match_count:,}")
+    print(f"NON_MATCH (<{THRESHOLD_NON_MATCH}): {non_match_count:,}")
     print("=" * 50)
 
 if __name__ == "__main__":

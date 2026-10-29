@@ -220,6 +220,8 @@ def add_blocking_keys(df: pd.DataFrame) -> pd.DataFrame:
     if "phone_std" in df:
         # Prefiks negara/kode area; menjaga blok tetap cukup ketat dan kecil.
         df["phone_pre7"] = df["phone_std"].str.slice(0, 7)
+        # Dipakai rule name_fuzzy_last4; wajib ada agar model bisa diprediksi.
+        df["phone_last4"] = df["phone_std"].str.slice(-4)
 
     if "dob_std" in df:
         df["dob_year_std"] = df["dob_std"].str.slice(0, 4)
