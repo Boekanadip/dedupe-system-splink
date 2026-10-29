@@ -115,18 +115,22 @@ Berikut struktur direktori repository beserta fungsi setiap file dan folder utam
 | `Dockerfile.api` | Instruksi untuk membangun image Docker service FastAPI. |
 | `Dockerfile.ui` | Instruksi untuk membangun image Docker service Streamlit. |
 | `docker-compose.yml` | Mengatur service PostgreSQL, API, dan UI melalui Docker Compose. |
-| `Makefile` | Menyediakan pintasan perintah untuk menjalankan
-7. **Point‑point penting (ringkas)**  
+| `Makefile` | Menyediakan pintasan perintah untuk menjalankan build, test, dan otomatisasi pipeline. |
+
+### 7. Point‑point penting (ringkas)
+
 - **Schema validation fleksibel**: hanya `first_name` & `last_name` wajib; harus ada **salah satu** dari `email` **atau** `phone`. Kolom lainnya opsional.  
-- **Blocking rules**: 14 aturan di `src/config.py` mengurangi kandidat dari O(N²) menjadi ratusan ribu.  
+- **Blocking rules**: 14 aturan di `src/config.py` mengurangi kandidat dari O(N^2) menjadi ratusan ribu.  
 - **Decision threshold**:  
-- `>= 0.84` → **AUTO MATCH** ( langsung dimasukkan cluster)  
-- `<= 0.35` → **AUTO NON_MATCH** (disimpan untuk audit, **tidak dibuang**)  
-- `0.35 – 0.84` → **REVIEW MANUAL** (butuh konfirmasi manusia)
+  - `>= 0.84` -> **AUTO MATCH** (langsung dimasukkan cluster)  
+  - `<= 0.35` -> **AUTO NON_MATCH** (disimpan untuk audit, **tidak dibuang**)  
+  - `0.35 - 0.84` -> **REVIEW MANUAL** (butuh konfirmasi manusia)  
 - **Human review**: opsional, hasil disimpan di `data/labels/feedback.csv` & `gold_labels.csv`.  
 - **Monitoring & retrain**: metrik match/review rate, alert saat threshold dilanggar, retrain harian/mingguan atau manual via `pages/4_retrain.py`.
-8. **Langkah selanjutnya**  
+
+### 8. Langkah selanjutnya
+
 - Buka `http://localhost:8501` untuk melihat UI Streamlit.  
-- Coba upload CSV minimal kolom `first_name`, `last_name`, dan `email` / `phone`.  
+- Coba upload CSV minimal kolom `first_name`, `last_name`, dan `email` / `phone`.  
 - Lihat hasil di FastAPI (`http://localhost:8000/docs`) dan dashboard.  
 - Jalankan `make test` sebelum distribusi ke environment produksi.
