@@ -13,7 +13,7 @@ Secara garis besar:
 1. Clone repository
 2. Install dependensi: `pip install -r requirements.txt`
 3. Jalankan Docker: `docker-compose up -d`
-4. Jalankan aplikasi: `streamlit run pages/upload.py`
+4. Jalankan aplikasi: `streamlit run pages/app_streamlit.py`
 
 ## Struktur Folder
 

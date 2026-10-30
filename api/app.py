@@ -150,7 +150,7 @@ def run_dedup(
     
     # Register data ke DuckDB API
     db_api = DuckDBAPI()
-    sdf = db_api.register(df_raw, dataset_display_name="dedup_dynamic")
+    sdf = db_api.register_table(df_raw)
     
     # Buat Linker dengan konfigurasi dinamis (tanpa training EM ulang jika sudah ada model)
     # Kita gunakan konfigurasi yang baru dibangun, tapi linker akan estimate params-nya

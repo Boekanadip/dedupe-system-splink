@@ -1026,7 +1026,7 @@ def pinned_comparisons_keep_null_levels():
      
     records = pd.read_parquet(PROCESSED_DATA_PATH).head(2)
     db_api = DuckDBAPI()
-    sdf = db_api.register(records, dataset_display_name="dedup")
+    sdf = db_api.register_table(records)
     model = Linker(sdf, build_settings()).misc.save_model_to_json()
     for comparison in model["comparisons"]:
         levels = comparison["comparison_levels"]
