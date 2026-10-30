@@ -42,11 +42,7 @@ if "last_payload_info" not in st.session_state:
 
 
 def run_pipeline(command: list[str]) -> dict:
-    """Run a pipeline subprocess and stream its log line by line.
 
-    Returns a dict with returncode, seconds, log, and live Streamlit boxes
-    (status_box, log_box). Caller empties the boxes on completion.
-    """
     log_box = st.empty()
     status_box = st.empty()
     process = subprocess.Popen(
@@ -311,7 +307,7 @@ with tab_db:
         "postgres://crm_owner:devpassword@127.0.0.1:5432/crm",
     )
     dsn = st.text_input(
-        "Connection string (PostgreSQL/MySQL/SQLite) atau path ke file .duckdb",
+        "Connection string (PostgreSQL/MySQL/SQLite)",
         value=default_dsn,
         help="Contoh: postgres://user:pass@host:5432/db atau data/synthetic/crm.duckdb",
     )
@@ -414,7 +410,7 @@ with tab_db:
                     except Exception as e:
                         st.error(f"Gagal mengekspor: {e}")
                         st.stop()
-                # Proses diluar spinner sehingga log pipeline tidak bertumpuk di dalamnya.
+                # Proses diluar spinner sehingga log pipeline tidak bertumpuk
                 if result["status"] == "noop":
                     st.info(result["message"])
                     st.session_state.pending_batch = None

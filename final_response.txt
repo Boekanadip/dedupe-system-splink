@@ -1,0 +1,53 @@
+ANALISIS ALUR KERJA & KEHILANGAN SISTEM
+
+1. STRUKTUR ALUR (VERIFI dari kode repository)
+
+Pipeline utama (src/run_all.py):
+  INPUT
+     ↓
+validasi skema (src/validate_upload.py)
+     �n
+generasi record_id (src/registry.py)
+     ↓
+pelindungan data mentah (data/raw/batch_NNNN.csv)
+     ↓
+standarisasi (src/standardize.py)
+     ↓
+rekayasa fitur (implisit dalam standardize.py)
+     ↓
+blokir (src/config.py DEFAULT_BENCHMARK_RULES)
+     ↓
+Splink scoring (src/splink_model.py)
+     ↓
+determinasi (add_decision)
+      ↓
+aturan bisnis (apply_business_rules)
+      ↓
+Output: MATCH, REVIEW, NON-MATCH
+
+2. KOMPONEN SISTEM
+   - Standardization: standardize.py mengatur teks, telepon, email, normalisasi tanggal
+   - Blokir: config.py menyediakan DEFAULT_BENCHMARK_RULES dengan 14+ strategi blokir
+   - Resolusi Entitas: splink_model.py menggunakan Splink dengan level perbandingan kustom
+   - Keputusan: ambang batas configurable (MATCH_THRESHOLD=0.84, REVIEW_THRESHOLD=0.35)
+   - Proses Inkremental: incremental.py mengelola pemrosesan batch tanpa reprosesing penuh
+
+3. STATUS VERIFIKASI
+   - Arsitektur: diverifikasi terhadap design.md dan prd.md
+   - Alur data: diverifikasi melalui incremental_history.jsonl dan run_all.py
+   - Modul: semua modul kunci tersedia dan dapat diimpor
+   - Konfigurasi: lengkap dengan aturan blokir dan ambang batas
+   - Pipeline: end-to-end workflow terdokumentasi di incremental.py dan run_all.py
+
+4. REKOMENDASI LANJUTAN
+   1. Jalankan smoke test untuk memverifikasi fungsionalitas dasar
+   2. Eksekusi batch kecil melalui pipeline
+   3. Verifikasi hasil resolusi entitas
+   4. Periksa ambang keputusan dengan label emas yang tersedia
+   5. Gunakan antarmuka Streamlit untuk memverifikasi alur tinjauan manusia
+
+5. LANGKAH SELANJUTNYA
+   - Jalankan: python -m src.run_all --sample untuk uji dengan data sampel
+   - Pantau: python -m src.evaluate untuk memeriksa kinerja model
+   - Tinjau: Gunakan Streamlit interface untuk memverifikasi alur tinjauan manusia
+   - Review: Periksa dan validasi keputusan ambang batas MATCH/REVIEW/NON_MATCH

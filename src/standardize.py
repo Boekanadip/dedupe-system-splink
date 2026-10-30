@@ -195,14 +195,15 @@ def add_record_id(
         df.insert(0, "record_id", df[SOURCE_RECORD_ID_COLUMN].astype(str).map(lambda x: f"src_{x}"))
         return df
 
-    df.insert(
-        0,
-        "record_id",
-        [
-            f"rec_{i:06d}"
-            for i in range(start_index + 1, start_index + len(df) + 1)
-        ],
-    )
+    if "record_id" not in df.columns:
+        df.insert(
+            0,
+            "record_id",
+            [
+                f"rec_{i:06d}"
+                for i in range(start_index + 1, start_index + len(df) + 1)
+            ],
+        )
     return df
 
 

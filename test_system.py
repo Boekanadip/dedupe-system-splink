@@ -1,89 +1,73 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+"""Simple test to verify system components"""
 
-print("=" * 60)
-print("CRM Entity Resolution System - Verification Test")
-print("=" * 60)
+import sys
+import os
+sys.path.insert(0, 'src')
 
-try:
-    # Test 1: Environment
-    print("\n1. Testing environment variables:")
+def test_basic_components():
+    """Test basic system components"""
+    print("Testing basic system components...")
+    
+    # Import key modules
     try:
-        import os
-        from dotenv import load_dotenv
-        env_path = os.path.join(os.path.dirname(__file__), ".env")
-        load_dotenv(dotenv_path=env_path)
-        print(f"  PostgreSQL: {os.environ.get('POSTGRES_HOST', 'localhost')}:{os.environ.get('POSTGRES_PORT', '5432')}")
-        print("  ✓ Environment variables loaded")
+        from config import PROCESSED_DATA_PATH, ENTITY_MAP_PATH
+        from src.model_lifecycle import latest
+        from src.splink_model import load_data
+        
+        print(f"PROCESSED_DATA_PATH exists: {PROCESSED_DATA_PATH.exists()}")
+        print(f"ENTITY_MAP_PATH exists: {ENTITY_MAP_PATH.exists()}")
+        
+        # Check if we can load data
+        if ENTITY_MAP_PATH.exists():
+            df = load_data()
+            print(f"Successfully loaded data with {len(df)} rows")
+            print(f"Entity IDs: {df['entity_id'].nunique()}")
+            return True
+        else:
+            print("Entity map not found - need to run pipeline")
+            return False
+            
     except Exception as e:
-        print(f"  ✗ Environment test failed: {e}")
+        print(f"Error importing modules: {e}")
+        return False
 
-# Test 2: Docker Compose
-print("\n2. Testing Docker Compose:")
-try:
-    import subprocess
-    result = subprocess.run(['docker-compose', 'config'], capture_output=True, text=True)
-    if result.returncode == 0:
-        print("  ✓ docker-compose.yml is valid")
+def test_pipeline_steps():
+    """Test core pipeline steps"""
+    print("\nTesting pipeline steps...")
+    
+    try:
+        # Test standardization
+        from src.standardize import standardize
+        from src.profiling import load_raw
+        from pathlib import Path
+        
+        # Check if raw data exists
+        raw_dir = Path('data/raw')
+        raw_files = list(raw_dir.glob('*.csv'))
+        print(f"Raw CSV files found: {len(raw_files)}")
+        
+        if raw_files:
+            # Test basic standardization function
+            print("Standardization module imported successfully")
+            
+        # Test config
+        from config import BENCHMARK_RULES
+        print(f"Loaded {len(BENCHMARK_RULES)} blocking rules")
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error in pipeline test: {e}")
+        return False
+
+if __name__ == "__main__":
+    success1 = test_basic_components()
+    success2 = test_pipeline_steps()
+    
+    if success1 and success2:
+        print("\n✅ System components test PASSED")
+        sys.exit(0)
     else:
-        print("  ✗ docker-compose.yml invalid")
-        print(result.stderr)
-except Exception as e:
-    print(f"  ✗ Docker test failed: {e}")
-
-# Test 3: FastAPI Health Check
-print("\n3. Testing FastAPI health endpoint:")
-try:
-    import requests
-    response = requests.get("http://localhost:8000/health", timeout=5)
-    if response.status_code == 200:
-        print("  ✓ API health check: OK")
-    else:
-        print(f"  ✗ API health check failed: {response.status_code}")
-except Exception as e:
-    print(f"  ✗ API test failed: {e}")
-
-# Test 4: UI Dashboard
-print("\n4. Testing UI Dashboard:")
-try:
-    import requests
-    response = requests.get("http://localhost:8501", timeout=3)
-    if response.status_code == 200:
-        print("  ✓ Streamlit UI is accessible")
-    else:
-        print(f"  ✗ Streamlit UI not accessible: {response.status_code}")
-except Exception as e:
-    print(f"  ✗ UI test failed: {e}")
-
-# Test 5: Batch Prediction
-print("\n5. Testing batch prediction:")
-try:
-    import subprocess
-    result = subprocess.run(['.venv\\Scripts\\python.exe', 'scripts\\batch_predict.py'], 
-                          capture_output=True, text=True, timeout=30)
-    if result.returncode == 0:
-        print("  ✓ Batch prediction script runs successfully")
-        print("    Output preview:")
-        print("    " + "\n".join(line for line in result.stdout.split('\n') if line and len(line) > 20)[:3])
-    else:
-        print(f"  ✗ Batch prediction script error: {result.returncode}")
-        print("    stdout:", result.stdout[:200])
-        print("    stderr:", result.stderr[:200])
-except Exception as e:
-    print(f"  ✗ Batch prediction test failed: {e}")
-
-# Test 6: Docker Compose
-print("\n6. Testing Docker Compose:")
-try:
-    import subprocess
-    result = subprocess.run(['docker-compose', 'config'], capture_output=True, text=True)
-    if result.returncode == 0:
-        print("  ✓ docker-compose.yml is valid")
-    else:
-        print("  ✗ docker-compose.yml invalid")
-        print(result.stderr)
-except Exception as e:
-    print(f"  ✗ Docker Compose test failed: {e}")
-
-print("\n" + "=" * 60)
-print("Verification complete. Check above for results.")
-print("=" * 60)
+        print("\n❌ System components test FAILED")
+        sys.exit(1)

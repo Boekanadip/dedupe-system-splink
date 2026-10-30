@@ -308,12 +308,286 @@ def build_settings():
     )
 
 
-def add_decision(pred_df: pd.DataFrame) -> pd.DataFrame:
+def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
+    """
+    Build Splink Settings based on user-selected columns for dynamic record linkage.
+    
+    Parameters
+    ----------
+    selected_columns : list[str]
+        List of standard column names selected by the user for comparison, e.g., 
+        ['first_name_std', 'email_std', 'dob_std'].
+        Valid options: first_name_std, last_name_std, email_std, phone_std,
+        address_std, city_std, state_std, country_std, dob_std, dob_year_std.
+    
+    Returns
+    -------
+    dict
+        Dictionary containing Splink configuration with comparisons and blocking rules,
+        ready to be passed to splink.SettingsCreator or Linker.
+        
+    Raises
+    ------
+    ValueError
+        If any selected column is not in the valid set of standard columns.
+    """
+    
+    # Validasi: pastikan semua kolom yang dipilih ada di daftar valid
+    valid_columns = {
+        "first_name_std", "last_name_std",
+        "email_std", "phone_std",
+        "address_std", "city_std", "state_std", "country_std",
+        "dob_std", "dob_year_std"
+    }
+    
+    invalid = [c for c in selected_columns if c not in valid_columns]
+    if invalid:
+        raise ValueError(
+            f"Kolom berikut tidak valid untuk pencocokan Splink: {invalid}. "
+            f"Silakan pilih dari: {sorted(valid_columns)}"
+        )
+    
+    # Inisialisasi kosong
+    comparisons = []
+    blocking_rules = []
+    
+    # --- BUILD COMPARISONS berdasarkan kolom yang dipilih ---
+    
+    # 1. Name comparison: jika ada kolom first_name_std atau last_name_std
+    has_name = any(c in selected_columns for c in ["first_name_std", "last_name_std"])
+    if has_name:
+        both_null = (
+            "(first_name_std_l IS NULL OR last_name_std_l IS NULL) "
+            "AND (first_name_std_r IS NULL OR last_name_std_r IS NULL)"
+        )
+        exact = (
+            "first_name_std_l IS NOT NULL AND first_name_std_r IS NOT NULL "
+            "AND first_name_std_l = first_name_std_r "
+            "AND last_name_std_l IS NOT NULL AND last_name_std_r IS NOT NULL "
+            "AND last_name_std_l = last_name_std_r"
+        )
+        # Fuzzy jaro-winkler default di sekitar 0.85
+        fuzzy = (
+            "(first_name_std_l IS NOT NULL AND first_name_std_r IS NOT NULL "
+            "AND last_name_std_l IS NOT NULL AND last_name_std_r IS NOT NULL "
+            "AND jaro_winkler_similarity(first_name_std_l || ' ' || last_name_std_l, "
+            "                             first_name_std_r || ' ' || last_name_std_r) >= 0.85)"
+        )
+        phonetic = (
+            "phonetic_first_name_l IS NOT NULL AND phonetic_first_name_r IS NOT NULL "
+            "AND phonetic_last_name_l IS NOT NULL AND phonetic_last_name_r IS NOT NULL "
+            "AND phonetic_first_name_l = phonetic_first_name_r "
+            "AND phonetic_last_name_l = phonetic_last_name_r"
+        )
+        
+        levels = [
+            CustomLevel(both_null, label_for_charts="nama kosong").configure(is_null_level=True),
+            CustomLevel(exact, label_for_charts="ejaan persis").configure(m_probability=0.85),
+            CustomLevel(fuzzy, label_for_charts="fuzzy match (typo)").configure(m_probability=0.50),
+            CustomLevel(phonetic, label_for_charts="fonetik saja").configure(m_probability=0.30),
+            ElseLevel().configure(m_probability=0.10),
+        ]
+        comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="name"))
+    
+    # 2. Contact comparison (email + phone): jika ada email_std atau phone_std
+    has_contact = any(c in selected_columns for c in ["email_std", "phone_std"])
+    if has_contact:
+        contact_null = (
+            "(email_std_l IS NULL AND phone_std_l IS NULL) "
+            "OR (email_std_r IS NULL AND phone_std_r IS NULL)"
+        )
+        both = (
+            "email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l = email_std_r "
+            "AND phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l = phone_std_r"
+        )
+        one = (
+            "(email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l = email_std_r) "
+            "OR (phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l = phone_std_r)"
+        )
+        # Penentuan m-probability berdasarkan kombinasi yang dipilih
+        if "email_std" in selected_columns and "phone_std" in selected_columns:
+            m_both = 0.70  # both strong
+        elif "email_std" in selected_columns:
+            m_both = 0.60  # email only
+        elif "phone_std" in selected_columns:
+            m_both = 0.55  # phone only
+        else:
+            m_both = 0.50
+            
+        email_fuzzy = (
+            "email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l <> email_std_r "
+            "AND jaro_winkler_similarity(email_std_l, email_std_r) >= 0.85"
+        )
+        phone_fuzzy = (
+            "phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l <> phone_std_r "
+            "AND jaro_winkler_similarity(phone_std_l, phone_std_r) >= 0.90"
+        )
+        
+        levels = [
+            CustomLevel(contact_null, label_for_charts="kontak kosong").configure(is_null_level=True),
+            CustomLevel(both, label_for_charts="email dan telepon").configure(m_probability=m_both),
+            CustomLevel(one, label_for_charts="email atau telepon").configure(m_probability=0.45),
+            CustomLevel(email_fuzzy, label_for_charts="email mirip (typo)").configure(m_probability=0.45),
+            CustomLevel(phone_fuzzy, label_for_charts="telepon mirip (typo)").configure(m_probability=0.40),
+            ElseLevel().configure(m_probability=0.10),
+        ]
+        comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="contact"))
+    
+    # 3. Location/Address comparison: jika ada address_std atau city_std
+    has_location = any(c in selected_columns for c in ["address_std", "city_std", "state_std", "country_std"])
+    if has_location:
+        location_null = (
+            "(address_std_l IS NULL AND city_std_l IS NULL) "
+            "OR (address_std_r IS NULL AND city_std_r IS NULL)"
+        )
+        full_match = (
+            "address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r "
+            "AND city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r "
+            "AND state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r"
+        )
+        city_match = (
+            "city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r"
+        )
+        state_match = (
+            "state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r"
+        )
+        
+        levels = [
+            CustomLevel(location_null, label_for_charts="lokasi kosong").configure(is_null_level=True),
+            CustomLevel(full_match, label_for_charts="alamat + city + state cocok").configure(m_probability=0.40),
+            CustomLevel(city_match, label_for_charts="city cocok").configure(m_probability=0.25),
+            CustomLevel(state_match, label_for_charts="state cocok").configure(m_probability=0.30),
+            ElseLevel().configure(m_probability=0.10),
+        ]
+        comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="location"))
+    
+    # 4. DOB comparison: jika ada dob_std atau dob_year_std
+    has_dob = any(c in selected_columns for c in ["dob_std", "dob_year_std"])
+    if has_dob:
+        dob_null = "dob_std_l IS NULL OR dob_std_r IS NULL"
+        match_exact = (
+            "dob_std_l IS NOT NULL AND dob_std_r IS NOT NULL AND dob_std_l = dob_std_r"
+        )
+        match_fuzzy = (
+            "dob_std_l IS NOT NULL AND dob_std_r IS NOT NULL "
+            "AND (dob_std_l = dob_std_r OR "
+            "dob_year_std_l IS NOT NULL AND dob_year_std_r IS NOT NULL "
+            "AND ABS(CAST(dob_year_std_l AS INTEGER) - CAST(dob_year_std_r AS INTEGER)) <= 1)"
+        )
+        
+        levels = [
+            CustomLevel(dob_null, label_for_charts="dob kosong").configure(is_null_level=True),
+            CustomLevel(match_exact, label_for_charts="tanggal lahir persis").configure(m_probability=0.30),
+            CustomLevel(match_fuzzy, label_for_charts="tanggal lahir mendekat (year)").configure(m_probability=0.25),
+            ElseLevel().configure(m_probability=0.12),
+        ]
+        comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="dob"))
+    
+    # --- BUILD BLOCKING RULES berdasarkan kolom yang dipilih ---
+    
+    # Email blocking jika email_std dipilih
+    if "email_std" in selected_columns:
+        blocking_rules.append(block_on("email_std"))
+    
+    # Phone blocking jika phone_std dipilih
+    if "phone_std" in selected_columns:
+        blocking_rules.append(block_on("phone_std"))
+    
+    # City blocking jika city_std dipilih
+    if "city_std" in selected_columns:
+        blocking_rules.append(block_on("city_std"))
+    
+    # DOB blocking jika dob_std dipilih
+    if "dob_std" in selected_columns:
+        blocking_rules.append(block_on("dob_std"))
+    
+    # Default blocking jika hanya name yang dipilih (pakai last_name_std)
+    if not blocking_rules and has_name:
+        blocking_rules.append(block_on("last_name_std"))
+    
+    # Default blocking jika hanya address yang dipilih (pakai city_std)
+    if not blocking_rules and has_location:
+        blocking_rules.append(blockon("city_std"))
+    
+    return {
+        "comparisons": comparisons,
+        "blocking_rules": blocking_rules,
+    }
+
+
+# Fungsi bantu: dapatkan daftar kolom standar yang ada di dataset yang diproses
+def get_valid_comparison_columns() -> set:
+    """Mengembalikan set nama kolom standar (_std suffix) yang bisa digunakan untuk pencocokan."""
+    return {
+        "first_name_std", "last_name_std",
+        "email_std", "phone_std",
+        "address_std", "city_std", "state_std", "country_std",
+        "dob_std", "dob_year_std"
+    }
+
+
+# Fungsi bantu: ambil nama kolom dari dataframe yang sudah standardisasi
+def infer_selected_columns_from_df(df: pd.DataFrame, preferred: list[str] | None = None) -> list[str]:
+    """
+    Menganalisis dataframe dan mengembalikan daftar kolom standar yang tersedia.
+    Fungsi ini membantu saat dataframe belum penuh atau kolom nama berbeda.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataframe yang sudah melalui proses standardisasi.
+    preferred : list[str] | None, optional
+        Daftar kolom yang diinginkan pengguna, dicek terhadap kolom yang ada di df.
+        
+    Returns
+    -------
+    list[str]
+        Daftar kolom standar yang ditemukan dan valid.
+    """
+    valid = get_valid_comparison_columns()
+    # Cari interseksi antara kolom di df dan valid columns
+    available = [c for c in df.columns if c in valid]
+    
+    if preferred:
+        # Filter preferred yang benar-benar ada
+        filtered = [c for c in preferred if c in available]
+        # Jika preferred tidak menghasilkan apa-apa (semua salah), gunakan yang ditemukan
+        if filtered:
+            return filtered
+    
+    return available[:10]  # Return maksimal 10 kolom pertama yang valid
+
+
+# Fungsi bantu: rangkum decision dari prediksi dengan kolom yang dipilih
+def add_decision_dynamic(pred_df: pd.DataFrame, match_threshold: float = 0.84, review_threshold: float = 0.35) -> pd.DataFrame:
+    """
+    Menambahkan kolom decision (MATCH/REVIEW/NON_MATCH) berdasarkan match_probability.
+    Fungsi ini adalah versi dinamis dari add_decision standar, memungkinkan threshold
+    dikonfigurasi per-runtime.
+    
+    Parameters
+    ----------
+    pred_df : pd.DataFrame
+        DataFrame hasil inferensi Splink yang harus memiliki kolom match_probability.
+    match_threshold : float, optional
+        Ambang bawah untuk kategori MATCH (default 0.84).
+    review_threshold : float, optional
+        Ambang bawah untuk kategori REVIEW (default 0.35).
+        
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame dengan kolom decision yang ditambahkan.
+    """
     out = pred_df.copy()
     out["decision"] = "NON_MATCH"
-    out.loc[out["match_probability"] >= REVIEW_THRESHOLD, "decision"] = "REVIEW"
-    out.loc[out["match_probability"] >= MATCH_THRESHOLD, "decision"] = "MATCH"
+    out.loc[out["match_probability"] >= match_threshold, "decision"] = "MATCH"
+    out.loc[(out["match_probability"] >= review_threshold) & (out["match_probability"] < match_threshold), "decision"] = "REVIEW"
     return out
+
+
+def add_decision(pred_df: pd.DataFrame) -> pd.DataFrame:
+    return add_decision_dynamic(pred_df, MATCH_THRESHOLD, REVIEW_THRESHOLD)
 
 
 BUSINESS_RULE_KEYS = ("email_std", "first_name_std", "last_name_std", "address_std")
@@ -381,7 +655,7 @@ def train_and_predict(
 
     if model is not None:
         db_api = DuckDBAPI()
-        sdf = db_api.register(df, dataset_display_name="dedup")
+        sdf = db_api.register_table(df, table_name="dedup")
         linker = Linker(sdf, model)
         if verbose:
             print("Loaded saved model — skipping EM training (MC section 15).")
@@ -389,8 +663,8 @@ def train_and_predict(
         return apply_business_rules(preds, verbose=verbose), linker
 
     db_api = DuckDBAPI()
-    sdf = db_api.register(df, dataset_display_name="dedup")
-    linker = Linker(sdf, build_settings())
+    # register_table returns a DuckDBDataFrame; Linker needs pandas
+    linker = Linker(df, build_settings(), db_api=db_api)
 
     if verbose:
         print("Estimating model parameters with EM...")

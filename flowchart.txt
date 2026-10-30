@@ -1,0 +1,135 @@
+FLOWCHART: CRM Entity Resolution System
+
+1. INPUT
+   - Accept record dari CSV files atau database sources
+   - Validasi skema diperlukan (kolom wajib: first_name, last_name, email, phone_number)
+   - Sistem harus memvalidasi skema sebelum memproses
+   - Sistem harus tidak mengasumsikan source customer_id bersifat unik atau kebenaran mutlak
+
+2. RECORD ID GENERATION
+   - Generate unique record_id untuk setiap rekaman fisik
+   - Jika sumber menyediakan record_id, simpan/masukkan; jika tidak, buat internal
+   - record_id adalah pengenal internal, bukan identitas pelanggan
+
+3. RAW DATA PRESERVATION
+   - Store original input values tanpa modifikasi
+   - Raw data harus disimpan persis seperti diterima
+   - Nilai terstandarisasi disimpan secara terpisah
+
+4. STANDARDIZATION
+   - Transform raw data ke format terstandarisasi
+   - Standardized fields: first_name_std, last_name_std, email_std, phone_std, dst
+   - Operasi: lowercase, trim, normalisasi spasi, normalisasi tanda baca
+   - Phone normalization: ekstrak digit, hapus awalan internasional '00', hapus awalan domestik '0'
+   - Email normalization: lowercase, trim
+   - Date normalization: tangani ambigu dmy/mdy berdasarkan bukti
+   - Simpan nilai asli; jangan overwrite
+
+5. FEATURE ENGINEERING
+   - Generate linkage-relevant derived features
+   - Contoh: normalized names, phone digits/suffix, email components, name length, device count, missingness indicators
+   - Fitur harus memiliki tujuan linkage yang terdokumentasi
+   - Hindari membuat banyak fitur tanpa alasan
+
+6. BLOCKING
+   - Generate candidate pairs untuk menghindari perbandingan semua pasangan (all-pairs)
+   - Strategi blokir yang dapat dikonfigurasi:
+     - exact_email
+     - exact_phone
+     - name_and_dob
+     - name_and_city
+     - city_dob
+     - phone_prefix
+     - name_prefix_state
+     - email_domain_name
+     - city_state_dob_year
+     - phone_last4
+     - email_domain_fuzzy
+     - city_state_dob_fuzzy
+     - name_fuzzy_last4
+   - Aturan blokir harus dapat diukur:
+     - candidate pair count
+     - coverage
+     - runtime
+     - block size distribution
+   - Jangan permanently hardcode aturan blokir
+
+7. ENTITY RESOLUTION (SPLINK)
+   - Score candidate pairs probabilistik
+   - Field-level comparison evidence:
+     - first_name: exact/fuzzy/different/null
+     - email: exact/different/null
+     - phone: exact/fuzzy/different
+     - dob: exact/different
+   - Retain evidence untuk kejelasan penjelasan
+   - Gunakan ambang batas yang dapat dikonfigurasi:
+     - P < T_LOW → NON_MATCH
+     - T_LOW ≤ P < T_HIGH → REVIEW
+     - P ≥ T_HIGH → MATCH
+   - Ambang batas harus dievaluasi secara empiris, bukan dipaksakan
+
+8. DECISION
+   - Output decisions: MATCH, REVIEW, NEW/NON-MATCH
+   - Ambang batas dapat dikonfigurasi berdasarkan evaluasi
+   - Jangan hardcode ambang batas dalam logika bisnis
+   - Gunakan label tersedia (silver/gold) untuk evaluasi
+
+9. HUMAN REVIEW
+   - Pairs yang memerlukan REVIEW masuk ke antrian tinjauan
+   - Review results disimpan dan dapat dipakai ulang untuk evaluasi
+   - Review queue berisi perbandingan sisi per sisi nilai
+   - Reviewer memilih match/no_match, menyimpan keputusan
+   - Edits tulis ke review_queue.csv
+
+10. ENTITY ID ASSIGNMENT
+    - Rekaman dengan entity_id yang sama mewakili entitas dunia nyata yang sama
+    - Entity ID independen dari customer_id sumber
+    - Maintain entity membership and source relationships
+
+11. MASTER/HISTORY UPDATE
+    - Update master representation berdasarkan keputusan
+    - Preserve linkage history and source lineage
+    - Jangan hancurkan nilai asli
+    - Entity assignments traceable to source records
+
+12. MONITORING/FEEDBACK
+    - Persist review results untuk evaluasi
+    - Track metrics: match rate, review rate, false positive/negative
+    - Deteksi data drift dan degradasi
+    - Trigger retraining ketika dibuktikan:
+      - Penurunan kinerja
+      - Pergeseran data
+      - Sumber data baru
+      - Perubahan skema
+      - Kasus yang ditinjau menumpuk
+    - Jangan retrain secara otomatis saat data baru tiba
+    - Offline evaluation sebelum promosi
+
+13. INCREMENTAL PROCESSING
+    - Process new batches tanpa reprosesing seluruh data historis
+    - Gunakan stable source watermark (updated_at)
+    - Stage proposed changes untuk ditinjau sebelum diterapkan
+    - Full run untuk retraining atau jalur pertama tanpa model
+
+14. SCALABILITY CONSIDERATIONS
+    - Dirancang untuk data produksi > 50k records
+    - Hindari operasi O(n²) yang tidak perlu
+    - Benchmark candidate generation
+    - Keep blocking configurable
+    - Jangan memuat data yang tidak perlu ke memori
+    - Pisahkan logika bisnis dari execution backend
+    - Support incremental processing
+    - Pertimbangkan partisi/eksekusi terdistribusi ketika dipertimbangkan
+
+KEY FLOW:
+RAW DATA → SCHEMA VALIDATION → RECORD ID → PRESERVE RAW → STANDARDIZE → FEATURE ENGINEERING → BLOCKING → ENTITY RESOLUTION → DECISION → ENTITY ASSIGNMENT → MASTER/HISTORY UPDATE → MONITORING/FEEDBACK → MODEL LIFECYCLE
+
+DECISION THRESHOLDS:
+P < T_LOW (e.g., 0.35) → NON_MATCH
+T_LOW ≤ P < T_HIGH (e.g., 0.84) → REVIEW
+P ≥ T_HIGH (e.g., 0.84) → MATCH
+
+PROCESS FLOWS:
+- New batch: standardize → score → link → update map → recompute master → queue review
+- Existing entity linkage: resolve new entities against master data
+- Incremental: process only new records, avoid reprocessing old data

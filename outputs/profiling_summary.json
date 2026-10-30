@@ -1,0 +1,848 @@
+{
+  "shape": {
+    "rows": 108427,
+    "columns": 37
+  },
+  "columns": [
+    "record_id",
+    "customer_id",
+    "first_name",
+    "last_name",
+    "email",
+    "phone_number",
+    "gender",
+    "dob",
+    "signup_date",
+    "address",
+    "city",
+    "state",
+    "country",
+    "device_id(s)",
+    "source",
+    "device_id",
+    "customer_pk",
+    "updated_at",
+    "first_name_std",
+    "last_name_std",
+    "address_std",
+    "city_std",
+    "state_std",
+    "country_std",
+    "email_std",
+    "phone_std",
+    "dob_std",
+    "signup_date_std",
+    "device_ids_std",
+    "first_name_std_pre3",
+    "last_name_std_pre3",
+    "email_local_pre3",
+    "email_domain_pre4",
+    "phone_pre7",
+    "dob_year_std",
+    "phonetic_last_name",
+    "phonetic_first_name"
+  ],
+  "column_profile": [
+    {
+      "column": "record_id",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 108427,
+      "unique_pct": 100.0,
+      "blank_string_count": 0
+    },
+    {
+      "column": "customer_id",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 98935,
+      "unique_pct": 91.2457,
+      "blank_string_count": 0
+    },
+    {
+      "column": "first_name",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 7167,
+      "unique_pct": 6.61,
+      "blank_string_count": 0
+    },
+    {
+      "column": "last_name",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 9224,
+      "unique_pct": 8.5071,
+      "blank_string_count": 0
+    },
+    {
+      "column": "email",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 1441,
+      "null_pct": 1.329,
+      "unique_count": 96260,
+      "unique_pct": 88.7786,
+      "blank_string_count": 0
+    },
+    {
+      "column": "phone_number",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 363,
+      "null_pct": 0.3348,
+      "unique_count": 98054,
+      "unique_pct": 90.4332,
+      "blank_string_count": 0
+    },
+    {
+      "column": "gender",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 366,
+      "null_pct": 0.3376,
+      "unique_count": 5,
+      "unique_pct": 0.0046,
+      "blank_string_count": 0
+    },
+    {
+      "column": "dob",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 380,
+      "null_pct": 0.3505,
+      "unique_count": 23766,
+      "unique_pct": 21.9189,
+      "blank_string_count": 0
+    },
+    {
+      "column": "signup_date",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 6814,
+      "unique_pct": 6.2844,
+      "blank_string_count": 0
+    },
+    {
+      "column": "address",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 356,
+      "null_pct": 0.3283,
+      "unique_count": 96674,
+      "unique_pct": 89.1604,
+      "blank_string_count": 0
+    },
+    {
+      "column": "city",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 357,
+      "null_pct": 0.3293,
+      "unique_count": 37090,
+      "unique_pct": 34.2073,
+      "blank_string_count": 0
+    },
+    {
+      "column": "state",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 375,
+      "null_pct": 0.3459,
+      "unique_count": 84,
+      "unique_pct": 0.0775,
+      "blank_string_count": 0
+    },
+    {
+      "column": "country",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 356,
+      "null_pct": 0.3283,
+      "unique_count": 244,
+      "unique_pct": 0.225,
+      "blank_string_count": 0
+    },
+    {
+      "column": "device_id(s)",
+      "dtype": "object",
+      "rows": 108427,
+      "null_count": 7133,
+      "null_pct": 6.5786,
+      "unique_count": 96624,
+      "unique_pct": 89.1143,
+      "blank_string_count": 0
+    },
+    {
+      "column": "source",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 1648,
+      "null_pct": 1.5199,
+      "unique_count": 9,
+      "unique_pct": 0.0083,
+      "blank_string_count": 0
+    },
+    {
+      "column": "device_id",
+      "dtype": "object",
+      "rows": 108427,
+      "null_count": 101658,
+      "null_pct": 93.7571,
+      "unique_count": 2152,
+      "unique_pct": 1.9847,
+      "blank_string_count": 0
+    },
+    {
+      "column": "customer_pk",
+      "dtype": "float64",
+      "rows": 108427,
+      "null_count": 101855,
+      "null_pct": 93.9388,
+      "unique_count": 2003,
+      "unique_pct": 1.8473,
+      "blank_string_count": 0
+    },
+    {
+      "column": "updated_at",
+      "dtype": "object",
+      "rows": 108427,
+      "null_count": 101855,
+      "null_pct": 93.9388,
+      "unique_count": 3928,
+      "unique_pct": 3.6227,
+      "blank_string_count": 0
+    },
+    {
+      "column": "first_name_std",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 4216,
+      "unique_pct": 3.8883,
+      "blank_string_count": 0
+    },
+    {
+      "column": "last_name_std",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 4857,
+      "unique_pct": 4.4795,
+      "blank_string_count": 0
+    },
+    {
+      "column": "address_std",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 356,
+      "null_pct": 0.3283,
+      "unique_count": 96659,
+      "unique_pct": 89.1466,
+      "blank_string_count": 0
+    },
+    {
+      "column": "city_std",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 357,
+      "null_pct": 0.3293,
+      "unique_count": 37089,
+      "unique_pct": 34.2064,
+      "blank_string_count": 0
+    },
+    {
+      "column": "state_std",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 375,
+      "null_pct": 0.3459,
+      "unique_count": 84,
+      "unique_pct": 0.0775,
+      "blank_string_count": 0
+    },
+    {
+      "column": "country_std",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 356,
+      "null_pct": 0.3283,
+      "unique_count": 244,
+      "unique_pct": 0.225,
+      "blank_string_count": 0
+    },
+    {
+      "column": "email_std",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 1441,
+      "null_pct": 1.329,
+      "unique_count": 96171,
+      "unique_pct": 88.6965,
+      "blank_string_count": 0
+    },
+    {
+      "column": "phone_std",
+      "dtype": "float64",
+      "rows": 108427,
+      "null_count": 363,
+      "null_pct": 0.3348,
+      "unique_count": 96486,
+      "unique_pct": 88.9871,
+      "blank_string_count": 0
+    },
+    {
+      "column": "dob_std",
+      "dtype": "object",
+      "rows": 108427,
+      "null_count": 1380,
+      "null_pct": 1.2727,
+      "unique_count": 19458,
+      "unique_pct": 17.9457,
+      "blank_string_count": 0
+    },
+    {
+      "column": "signup_date_std",
+      "dtype": "object",
+      "rows": 108427,
+      "null_count": 1000,
+      "null_pct": 0.9223,
+      "unique_count": 4663,
+      "unique_pct": 4.3006,
+      "blank_string_count": 0
+    },
+    {
+      "column": "device_ids_std",
+      "dtype": "object",
+      "rows": 108427,
+      "null_count": 7133,
+      "null_pct": 6.5786,
+      "unique_count": 96624,
+      "unique_pct": 89.1143,
+      "blank_string_count": 0
+    },
+    {
+      "column": "first_name_std_pre3",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 658,
+      "null_pct": 0.6069,
+      "unique_count": 1334,
+      "unique_pct": 1.2303,
+      "blank_string_count": 0
+    },
+    {
+      "column": "last_name_std_pre3",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 1,
+      "null_pct": 0.0009,
+      "unique_count": 1479,
+      "unique_pct": 1.3641,
+      "blank_string_count": 0
+    },
+    {
+      "column": "email_local_pre3",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 2105,
+      "null_pct": 1.9414,
+      "unique_count": 568,
+      "unique_pct": 0.5239,
+      "blank_string_count": 0
+    },
+    {
+      "column": "email_domain_pre4",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 1441,
+      "null_pct": 1.329,
+      "unique_count": 24,
+      "unique_pct": 0.0221,
+      "blank_string_count": 0
+    },
+    {
+      "column": "phone_pre7",
+      "dtype": "float64",
+      "rows": 108427,
+      "null_count": 363,
+      "null_pct": 0.3348,
+      "unique_count": 91792,
+      "unique_pct": 84.6579,
+      "blank_string_count": 0
+    },
+    {
+      "column": "dob_year_std",
+      "dtype": "float64",
+      "rows": 108427,
+      "null_count": 1380,
+      "null_pct": 1.2727,
+      "unique_count": 59,
+      "unique_pct": 0.0544,
+      "blank_string_count": 0
+    },
+    {
+      "column": "phonetic_last_name",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 1228,
+      "unique_pct": 1.1326,
+      "blank_string_count": 0
+    },
+    {
+      "column": "phonetic_first_name",
+      "dtype": "str",
+      "rows": 108427,
+      "null_count": 0,
+      "null_pct": 0.0,
+      "unique_count": 993,
+      "unique_pct": 0.9158,
+      "blank_string_count": 0
+    }
+  ],
+  "duplicate_rows": 0,
+  "duplicate_customer_id": {
+    "unique_customer_id": 98935,
+    "duplicated_id_values": 6609,
+    "rows_in_duplicated_id_groups": 16101,
+    "group_size_distribution": {
+      "2": 4881,
+      "3": 719,
+      "4": 958,
+      "5": 10,
+      "6": 14,
+      "8": 27
+    }
+  },
+  "name_anomalies_first": {
+    "mixed_case_or_upper_count": 104914,
+    "digit_count": 1577,
+    "symbol_count": 3172,
+    "repeated_character_count": 22423
+  },
+  "name_anomalies_last": {
+    "mixed_case_or_upper_count": 104965,
+    "digit_count": 1620,
+    "symbol_count": 3156,
+    "repeated_character_count": 28045
+  },
+  "phone_anomalies": {
+    "contains_letters": 37957,
+    "contains_punctuation": 53912,
+    "length_distribution": {
+      "0": 363,
+      "3": 37,
+      "4": 3976,
+      "5": 223,
+      "7": 1,
+      "8": 87,
+      "9": 770,
+      "10": 51483,
+      "11": 8155,
+      "12": 3325,
+      "13": 8343,
+      "14": 8415,
+      "15": 12080,
+      "16": 4058,
+      "17": 2363,
+      "18": 4748
+    }
+  },
+  "identifier_coverage": {
+    "records": 108427,
+    "missing_email": 1441,
+    "missing_phone": 363,
+    "missing_dob": 380,
+    "missing_both_email_and_phone": 18,
+    "pct_unlinkable_by_current_rules": 0.0166,
+    "note": "Exact-equi-join rules cannot link a record whose email AND phone are both absent. This is a recall ceiling, not a duplicate count."
+  },
+  "top_values": {
+    "first_name": [
+      {
+        "first_name": "Michael",
+        "count": 1716
+      },
+      {
+        "first_name": "David",
+        "count": 1194
+      },
+      {
+        "first_name": "James",
+        "count": 1125
+      },
+      {
+        "first_name": "John",
+        "count": 1120
+      },
+      {
+        "first_name": "Jennifer",
+        "count": 1114
+      },
+      {
+        "first_name": "Christopher",
+        "count": 1069
+      },
+      {
+        "first_name": "Robert",
+        "count": 1012
+      },
+      {
+        "first_name": "William",
+        "count": 822
+      },
+      {
+        "first_name": "Matthew",
+        "count": 782
+      },
+      {
+        "first_name": "Joseph",
+        "count": 775
+      },
+      {
+        "first_name": "Jessica",
+        "count": 745
+      },
+      {
+        "first_name": "Daniel",
+        "count": 740
+      },
+      {
+        "first_name": "Lisa",
+        "count": 672
+      },
+      {
+        "first_name": "Brian",
+        "count": 658
+      },
+      {
+        "first_name": "Jason",
+        "count": 645
+      }
+    ],
+    "last_name": [
+      {
+        "last_name": "Smith",
+        "count": 1687
+      },
+      {
+        "last_name": "Johnson",
+        "count": 1390
+      },
+      {
+        "last_name": "Williams",
+        "count": 1162
+      },
+      {
+        "last_name": "Brown",
+        "count": 997
+      },
+      {
+        "last_name": "Jones",
+        "count": 997
+      },
+      {
+        "last_name": "Miller",
+        "count": 833
+      },
+      {
+        "last_name": "Davis",
+        "count": 756
+      },
+      {
+        "last_name": "Santoso",
+        "count": 637
+      },
+      {
+        "last_name": "Garcia",
+        "count": 603
+      },
+      {
+        "last_name": "Martinez",
+        "count": 592
+      },
+      {
+        "last_name": "Rodriguez",
+        "count": 588
+      },
+      {
+        "last_name": "Nugroho",
+        "count": 586
+      },
+      {
+        "last_name": "Hidayat",
+        "count": 573
+      },
+      {
+        "last_name": "Gunawan",
+        "count": 567
+      },
+      {
+        "last_name": "Wilson",
+        "count": 566
+      }
+    ],
+    "email": [
+      {
+        "email": NaN,
+        "count": 1441
+      },
+      {
+        "email": "shared1549@gmail.com",
+        "count": 11
+      },
+      {
+        "email": "shared1640@hotmail.com",
+        "count": 8
+      },
+      {
+        "email": "shared1774@gmail.com",
+        "count": 8
+      },
+      {
+        "email": "shared1105@yahoo.com",
+        "count": 7
+      },
+      {
+        "email": "shared1049@hotmail.com",
+        "count": 7
+      },
+      {
+        "email": "shared1510@yahoo.com",
+        "count": 7
+      },
+      {
+        "email": "shared1047@yahoo.com",
+        "count": 7
+      },
+      {
+        "email": "andi.gunawan763@company.co.id",
+        "count": 7
+      },
+      {
+        "email": "maya.wijaya322@outlook.com",
+        "count": 7
+      },
+      {
+        "email": "shared1129@yahoo.com",
+        "count": 6
+      },
+      {
+        "email": "shared1662@hotmail.com",
+        "count": 6
+      },
+      {
+        "email": "shared1176@yahoo.com",
+        "count": 6
+      },
+      {
+        "email": "shared1655@yahoo.com",
+        "count": 6
+      },
+      {
+        "email": "shared1161@gmail.com",
+        "count": 6
+      }
+    ],
+    "phone": [
+      {
+        "phone_number": NaN,
+        "count": 363
+      },
+      {
+        "phone_number": "001-275-793-6721",
+        "count": 10
+      },
+      {
+        "phone_number": "909.483.2481x6822",
+        "count": 10
+      },
+      {
+        "phone_number": "9.855.655.722",
+        "count": 9
+      },
+      {
+        "phone_number": "586-049-5136",
+        "count": 9
+      },
+      {
+        "phone_number": "1.548.782.024",
+        "count": 9
+      },
+      {
+        "phone_number": "001-836-144-1830",
+        "count": 9
+      },
+      {
+        "phone_number": "+1-909-524-5319x40721",
+        "count": 9
+      },
+      {
+        "phone_number": "+1-612-587-5981x73649",
+        "count": 9
+      },
+      {
+        "phone_number": "434.256.8275x442",
+        "count": 9
+      },
+      {
+        "phone_number": "+1-510-098-1404x9349",
+        "count": 9
+      },
+      {
+        "phone_number": "249-826-8747",
+        "count": 9
+      },
+      {
+        "phone_number": "275.276.5852x01711",
+        "count": 8
+      },
+      {
+        "phone_number": "001-340-838-2879x01375",
+        "count": 8
+      },
+      {
+        "phone_number": "2672843186",
+        "count": 8
+      }
+    ],
+    "address": [
+      {
+        "address": NaN,
+        "count": 356
+      },
+      {
+        "address": "Jl. Sudirman No. 195",
+        "count": 12
+      },
+      {
+        "address": "Jl. Merdeka No. 405",
+        "count": 11
+      },
+      {
+        "address": "Jl. Thamrin No. 283",
+        "count": 11
+      },
+      {
+        "address": "Jl. Thamrin No. 44",
+        "count": 11
+      },
+      {
+        "address": "Jl. Asia Afrika No. 80",
+        "count": 10
+      },
+      {
+        "address": "Jl. Merdeka No. 586",
+        "count": 10
+      },
+      {
+        "address": "Jl. Thamrin No. 265",
+        "count": 10
+      },
+      {
+        "address": "Jl. Thamrin No. 789",
+        "count": 10
+      },
+      {
+        "address": "Jl. Thamrin No. 522",
+        "count": 9
+      },
+      {
+        "address": "Jl. Merdeka No. 992",
+        "count": 9
+      },
+      {
+        "address": "Jl. Sudirman No. 559",
+        "count": 9
+      },
+      {
+        "address": "Jl. Sudirman No. 313",
+        "count": 9
+      },
+      {
+        "address": "Jl. Merdeka No. 597",
+        "count": 9
+      },
+      {
+        "address": "Jl. Sudirman No. 215",
+        "count": 9
+      }
+    ],
+    "device_ids": [
+      {
+        "device_id(s)": NaN,
+        "count": 7133
+      },
+      {
+        "device_id(s)": "33679111-f74e-4647-adb0-71037c9387f4",
+        "count": 5
+      },
+      {
+        "device_id(s)": "2e1ce2ff-2b00-46e4-ac0c-d49b8002450d",
+        "count": 4
+      },
+      {
+        "device_id(s)": "df987435-1583-423c-8646-d922a91a45f2",
+        "count": 4
+      },
+      {
+        "device_id(s)": "499338f8-6b97-4a6d-b53c-d06590d04b1f",
+        "count": 4
+      },
+      {
+        "device_id(s)": "334f2623-6707-4db4-b4c4-e712ee3b4e11",
+        "count": 4
+      },
+      {
+        "device_id(s)": "c0f5ca5e-acc8-493b-b9c1-e0c33f544bf9",
+        "count": 4
+      },
+      {
+        "device_id(s)": "f24a7d1d-e445-4f49-9d10-281db893c23d",
+        "count": 4
+      },
+      {
+        "device_id(s)": "3e3635be-2f30-4dcf-ab18-5a151ffd7701",
+        "count": 4
+      },
+      {
+        "device_id(s)": "7c01f602-5a59-41c9-84ce-4de2293b04ea",
+        "count": 4
+      },
+      {
+        "device_id(s)": "ece39bbb-4824-460a-ac4e-37aaf6234a0e",
+        "count": 4
+      },
+      {
+        "device_id(s)": "751d4410-3d73-4f4c-b432-10a0213b925f",
+        "count": 3
+      },
+      {
+        "device_id(s)": "eee90259-6af3-43d5-b155-8346ce75eedb",
+        "count": 3
+      },
+      {
+        "device_id(s)": "9a017a61-a399-4d76-8858-ed9c4511fa1e",
+        "count": 3
+      },
+      {
+        "device_id(s)": "9aaec221-55ee-4ec0-b914-3c51ea8b2d2f",
+        "count": 3
+      }
+    ]
+  }
+}

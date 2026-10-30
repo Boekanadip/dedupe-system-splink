@@ -1,0 +1,157 @@
+# ALUR RESOLUSI ENTITAS - PROSES RINCI
+
+## 1. LAYER INPUT
+- Menerima rekaman dari CSV atau sumber basis data
+- Kolom yang diperlukan: first_name, last_name, email, phone_number
+- Validasi skema dipaksakan sebelum diproses
+- Sistem harus tidak mengasumsikan source customer_id bersifat unik atau kebenaran mutlak
+
+## 2. GENERASI ID REKAMAN
+- Menghasilkan record_id unik internal untuk setiap rekaman fisik
+- Jika sumber menyediakan record_id, simpan/masukkan; jika tidak, buat internal
+- record_id adalah pengenal internal, bukan identitas pelanggan
+
+## 3. PELINDUNGAN DATA ASLI
+- Simpan nilai input asli tanpa perubahan
+- Nilai asli harus disimpan persis seperti diterima
+- Nilai terstandarisasi disimpan di bidang terpisah
+
+## 4. LAYER STANDARISASI
+- Transformasi data input ke format terstandarisasi
+- Bidang terstandarisasi yang dibuat:
+  - first_name_std, last_name_std
+  - email_std, phone_std
+  - address_std, city_std, state_std, country_std
+  - dob_std, signup_date_std
+- Operasi:
+  - Teks: lowercase, trim, normalisasi spasi, normalisasi tanda baca
+  - Normalisasi telepon: ekstrak digit, hapus awalan internasional '00', hapus awalan domestik '0'
+  - Normalisasi email: lowercase, trim
+  - Normalisasi tanggal: tangani ambigu dmy/mdy berdasarkan bukti (day>12 atau month>12)
+- Nilai asli disimpan; nilai terstandarisasi tidak pernah menggantikan nilai asli
+
+## 5. REKAYASA FITUR
+- Menghasilkan fitur turunan yang relevan untuk pengaitan dengan tujuan yang terdokumentasi
+- Contoh:
+  - nama dinormalisasi (cocok kecuali typo)
+  - digit telepon/suffix (cocok suffix)
+  - bagian lokal domain email (cocok domain)
+  - panjang nama/prefix (cocok pola)
+  - jumlah perangkat (grup berdasarkan perangkat)
+  - indikator nilai hilang (sinyal kualitas data)
+  - kunci blokir (cocok tepat)
+- Jangan membuat banyak fitur tanpa alasan yang legit
+
+## 6. STRATEGI PEMBLOKIRAN
+- Menghasilkan pasangan kandidat untuk menghindari perbandingan semua pasangan (all-pairs)
+- Strategi blokir yang dapat dikonfigurasi:
+  - exact_email
+  - exact_phone
+  - name_and_dob
+  - name_and_city
+  - city_dob
+  - phone_prefix
+  - name_prefix_state
+  - email_domain_name
+  - city_state_dob_year
+  - phone_last4
+  - email_domain_fuzzy
+  - city_state_dob_fuzzy
+  - name_fuzzy_last4
+- Aturan blokir harus dapat diukur:
+  - jumlah pasangan kandidat
+  - cakupan
+  - waktu eksekusi
+  - distribusi ukuran blokir
+- Aturan tidak boleh dihardcoding; harus konfigurable di config.py
+
+## 7. RESOLUSI ENTITAS (SPLINK)
+- Memiliki skor probabilistik pada pasangan kandidat
+- Bukti perbandingan per bidang:
+  - first_name: tepat/kabur/berbeda/null
+  - email: tepat/berbeda/null
+  - phone: tepat/kabur/berbeda
+  - dob: tepat/berbeda
+- Menahan bukti perbandingan untuk kejelasan penjelasan
+- Gunakan ambang batas yang dapat dikonfigurasi:
+  - P < T_LOW → NON_MATCH
+  - T_LOW ≤ P < T_HIGH → REVIEW
+  - P ≥ T_HIGH → MATCH
+- Ambang batas harus dievaluasi secara empiris, bukan dipaksakan
+
+## 8. LAYER KEPUTUSAN
+- Keputusan keluaran: MATCH, REVIEW, NEW/NON-MATCH
+- Ambang batas dapat dikonfigurasi berdasarkan evaluasi
+- Jangan hardcode ambang batas dalam logika bisnis
+- Gunakan label tersedia (silver/gold) untuk evaluasi
+
+## 9. PROSES TINJAUAN MANUSIA
+- Pasangan yang memerlukan REVIEW masuk ke antrian tinjauan
+- Hasil tinjauan disimpan di review_queue.csv
+- Tinjau melihat perbandingan sisi per sisi nilai
+- Tinjau memilih match/no_match, menyimpan keputusan
+- Penyuntingan ditulis langsung ke review_queue.csv
+- Pasangan yang ditinjau menjadi label emas untuk pelatihan selanjutnya
+
+## 10. PENGOLAHAN ID ENTITAS
+- Rekaman dengan entity_id yang sama mewakili entitas dunia nyata yang sama
+- Entity ID independen dari customer_id sumber
+- Mempertahankan anggota entitas dan hubungan sumber
+
+## 11. UPDATE MASTER/HISTORI
+- Memperbarui representasi utama berdasarkan keputusan
+- Menyimpan silsilah dan sumber entitas
+- Jangan hancurkan nilai asli
+- Penugasan entitas dapat diikuti kembali ke sumber rekaman
+
+## 12. PEMONITORING DAN FEEDBACK
+- Simpan hasil tinjauan untuk evaluasi
+- Pantau metrik: tingkat cocak, tingkat tinjauan, tingkat falso positif/negatif
+- Deteksi pergantian data dan degradasi
+- Pemicu pelatihan ulang jika dibuktikan:
+  - Penurunan kinerja
+  - Pergeseran data
+  - Sumber data baru
+  - Perubahan skema
+  - Kasus yang ditinjau menumpuk
+- Jangan retrain secara otomatis saat data baru tiba
+- Evaluasi offline sebelum promosi
+
+## 13. Siklus Model
+- Versi model dan konfigurasi
+- Pelatihan ulang dipicu oleh bukti:
+  - Penurunan kinerja
+  - Pergeseran data
+  - Sumber data baru
+  - Perubahan skema
+  - Kasus yang ditinjau menumpuk
+- Jangan retrain secara otomatis saat data baru tiba
+- Evaluasi offline sebelum promosi
+
+## 14. PENGOLAHAN INKRMENTAL
+- Memproses batch baru tanpa reprosesing seluruh data historis
+- Gunakan penanda sumber stabil (updated_at)
+- Melakukan proses perubahan untuk ditinjau sebelum diterapkan
+- Pemrosesan penuh untuk pelatihan ulang atau jalur pertama tanpa model
+
+## 15. PERTIMBANGAN SKALABILITAS
+- Dirancang untuk data produksi > 50k rekaman
+- Hindari operasi O(n²) yang tidak perlu
+- Melakukan benchmarking pada pembuatan pasangan kandidat
+- Jaga blokir dapat dikonfigurasi
+- Hindari pemuatan data yang tidak perlu ke memori
+- Pisahkan logika bisnes dari backend eksekusi
+- Pertimbangkan partisi/eksekusi terdistribusi ketika dipertimbangkan
+
+KEY FLOW:
+RAW DATA → SCHEMA VALIDATION → RECORD ID → PRESERVE RAW → STANDARDIZE → FEATURE ENGINEERING → BLOCKING → ENTITY RESOLUTION → DECISION → ENTITY ASSIGNMENT → MASTER/HISTORY UPDATE → MONITORING/FEEDBACK → MODEL LIFECYCLE
+
+DECISION THRESHOLDS:
+P < T_LOW (e.g., 0.35) → NON_MATCH
+T_LOW ≤ P < T_HIGH (e.g., 0.84) → REVIEW
+P ≥ T_HIGH (e.g., 0.84) → MATCH
+
+PROCESS FLOWS:
+- New batch: standardize → score → link → update map → recompute master → queue review
+- Existing entity linkage: resolve new entities against master data
+- Incremental: process only new records, avoid reprocessing old data

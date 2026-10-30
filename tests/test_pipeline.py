@@ -1,4 +1,3 @@
-"""Test that the pipeline components work."""
 import os
 import sys
 from pathlib import Path
@@ -34,7 +33,6 @@ def test_env_loaded():
 
 
 def test_requirements():
-    """Test that required packages are installed."""
     required = [
         "pandas", "numpy", "pyarrow", "duckdb", 
         "psutil", "plotly", "splink", "streamlit"
@@ -76,7 +74,6 @@ def test_fastapi_endpoints():
 
 
 def test_docker_compose():
-    """Test docker-compose.yml exists."""
     compose_path = PROJECT_ROOT / "docker-compose.yml"
     if compose_path.exists():
         print("✓ docker-compose.yml exists")
@@ -87,7 +84,6 @@ def test_docker_compose():
 
 
 def test_makefile():
-    """Test Makefile exists."""
     makefile_path = PROJECT_ROOT / "Makefile"
     if makefile_path.exists():
         print("✓ Makefile exists")
@@ -98,7 +94,6 @@ def test_makefile():
 
 
 def test_quickstart():
-    """Test quickstart.ps1 exists."""
     ps1_path = PROJECT_ROOT / "quickstart.ps1"
     if ps1_path.exists():
         print("✓ quickstart.ps1 exists")
