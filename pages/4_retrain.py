@@ -19,15 +19,13 @@ from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT, pipeline_locked
 from src.evaluation_freshness import compare_provenance, current_provenance
 from src.run_all import RUN_SUMMARY_PATH
 from src.ui import (
-    workflow_step,
     format_count,
     format_duration,
     format_history_table,
     format_rate,
     format_threshold,
-    monitoring_sidebar,
-    page_guide,
     page_header,
+    render_sidebar,
     stratum_label,
 )
 
@@ -39,9 +37,7 @@ page_header(
     "Halaman ini tempat mengubah batas kepastian dan melatih ulang sistem. "
     "Semuanya harus diklik manual — sistem tidak pernah mengubah dirinya sendiri.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-workflow_step(__file__)
+render_sidebar("retrain")
 
 MODELS_DIR = PROJECT_ROOT / "models"
 LOCK = OUTPUT_DIR / ".retraining"

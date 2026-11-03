@@ -1,20 +1,20 @@
 """Database connection for CRM entity resolution."""
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
-from dotenv import load_dotenv
-from pathlib import Path
 
-# Load .env file from project root
+# Load .env file from project root (force reload)
 env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=env_path, override=True)
 
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "crm")
-POSTGRES_USER = os.environ.get("POSTGRES_USER", "crm_user")
-POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "crm_password_2026")
+POSTGRES_USER = os.environ.get("POSTGRES_USER", "postgres")
+POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "postgres")
 
 DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 

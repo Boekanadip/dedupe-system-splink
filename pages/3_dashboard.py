@@ -13,13 +13,12 @@ import sys
 from pathlib import Path
 
 from src.ui import (
-    workflow_step,
     DECISION_LABEL,
     format_rate,
-    monitoring_sidebar,
-    page_guide,
     page_header,
+    render_sidebar,
 )
+from src.splink_model import get_valid_comparison_columns
 from src.config import (
     ENTITY_MAP_PATH,
     PROCESSED_DATA_PATH,
@@ -35,10 +34,6 @@ page_header(
     "Kondisi hasil deduplikasi sekarang: berapa customer yang berhasil dipastikan "
     "dan berapa yang masih perlu diperiksa.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-workflow_step(__file__)
-
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs"
 LOCK = OUTPUT_DIR / ".retraining"
 
@@ -61,13 +56,6 @@ page_header(
     "Kondisi hasil deduplikasi sekarang: berapa customer yang berhasil dipastikan "
     "dan berapa yang masih perlu diperiksa.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-workflow_step(__file__)
-
-OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs"
-LOCK = OUTPUT_DIR / ".retraining"
-
 # =============================================================================
 # LAPORAN PEMILIHAN KOLOM DINAMIS
 # =============================================================================
@@ -126,10 +114,7 @@ page_header(
     "Kondisi hasil deduplikasi sekarang: berapa customer yang berhasil dipastikan "
     "dan berapa yang masih perlu diperiksa.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-workflow_step(__file__)
-
+render_sidebar("dashboard")
 # =============================================================================
 # Metrik Kunci
 # =============================================================================
@@ -156,6 +141,7 @@ if LOCK.exists():
 eval_path = OUTPUT_DIR / "evaluation_report.json"
 report = json.loads(eval_path.read_text(encoding="utf-8")) if eval_path.exists() else {}
 report_meta = read_meta(ENTITY_MAP_PATH)
+entity_meta = report_meta
 scope = entity_meta.get("scope", report.get("scope", "full"))
 full_scope = scope != "sample"
 pred_path = predictions_path(full=full_scope)
@@ -182,6 +168,17 @@ candidate_pairs = int(decision_counts.sum())
 review_pairs = int(decision_counts.get("REVIEW", 0))
 predictions_available = pred_path.exists() and "decision" in preds
 
+entity_count = 0
+record_count = 0
+if ENTITY_MAP_PATH.exists():
+    entity_map = pd.read_parquet(ENTITY_MAP_PATH)
+    entity_count = int(entity_map["entity_id"].nunique()) if "entity_id" in entity_map.columns else 0
+    record_count = len(entity_map)
+
+live_entities = entity_count
+live_records = record_count
+records_merged = max(0, live_records - live_entities)
+
 # Distribusi keputusan
 st.subheader("Hasil keputusan")
 c1, c2 = st.columns([1, 4])
@@ -203,12 +200,12 @@ else:
     # Buat histogram keputusan
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=counts.index,
-        y=counts.values,
-        text=counts.values,
+        x=decision_counts.index,
+        y=decision_counts.values,
+        text=decision_counts.values,
         textposition="outside",
-        marker_color="#f2a44a" if counts.index[0] == "MATCH" else 
-               "#4cc9f0" if counts.index[0] == "REVIEW" else "#666",
+        marker_color="#f2a44a" if len(decision_counts) and decision_counts.index[0] == "MATCH" else 
+               "#4cc9f0" if len(decision_counts) and decision_counts.index[0] == "REVIEW" else "#666",
         ))
     fig.update_layout(
         title="Distribusi Keputusan",
@@ -219,14 +216,12 @@ else:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# =============================================================================
-# Ekspor Hasil
-# =============================================================================
 st.subheader("📊 Unduh / Simpan Hasil")
 st.caption(
     "Dua opsi di bawah berdiri sendiri: mengunduh CSV tidak memerlukan database, "
     "dan menyimpan ke database tidak memerlukan unduhan."
 )
+c_dl, c_db = st.columns(2)
 
 # Buat DataFrame ekspor dengan kolom yang relevan
 export_df = preds.copy()

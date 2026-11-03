@@ -78,7 +78,7 @@ def build_name_comparison() -> cl.CustomComparison:
 
 DETERMINISTIC_RULES = [
     block_on("email_std"),
-    block_on("phone_pre7"),  # KEMBALIKAN ke original: phone_pre7 penting
+    block_on("phone_pre7"),  
 ]
 
 BENCHMARK_RULES = load_benchmark_rules()
@@ -161,7 +161,7 @@ def _field_match_term(column: str) -> str:
 
 
 def build_contact_comparison() -> cl.CustomComparison:
-    """Kontak: email + telepon. Moderate m-prob: balance recall vs precision."""
+
     contact_null = (
         "(email_std_l IS NULL AND phone_std_l IS NULL) "
         "OR (email_std_r IS NULL AND phone_std_r IS NULL)"
@@ -206,7 +206,7 @@ def build_contact_comparison() -> cl.CustomComparison:
 
 
 def build_location_comparison() -> cl.CustomComparison:
-    """Alamat: 4 field + komponen individual untuk coverage lebih baik."""
+
     location_null = (
         "(address_std_l IS NULL AND city_std_l IS NULL) "
         "OR (address_std_r IS NULL AND city_std_r IS NULL)"
@@ -260,7 +260,6 @@ def build_location_comparison() -> cl.CustomComparison:
 
 
 def build_dob_comparison() -> cl.CustomComparison:
-    """Tanggal lahir: persis sama OR mendekat (year)."""
     dob_null = "dob_std_l IS NULL OR dob_std_r IS NULL"
     match_exact = (
         "dob_std_l IS NOT NULL AND dob_std_r IS NOT NULL AND dob_std_l = dob_std_r"
@@ -309,28 +308,6 @@ def build_settings():
 
 
 def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
-    """
-    Build Splink Settings based on user-selected columns for dynamic record linkage.
-    
-    Parameters
-    ----------
-    selected_columns : list[str]
-        List of standard column names selected by the user for comparison, e.g., 
-        ['first_name_std', 'email_std', 'dob_std'].
-        Valid options: first_name_std, last_name_std, email_std, phone_std,
-        address_std, city_std, state_std, country_std, dob_std, dob_year_std.
-    
-    Returns
-    -------
-    dict
-        Dictionary containing Splink configuration with comparisons and blocking rules,
-        ready to be passed to splink.SettingsCreator or Linker.
-        
-    Raises
-    ------
-    ValueError
-        If any selected column is not in the valid set of standard columns.
-    """
     
     # Validasi: pastikan semua kolom yang dipilih ada di daftar valid
     valid_columns = {
@@ -451,12 +428,16 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
         state_match = (
             "state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r"
         )
+        country_match = (
+            "country_std_l IS NOT NULL AND country_std_r IS NOT NULL AND country_std_l = country_std_r"
+        )
         
         levels = [
             CustomLevel(location_null, label_for_charts="lokasi kosong").configure(is_null_level=True),
             CustomLevel(full_match, label_for_charts="alamat + city + state cocok").configure(m_probability=0.40),
             CustomLevel(city_match, label_for_charts="city cocok").configure(m_probability=0.25),
             CustomLevel(state_match, label_for_charts="state cocok").configure(m_probability=0.30),
+            CustomLevel(country_match, label_for_charts="country cocok").configure(m_probability=0.20),
             ElseLevel().configure(m_probability=0.10),
         ]
         comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="location"))
@@ -507,7 +488,25 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
     
     # Default blocking jika hanya address yang dipilih (pakai city_std)
     if not blocking_rules and has_location:
-        blocking_rules.append(blockon("city_std"))
+        blocking_rules.append(block_on("city_std"))
+    
+    # Blocking cadangan untuk case: tidak ada blocking utama (email/phone/city/dob)
+    # Gunakan dob_year + city untuk recall yang lebih baik (fuzzy match via Splink)
+    if not blocking_rules and has_dob:
+        if "dob_year_std" in selected_columns:
+            blocking_rules.append(block_on("dob_year_std"))
+        elif "dob_std" in selected_columns:
+            blocking_rules.append(block_on("dob_std"))
+    
+    if not blocking_rules and has_contact:
+        if "phone_std" in selected_columns:
+            blocking_rules.append(block_on("phone_std"))
+        elif "email_std" in selected_columns:
+            blocking_rules.append(block_on("email_std"))
+    
+    # Fallback terakhir: gunakan last_name_std sebagai blocking (hampir pasti ada)
+    if not blocking_rules:
+        blocking_rules.append(block_on("last_name_std"))
     
     return {
         "comparisons": comparisons,
@@ -528,22 +527,7 @@ def get_valid_comparison_columns() -> set:
 
 # Fungsi bantu: ambil nama kolom dari dataframe yang sudah standardisasi
 def infer_selected_columns_from_df(df: pd.DataFrame, preferred: list[str] | None = None) -> list[str]:
-    """
-    Menganalisis dataframe dan mengembalikan daftar kolom standar yang tersedia.
-    Fungsi ini membantu saat dataframe belum penuh atau kolom nama berbeda.
     
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Dataframe yang sudah melalui proses standardisasi.
-    preferred : list[str] | None, optional
-        Daftar kolom yang diinginkan pengguna, dicek terhadap kolom yang ada di df.
-        
-    Returns
-    -------
-    list[str]
-        Daftar kolom standar yang ditemukan dan valid.
-    """
     valid = get_valid_comparison_columns()
     # Cari interseksi antara kolom di df dan valid columns
     available = [c for c in df.columns if c in valid]
@@ -560,25 +544,7 @@ def infer_selected_columns_from_df(df: pd.DataFrame, preferred: list[str] | None
 
 # Fungsi bantu: rangkum decision dari prediksi dengan kolom yang dipilih
 def add_decision_dynamic(pred_df: pd.DataFrame, match_threshold: float = 0.84, review_threshold: float = 0.35) -> pd.DataFrame:
-    """
-    Menambahkan kolom decision (MATCH/REVIEW/NON_MATCH) berdasarkan match_probability.
-    Fungsi ini adalah versi dinamis dari add_decision standar, memungkinkan threshold
-    dikonfigurasi per-runtime.
     
-    Parameters
-    ----------
-    pred_df : pd.DataFrame
-        DataFrame hasil inferensi Splink yang harus memiliki kolom match_probability.
-    match_threshold : float, optional
-        Ambang bawah untuk kategori MATCH (default 0.84).
-    review_threshold : float, optional
-        Ambang bawah untuk kategori REVIEW (default 0.35).
-        
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame dengan kolom decision yang ditambahkan.
-    """
     out = pred_df.copy()
     out["decision"] = "NON_MATCH"
     out.loc[out["match_probability"] >= match_threshold, "decision"] = "MATCH"
@@ -647,38 +613,173 @@ def apply_business_rules(pred_df: pd.DataFrame, verbose: bool = False) -> pd.Dat
     return out
 
 
+def _fuzzy_match_candidates(
+    new_df: pd.DataFrame,
+    existing_df: pd.DataFrame,
+    columns: list[str],
+    threshold: float = 80.0,
+) -> pd.Series:
+    """Fuzzy matching untuk kandidat: nama/kota mirip juga ikut terdeteksi."""
+    from rapidfuzz import fuzz, process
+
+    candidate_mask = pd.Series(False, index=existing_df.index)
+
+    # Exact match untuk email dan phone (akurasi penting)
+    exact_fields = ["email_std", "phone_std"]
+    for col in exact_fields:
+        if col in columns and col in new_df.columns and col in existing_df.columns:
+            values = new_df[col].dropna().astype(str)
+            values = values[values.str.len() > 0]
+            if not values.empty:
+                candidate_mask |= existing_df[col].astype(str).isin(values)
+
+    # Fuzzy match untuk nama dan kota (ketemu duplikat beda email)
+    fuzzy_fields = ["first_name_std", "last_name_std", "city_std"]
+    for col in fuzzy_fields:
+        if col in columns and col in new_df.columns and col in existing_df.columns:
+            new_values = new_df[col].dropna().astype(str)
+            new_values = new_values[new_values.str.len() > 1]
+            existing_values = existing_df[col].dropna().astype(str)
+            existing_unique = existing_values.unique().tolist()
+
+            for _, nv in new_values.items():
+                if pd.isna(nv) or len(str(nv)) < 2:
+                    continue
+                matches = process.extract(
+                    str(nv), existing_unique,
+                    scorer=fuzz.ratio,
+                    score_cutoff=threshold,
+                )
+                if matches:
+                    similar_values = [m[0] for m in matches]
+                    candidate_mask |= existing_df[col].astype(str).isin(similar_values)
+
+    return candidate_mask
+
+
+def _candidate_rows_for_new_records(
+    new_df: pd.DataFrame,
+    existing_df: pd.DataFrame,
+    selected_columns: list[str] | None = None,
+    fuzzy_threshold: float = 80.0,
+) -> pd.DataFrame:
+    """Pilih kandidat existing via exact + fuzzy blocking; tanpa full pair scan."""
+    fields = selected_columns or [
+        "email_std", "phone_std", "last_name_std", "first_name_std",
+        "city_std", "dob_year_std",
+    ]
+    available = [c for c in fields if c in new_df.columns and c in existing_df.columns]
+    if not available:
+        raise ValueError("Tidak ada blocking column yang sama pada data baru dan existing")
+
+    candidate_mask = _fuzzy_match_candidates(new_df, existing_df, available, fuzzy_threshold)
+
+    candidates = existing_df.loc[candidate_mask]
+    return pd.concat([new_df, candidates], ignore_index=True)
+
+
+def predict_new_records(
+    new_df: pd.DataFrame,
+    existing_df: pd.DataFrame,
+    model: dict,
+    selected_columns: list[str] | None = None,
+    verbose: bool = True,
+) -> tuple[pd.DataFrame, object]:
+    """Score record baru terhadap kandidat existing, tanpa retraining/full pair scan."""
+    if "record_id" not in new_df or "record_id" not in existing_df:
+        raise ValueError("new_df dan existing_df wajib memiliki record_id")
+    new_ids = set(new_df["record_id"])
+    candidates = _candidate_rows_for_new_records(new_df, existing_df, selected_columns)
+    predictions, linker = train_and_predict(
+        candidates, verbose=verbose, model=model, selected_columns=selected_columns
+    )
+    predictions = predictions[
+        predictions["record_id_l"].isin(new_ids) | predictions["record_id_r"].isin(new_ids)
+    ].copy()
+    predictions["review_status"] = "pending"
+    return predictions, linker
+
+
 def train_and_predict(
     df: pd.DataFrame,
     verbose: bool = True,
     model: dict | None = None,
+    selected_columns: list[str] | None = None,
+    max_pairs: int = 20_000,
 ) -> tuple[pd.DataFrame, object]:
 
     if model is not None:
         db_api = DuckDBAPI()
-        sdf = db_api.register_table(df, table_name="dedup")
-        linker = Linker(sdf, model)
+        db_api.register_multiple_tables([df], ['input_data'], overwrite=True)
+        linker = Linker('input_data', model, db_api)
         if verbose:
             print("Loaded saved model — skipping EM training (MC section 15).")
         preds = add_decision(linker.inference.predict().as_pandas_dataframe())
         return apply_business_rules(preds, verbose=verbose), linker
 
-    db_api = DuckDBAPI()
-    # register_table returns a DuckDBDataFrame; Linker needs pandas
-    linker = Linker(df, build_settings(), db_api=db_api)
+    # Batas DuckDB: mencegah konsumsi RAM >80% di laptop 16GB
+    import duckdb
+    duckdb.execute("SET memory_limit='6GB'")
+    duckdb.execute("SET threads=4")
 
+    db_api = DuckDBAPI()
+    
+    # Gunakan settings dinamis jika kolom dipilih, else built-in
+    if selected_columns is not None:
+        settings_dict = build_dynamic_settings_from_columns(selected_columns)
+        comparisons = settings_dict["comparisons"]
+        blocking_rules = settings_dict["blocking_rules"]
+    else:
+        comparisons = []
+        blocking_rules = []
+        # fallback ke build_settings jika tidak ada seleksi
+        db_api.register_multiple_tables([df], ['input_data'], overwrite=True)
+        linker = Linker('input_data', build_settings(), db_api)
+        if verbose:
+            print("Estimating model parameters with EM...")
+        linker.training.estimate_probability_two_random_records_match(
+            DETERMINISTIC_RULES, recall=LAMBDA_RECALL_ASSUMPTION
+        )
+        linker.training.estimate_u_using_random_sampling(max_pairs=max_pairs, seed=RANDOM_SEED)
+        for name, rule in TRAINING_RULES:
+            if verbose:
+                print(f"EM on {name}")
+            linker.training.estimate_parameters_using_expectation_maximisation(rule)
+        pred_df = add_decision(linker.inference.predict().as_pandas_dataframe())
+        return apply_business_rules(pred_df, verbose=verbose), linker
+    
+    # Build linker with dynamic settings + EM training
+    settings = SettingsCreator(
+        link_type="dedupe_only",
+        unique_id_column_name="record_id",
+        comparisons=comparisons,
+        blocking_rules_to_generate_predictions=blocking_rules,
+    )
+    db_api.register_multiple_tables([df], ['input_data'], overwrite=True)
+    sdf = db_api.table_to_splink_dataframe('input_data', 'input_data')
+    linker = Linker('input_data', settings, db_api)
+    
     if verbose:
         print("Estimating model parameters with EM...")
-
+    
     linker.training.estimate_probability_two_random_records_match(
         DETERMINISTIC_RULES, recall=LAMBDA_RECALL_ASSUMPTION
     )
-    linker.training.estimate_u_using_random_sampling(max_pairs=100_000_000, seed=RANDOM_SEED)
-
-    for name, rule in TRAINING_RULES:
-        if verbose:
-            print(f"EM on {name}")
-        linker.training.estimate_parameters_using_expectation_maximisation(rule)
-
+    linker.training.estimate_u_using_random_sampling(max_pairs=max_pairs, seed=RANDOM_SEED)
+    
+    # EM training: pakai dynamic blocking_rules jika ada, else TRAINING_RULES global
+    if blocking_rules:
+        # blocking_rules already list of block_on(...) from build_dynamic_settings_from_columns
+        for i, rule in enumerate(blocking_rules):
+            if verbose:
+                print(f"EM on dynamic block {i}")
+            linker.training.estimate_parameters_using_expectation_maximisation(rule)
+    else:
+        for name, rule in TRAINING_RULES:
+            if verbose:
+                print(f"EM on {name}")
+            linker.training.estimate_parameters_using_expectation_maximisation(rule)
+    
     pred_df = add_decision(linker.inference.predict().as_pandas_dataframe())
     return apply_business_rules(pred_df, verbose=verbose), linker
 
@@ -705,10 +806,41 @@ def main() -> None:
             "'latest' for the newest saved version."
         ),
     )
+    parser.add_argument(
+        "--columns",
+        metavar="COL1,COL2,...",
+        default=None,
+        help=(
+            "Comma-separated list of columns to use for dynamic matching. "
+            "Valid: first_name_std, last_name_std, email_std, phone_std, "
+            "address_std, city_std, state_std, country_std, dob_std, dob_year_std"
+        ),
+    )
+    parser.add_argument(
+        "--max-pairs",
+        type=int,
+        default=10_000,
+        help="Max pairs for EM sampling (default: 10000). Use 1-5M for production.",
+    )
+    parser.add_argument(
+        "--new-data",
+        metavar="PATH",
+        help="Parquet berisi record baru; wajib bersama --existing-data dan --reuse-model.",
+    )
+    parser.add_argument(
+        "--existing-data",
+        metavar="PATH",
+        help="Parquet existing standardized data untuk kandidat incremental.",
+    )
     args = parser.parse_args()
 
+    if bool(args.new_data) != bool(args.existing_data):
+        raise SystemExit("--new-data dan --existing-data harus digunakan bersama")
+    if args.new_data and not args.reuse_model:
+        raise SystemExit("Mode incremental wajib memakai --reuse-model PATH atau latest")
+
     started = time.perf_counter()
-    df = load_data(full=args.full)
+    df = pd.read_parquet(args.existing_data) if args.existing_data else load_data(full=args.full)
 
     saved = None
     reused_from = None
@@ -726,7 +858,24 @@ def main() -> None:
         given = Path(args.reuse_model)
         reused_from = given.name if given.is_dir() else given.parent.name
 
-    pred_df, linker = train_and_predict(df, model=saved)
+    selected_columns = (
+        [c.strip() for c in args.columns.split(",")] if args.columns else None
+    )
+    if args.new_data:
+        new_df = pd.read_parquet(args.new_data)
+        pred_df, linker = predict_new_records(
+            new_df,
+            df,
+            saved,
+            selected_columns=selected_columns,
+        )
+    else:
+        pred_df, linker = train_and_predict(
+            df,
+            model=saved,
+            selected_columns=selected_columns,
+            max_pairs=args.max_pairs,
+        )
     out_path = predictions_path(full=args.full)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_parquet(pred_df, out_path)
@@ -782,6 +931,14 @@ def main() -> None:
             f"non-match rate {counts.get('NON_MATCH', 0) / total:.4%}"
         )
     print(f"Saved: {out_path}")
+    
+    # Export to CSV
+    csv_path = out_path.with_suffix(".csv")
+    cols = ["record_id_l", "record_id_r", "match_probability", "match_weight", "decision", "review_status"]
+    cols = [c for c in cols if c in pred_df.columns]
+    pred_df[cols].to_csv(csv_path, index=False)
+    print(f"CSV: {csv_path}")
+    
     print(pred_df[[c for c in ["record_id_l", "record_id_r", "match_probability", "match_weight", "decision"] if c in pred_df.columns]].head(20))
 
 

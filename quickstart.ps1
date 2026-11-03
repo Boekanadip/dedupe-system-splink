@@ -108,7 +108,7 @@ try {
 Write-Host ""
 Write-Host "[6/6] Starting UI dashboard..." -ForegroundColor Yellow
 
-.venv\Scripts\streamlit run ui/app.py --server.port 8501 --server.headless true
+.venv\Scripts\streamlit run pages/app_streamlit.py --server.port 8501 --server.headless true
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan

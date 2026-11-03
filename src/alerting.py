@@ -22,7 +22,6 @@ HISTORY_PATH = OUTPUT_DIR / "alerting_history.jsonl"
 
 
 def _load_sent() -> dict:
-    """Kembalikan map signature -> timestamp Unix epoch."""
     if not SENT_TRACK_PATH.exists():
         return {}
     try:

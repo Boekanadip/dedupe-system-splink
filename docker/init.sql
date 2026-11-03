@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS splink_data.model_metadata (
 CREATE TABLE IF NOT EXISTS splink_data.entity_map (
     record_id VARCHAR(255) PRIMARY KEY,
     entity_id VARCHAR(255) NOT NULL,
+    cluster_status VARCHAR(20) DEFAULT 'SINGLETON',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -116,6 +117,8 @@ CREATE TABLE IF NOT EXISTS splink_data.master_customers (
     country VARCHAR(100),
     dob DATE,
     source_records TEXT[],
+    source_record_id VARCHAR(255),
+    source_completeness INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

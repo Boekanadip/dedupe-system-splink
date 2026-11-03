@@ -16,7 +16,6 @@ def main():
     random.seed(args.seed)
     
     # Filter by review_status band
-    # All 791 pairs have review_status = "pending"
     if args.band == "review":
         sample_df = q  # all are pending review
     elif args.band == "match":

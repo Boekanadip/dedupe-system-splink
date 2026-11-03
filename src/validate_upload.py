@@ -1,27 +1,3 @@
-"""Validasi batch yang diunggah sebelum didaftarkan.
-
-Tahap ini menolak batch lebih awal jika strukturnya tidak sesuai untuk pipeline
-linkage. Tujuannya adalah mencegah berkas ditulis dan didaftarkan jika Splink
-nantinya akan gagal karena kolom yang diperlukan tidak tersedia.
-
-Aturan:
-- Wajib: first_name, last_name, dan setidaknya salah satu dari email/phone.
-- Wajib: setiap kolom sumber yang digunakan aturan blocking aktif di
-  BENCHMARK_RULES. Daftar ini diturunkan dari config, bukan ditulis tetap,
-  sehingga validator dan standardize() selalu selaras.
-- Membantu: kolom yang meningkatkan recall tetapi tidak digunakan untuk blocking.
-- Opsional: kolom lain yang tercantum di COLUMN_MAP.
-
-Nama kolom harus diambil hanya dari COLUMN_MAP. Menebak nama sumber di sini
-dapat menyembunyikan kesalahan pengetikan pipeline dan menyebabkan batch
-diterima secara keliru.
-
-Laporan juga menyertakan metadata operasional, bukan hanya kesalahan validasi:
-- pemisah dan pengodean yang benar-benar digunakan pada berkas unggahan;
-- bukti urutan tanggal agar UI dapat menampilkan urutan yang terdeteksi sebagai
-  pilihan awal saat menanyakan format dd/mm atau mm/dd.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -40,11 +16,7 @@ ONE_OF = [("email", "phone")]
 
 
 def blocking_source_columns(config_path: str | Path | None = None) -> set[str]:
-    """Kolom sumber yang bentuk _std-nya digunakan oleh aturan blocking aktif.
 
-    Diturunkan dari BENCHMARK_RULES agar validator dan src.standardize selalu
-    sepakat mengenai kolom yang harus tersedia di dalam batch.
-    """
     rules = load_benchmark_rules(config_path)
     keys = {col for _, cols in rules for col in cols}
     derived = {k[:-4] for k in keys if k.endswith("_std")}
@@ -57,16 +29,11 @@ def optional_source_columns() -> set[str]:
         COLUMN_MAP[c] for c in REQUIRED_COLUMNS
     } - {COLUMN_MAP[c] for c, _ in ONE_OF}
 
-DELIMITERS = {";": ";", ",": ",", "\t": "\t", "|": "|"}
+DELIMITERS = {";": ";", ":": ":"}
 
 
 def read_csv_any(path: Path) -> tuple[pd.DataFrame, dict]:
-    """Baca CSV yang pemisah dan pengodeannya belum diketahui.
 
-    load_raw() mengasumsikan pemisah ';'. Berkas ekspor klien bisa saja memakai
-    koma, dan penggunaan pemisah yang keliru akan diam-diam menggabungkan semua
-    kolom menjadi satu judul.
-    """
     raw = None
     encoding_used = None
     for encoding in ("utf-8", "utf-8-sig", "latin-1"):
@@ -96,7 +63,6 @@ def read_csv_any(path: Path) -> tuple[pd.DataFrame, dict]:
 
 
 def date_format_evidence(df: pd.DataFrame) -> dict:
-    """Bukti urutan hari/bulan untuk tiap kolom tanggal menggunakan parser standardisasi."""
     from .standardize import detect_date_order
 
     out = {}
@@ -116,35 +82,28 @@ def date_format_evidence(df: pd.DataFrame) -> dict:
         }
     return out
 
-def validate(df: pd.DataFrame) -> dict:
-    """Kembalikan laporan. `blocking` memuat alasan batch harus ditolak."""
+def validate(df: pd.DataFrame, enforce_schema: bool = True) -> dict:
     available = set(df.columns)
     blocking: list[str] = []
+    schema_warnings: list[str] = []
     warnings: list[str] = []
 
     missing_required = [c for c in REQUIRED_COLUMNS if COLUMN_MAP[c] not in available]
     if missing_required:
-        blocking.append(
-            "missing required column(s): "
-            + ", ".join(f"{c} (expects '{COLUMN_MAP[c]}')" for c in missing_required)
+        schema_warnings.append(
+            "Kolom identitas belum dipilih: "
+            + ", ".join(f"{c} (saran: '{COLUMN_MAP[c]}')" for c in missing_required)
         )
 
     present_contact = [c for c, _ in ONE_OF if COLUMN_MAP[c] in available]
     if not present_contact:
-        blocking.append(
-            "needs at least one contact column: "
-            + " or ".join(f"'{COLUMN_MAP[c]}'" for c, _ in ONE_OF)
-            + " — without email or phone there is no key the linker can use"
-        )
+        schema_warnings.append("Belum ada email/phone; tanpa contact key, linking mungkin terbatas.")
 
     needed = blocking_source_columns()
     missing_keys = sorted(needed - available)
     if missing_keys:
-        blocking.append(
-            "column(s) required by the active blocking rules are absent: "
-            + ", ".join(missing_keys)
-            + " — the batch would standardize but never link. Add them, or drop the "
-            "rules that need them in the blocking config (src/config.py)."
+        schema_warnings.append(
+            "Kolom dari blocking default belum tersedia: " + ", ".join(missing_keys)
         )
 
     missing_helpful = [c for c in sorted(optional_source_columns()) if c not in available]
@@ -178,7 +137,7 @@ def validate(df: pd.DataFrame) -> dict:
         "columns": len(df.columns),
         "available_columns": sorted(available),
         "blocking": blocking,
-        "warnings": warnings,
+        "warnings": schema_warnings + warnings,
         "null_profile": null_report,
         "exact_duplicate_rows": int(df.duplicated(subset=scalar_columns).sum())
         if len(df) and scalar_columns
@@ -189,12 +148,10 @@ def validate(df: pd.DataFrame) -> dict:
 
 
 def _has_list_values(series: pd.Series, sample: int = 50) -> bool:
-    """Bernilai True jika beberapa nilai pertama berupa list/array, bukan skalar."""
     for value in series.head(sample):
         if isinstance(value, (list, tuple, set, np.ndarray)):
             return True
     return False
-
 
 def validate_file(path: Path) -> tuple[dict, pd.DataFrame]:
     frame, source_info = read_csv_any(Path(path))
@@ -206,6 +163,31 @@ def validate_file(path: Path) -> tuple[dict, pd.DataFrame]:
         **({"note": source_info["note"]} if "note" in source_info else {}),
     }
     return report, frame
+
+
+def validate_payload(payload: bytes, name: str = "") -> dict:
+    """Validate uploaded CSV using only `;` or `:` as delimiter."""
+    from io import StringIO
+
+    text = payload.decode("utf-8", errors="replace")
+    first_line = text.split("\n", 1)[0]
+    delimiter = max(DELIMITERS, key=lambda value: first_line.count(value))
+    if first_line.count(delimiter) == 0:
+        return {
+            "blocking": ["Delimiter tidak ditemukan. Gunakan ';' atau ':' sesuai format CSV."],
+            "file": {"name": name, "delimiter": "tidak ditemukan", "encoding": "utf-8"},
+        }
+    try:
+        df = pd.read_csv(StringIO(text), sep=delimiter)
+    except Exception as e:
+        return {"blocking": [f"Cannot parse CSV: {e}"], "file": {"name": name, "delimiter": delimiter, "encoding": "utf-8"}}
+    report = validate(df)
+    report["file"] = {
+        "name": name,
+        "delimiter": delimiter,
+        "encoding": "utf-8",
+    }
+    return report
 
 
 def main() -> None:

@@ -39,7 +39,7 @@ api:
 	.venv\Scripts\python api\app.py
 
 ui:
-	.venv\Scripts\streamlit run ui\app.py --server.port 8501
+	.venv\Scripts\streamlit run pages\app_streamlit.py --server.port 8501
 
 monitor:
 	.venv\Scripts\python monitor\metrics.py

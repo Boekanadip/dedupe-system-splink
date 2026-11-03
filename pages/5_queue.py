@@ -12,14 +12,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR
 from src.ui import (
-    workflow_step,
     format_probability,
-    how_to_read,
     monitoring_sidebar,
     page_guide,
     page_header,
     paginate,
     probability_verdict,
+    render_sidebar,
+    how_to_read,
+    workflow_step,
 )
 
 st.set_page_config(page_title="Antrean - Entity Resolution", page_icon="📋", layout="wide")
@@ -28,10 +29,8 @@ page_header(
     "Semua pasangan yang perlu diperiksa manusia. Antrean kerja hanya mengambil "
     "sebagian kecil dari daftar ini.",
 )
-monitoring_sidebar()
-page_guide(__file__)
+render_sidebar("queue")
 how_to_read()
-workflow_step(__file__)
 
 QUEUE_PATH = LABELS_DIR / "review_queue.csv"
 PREDS_PATH = OUTPUT_DIR / "splink_predictions.parquet"

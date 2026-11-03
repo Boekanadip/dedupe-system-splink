@@ -32,7 +32,6 @@ def device_sets(records: pd.DataFrame) -> dict[str, frozenset]:
     )
     return ids.groupby("record_id")["device_ids_std"].apply(frozenset).to_dict()
 
-
 def plan() -> pd.DataFrame:
     
     labels, src = load_labels()

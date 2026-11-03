@@ -64,18 +64,24 @@ def main():
     records = records_df.values.tolist()
     
     print(f"Saving {len(records)} records to splink_data.customer_matches...")
-    with get_connection() as conn:
-        with conn.cursor() as cursor:
-            execute_values(cursor, """
-                INSERT INTO splink_data.customer_matches 
-                (customer_id_1, customer_id_2, match_probability, match_status)
-                VALUES %s
-                ON CONFLICT (customer_id_1, customer_id_2) DO UPDATE SET
-                    match_probability = EXCLUDED.match_probability,
-                    match_status = EXCLUDED.match_status
-            """, records)
-            conn.commit()
-    print(f"[OK] Saved {len(records)} predictions to splink_data.customer_matches")
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                execute_values(cursor, """
+                    INSERT INTO splink_data.customer_matches 
+                    (customer_id_1, customer_id_2, match_probability, match_status)
+                    VALUES %s
+                    ON CONFLICT (customer_id_1, customer_id_2) DO UPDATE SET
+                        match_probability = EXCLUDED.match_probability,
+                        match_status = EXCLUDED.match_status
+                """, records)
+                conn.commit()
+        print(f"[OK] Saved {len(records)} predictions to splink_data.customer_matches")
+    except Exception as e:
+        print(f"[WARN] DB unavailable, saving to parquet instead: {e}")
+        # Fallback: simpan ke parquet
+        records_df.to_parquet(PROJECT_ROOT / "outputs" / "customer_matches_backup.parquet", index=False)
+        print(f"[OK] Saved {len(records)} predictions to customer_matches_backup.parquet")
     
     # Save to review queue
     review_df = df[df['match_status'] == 'REVIEW']
@@ -85,15 +91,20 @@ def main():
         queue_records = queue_df.values.tolist()
         
         print(f"Saving {len(queue_records)} records to splink_data.review_queue...")
-        with get_connection() as conn:
-            with conn.cursor() as cursor:
-                execute_values(cursor, """
-                    INSERT INTO splink_data.review_queue 
-                    (customer_id_1, customer_id_2, match_probability)
-                    VALUES %s
-                """, queue_records)
-                conn.commit()
-        print(f"[OK] Saved {len(queue_records)} pairs to splink_data.review_queue")
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cursor:
+                    execute_values(cursor, """
+                        INSERT INTO splink_data.review_queue 
+                        (customer_id_1, customer_id_2, match_probability)
+                        VALUES %s
+                    """, queue_records)
+                    conn.commit()
+            print(f"[OK] Saved {len(queue_records)} pairs to splink_data.review_queue")
+        except Exception as e:
+            print(f"[WARN] DB unavailable, saving to parquet instead: {e}")
+            queue_df.to_parquet(PROJECT_ROOT / "outputs" / "review_queue_backup.parquet", index=False)
+            print(f"[OK] Saved {len(queue_records)} pairs to review_queue_backup.parquet")
     
     # Print summary
     print("\n" + "=" * 50)

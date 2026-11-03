@@ -22,11 +22,6 @@ def _sql_literal(value) -> str:
         return "NULL"
     if isinstance(value, float) and value != value:  # NaN
         return "NULL"
-    # datetime/date harus ikut di-quote: kolom dob/signup_date/updated_at di
-    # DDL diturunkan sebagai VARCHAR (pandas dtype object -> VARCHAR setelah
-    # normalize), tapi nilai keluar dari pandas sebagai datetime64. Tanpa
-    # kutip Postgres membaca "1995-06-22 00:00:00" sebagai literal dan
-    # melempar syntax error at or near "00".
     if isinstance(value, (datetime, date)):
         return "'" + str(value).replace("'", "''") + "'"
     if isinstance(value, str):

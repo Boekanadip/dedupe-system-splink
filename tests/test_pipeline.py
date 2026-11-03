@@ -2,7 +2,6 @@ import os
 import sys
 from pathlib import Path
 
-# Setup environment
 os.environ["POSTGRES_HOST"] = os.environ.get("POSTGRES_HOST", "localhost")
 os.environ["POSTGRES_PORT"] = os.environ.get("POSTGRES_PORT", "5432")
 os.environ["POSTGRES_DB"] = os.environ.get("POSTGRES_DB", "crm")
@@ -13,7 +12,6 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 
 def test_env_loaded():
-    """Test that .env variables are loaded."""
     from dotenv import load_dotenv
     
     env_path = PROJECT_ROOT / ".env"
@@ -23,7 +21,7 @@ def test_env_loaded():
         return True
     else:
         print("⚠ No .env file found, using defaults")
-        # Set defaults
+
         os.environ["POSTGRES_HOST"] = "localhost"
         os.environ["POSTGRES_PORT"] = "5432"
         os.environ["POSTGRES_DB"] = "crm"
@@ -58,7 +56,6 @@ def test_fastapi_endpoints():
         import api.app as app
         print("✓ FastAPI app loads")
         
-        # Check health endpoint
         from fastapi.testclient import TestClient
         client = TestClient(app.app)
         response = client.get("/health")
@@ -104,7 +101,6 @@ def test_quickstart():
 
 
 def test_ci_workflow():
-    """Test CI workflow exists."""
     ci_path = PROJECT_ROOT / ".github/workflows/ci.yml"
     if ci_path.exists():
         print("✓ CI workflow exists")

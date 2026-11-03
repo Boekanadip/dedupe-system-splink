@@ -22,6 +22,7 @@ from src.ui import (
     page_header,
     paginate,
     probability_verdict,
+    render_sidebar,
     workflow_step,
 )
 
@@ -31,9 +32,7 @@ page_header(
     "Dua hal yang tidak muncul di halaman lain: record yang tidak pernah tergabung, "
     "dan pasangan yang perlu diperiksa tapi belum masuk antrean.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-workflow_step(__file__)
+render_sidebar("gaps")
 how_to_read()
 
 for _p in (ENTITY_MAP_PATH, PROCESSED_DATA_PATH, predictions_path(full=True)):
@@ -124,10 +123,12 @@ c2.metric(
 c3.metric("Sudah di antrean", f"{int(review['sudah_di_antrean'].sum()):,}")
 conflicted = 0
 if MASTER_PATH.exists():
-    conflicted = int(
-        pd.read_parquet(MASTER_PATH, columns=["conflicted_fields"])["conflicted_fields"]
-        .map(len).gt(0).sum()
-    )
+    master_columns = pd.read_parquet(MASTER_PATH, columns=[]).columns
+    if "conflicted_fields" in master_columns:
+        conflicted = int(
+            pd.read_parquet(MASTER_PATH, columns=["conflicted_fields"])["conflicted_fields"]
+            .map(len).gt(0).sum()
+        )
 c4.metric(
     "Entitas dengan data berbeda",
     conflicted,
@@ -207,8 +208,11 @@ with tab_s:
             width="stretch",
             hide_index=True,
         )
-        st.caption(probability_verdict(float(show_cand["match_probability"].iloc[0])))
-        if st.button(f"Masukkan 20 kandidat teratas ({pick}) ke antrean"):
+        if not show_cand.empty:
+            st.caption(probability_verdict(float(show_cand["match_probability"].iloc[0])))
+        else:
+            st.info("Belum ada pasangan kandidat untuk record ini.")
+        if st.button(f"Masukkan 20 kandidat teratas ({pick}) ke antrean", disabled=show_cand.empty):
             top = cand.head(20)[["record_id_l", "record_id_r", "match_probability"]]
             n = enqueue(top, "singleton_candidate")
             st.success(f"{n:,} pasangan masuk antrean pemeriksaan." if n else "Semua sudah ada di antrean.")
@@ -235,8 +239,15 @@ with tab_r:
         st.success(f"{n:,} pasangan baru masuk antrean. Sisanya masih {len(uncovered) - n:,}.")
         st.rerun()
 
-    page_df, _ = paginate(uncovered, page_size=50, key="rev_page")
-    table = page_df[["record_id_l", "record_id_r", "match_probability"]].copy()
+    if uncovered.empty:
+        st.info("Semua pasangan REVIEW sudah masuk antrean.")
+        st.stop()
+    page_df, _ = paginate(uncovered, page_size=50, key="gaps_uncovered_page")
+    required_pair_columns = ["record_id_l", "record_id_r", "match_probability"]
+    if not all(column in page_df.columns for column in required_pair_columns):
+        st.info("Tidak ada pasangan yang dapat ditampilkan pada halaman ini.")
+        st.stop()
+    table = page_df[required_pair_columns].copy()
     table["Record A"] = table["record_id_l"]
     table["Record B"] = table["record_id_r"]
     table["Peluang sama"] = table["match_probability"].map(format_probability)
