@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import MASTER_PATH, OUTPUT_DIR, PROJECT_ROOT
 from src.profiling import load_raw
-from src.ui import format_probability, monitoring_sidebar, page_guide, page_header, workflow_step
+from src.ui import format_probability, monitoring_sidebar, page_guide, page_header, render_sidebar, workflow_step
 from src.validate_upload import validate_file
 
 st.set_page_config(page_title="Batch - Entity Resolution", page_icon="📦", layout="wide")
@@ -22,9 +22,7 @@ page_header(
     "Sebelum data baru dipakai, periksa dulu setiap barisnya. Baris yang tidak "
     "disetujui tetap masuk sebagai customer sendiri, tidak dipaksa bergabung.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-workflow_step(__file__)
+render_sidebar("batch")
 
 STAGING_DIR = OUTPUT_DIR / "staging"
 RAW_DIR = PROJECT_ROOT / "data" / "raw"

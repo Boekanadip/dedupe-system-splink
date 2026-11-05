@@ -19,7 +19,6 @@ TABLE = os.environ.get("TEST_PG_TABLE", "crm_customers")
 def main() -> int:
     failures: list[str] = []
 
-    # 1. connect via the same function the pipeline uses
     from src.db_source import _columns, connect, fetch
 
     con = connect(DSN)
@@ -28,7 +27,6 @@ def main() -> int:
         assert row == (1,), f"unexpected SELECT 1 result: {row}"
         print(f"[ok] connect: {DSN}")
 
-        # 2. table visible through the attached schema
         names = [
             r[0]
             for r in con.execute(
@@ -43,7 +41,6 @@ def main() -> int:
     finally:
         con.close()
 
-    # 3. column contract: what the pipeline actually requires, per validate_upload
     from src.config import COLUMN_MAP, DEVICE_ID_ALIASES
     from src.validate_upload import blocking_source_columns
 
@@ -65,20 +62,18 @@ def main() -> int:
     else:
         print(f"[ok] column contract satisfied ({len(needed)} required names present)")
 
-    # device_id(s) is optional but valuable; the DB may name it device_id
+    # device_id(s) is optional but valuable
     if not ({"device_id(s)"} | set(DEVICE_ID_ALIASES)) & cols:
         print("[info] no device_id column — device-based verification unavailable")
     else:
         print("[ok] device column present")
 
-    # 4. full fetch through db_source.fetch (same read path the export uses)
     frame = fetch(DSN, TABLE)
     if frame.empty:
         failures.append(f"{TABLE} fetched 0 rows")
     else:
         print(f"[ok] fetch: {len(frame):,} rows x {len(frame.columns)} cols")
 
-    # 5. export registration path, without touching the real batch registry
     if failures:
         print("\nFAIL")
         for f in failures:
@@ -87,7 +82,6 @@ def main() -> int:
 
     print("\nPASS: PostgreSQL reachable via src.db_source")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

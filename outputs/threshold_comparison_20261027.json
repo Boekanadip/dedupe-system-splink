@@ -1,0 +1,12 @@
+{
+  "results": [
+    {
+      "threshold": 0.82,
+      "tp": 64,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    }
+  ]
+}

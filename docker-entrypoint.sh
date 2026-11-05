@@ -13,4 +13,4 @@ if [ -d /app/seed ]; then
 fi
 
 echo "[entrypoint] Starting Streamlit on port 8501..."
-exec streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+exec streamlit run pages/app_streamlit.py --server.port 8501 --server.address 0.0.0.0

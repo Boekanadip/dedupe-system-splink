@@ -1,17 +1,4 @@
 #!/usr/bin/env python
-"""Generate a synthetic DuckDB file that satisfies the pipeline's column contract.
-
-The output is a local .duckdb file with a `crm_customers` table. It contains
-deterministic duplicates and near-duplicates so the dedup pipeline actually
-finds matches — useful for a demo without real data.
-
-Run:
-    python scripts/make_synthetic_db.py --rows 2000 --out data/synthetic/crm.duckdb
-
-Then export to the pipeline:
-    python -m src.db_export --source data/synthetic/crm.duckdb --table crm_customers --watermark
-    python -m src.incremental --stage
-"""
 
 from __future__ import annotations
 
@@ -80,15 +67,7 @@ def make_signup() -> date:
 
 
 def make_device(idx: int) -> str:
-    """Device id unik per customer_pk — satu orang, satu device.
 
-    Versi lama memakai random.randint(1, 200) sehingga 75 baris berbagi
-    200 slot dan device yang sama muncul pada orang yang jelas berbeda
-    (0 dari 7 field identik). Itu melanggar asumsi device_truth_pairs
-    yang memperlakukan device_id sama = satu orang, dan membuat
-    clusters_recover_device_truth gagal: model BENAR menolak pasangan
-    yang bedanya jelas, tapi test menghitungnya sebagai false negative.
-    """
     return f"dev_{idx:04d}"
 
 
@@ -102,12 +81,7 @@ def make_updated_at(base: datetime, idx: int, dup_factor: int = 50) -> datetime:
 
 
 def build_rows(n: int, dup_every: int = 50, near_dup_every: int = 75) -> list[dict]:
-    """Generate N rows with deterministic duplicates and near-duplicates.
 
-    - Every `dup_every`-th row is an EXACT copy of the previous one.
-    - Every `near_dup_every`-th row copies the previous row but with a
-      typo in phone (last digit changed) or email (local part changed).
-    """
     rows = []
     now = datetime.now()
 

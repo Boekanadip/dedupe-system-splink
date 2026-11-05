@@ -20,13 +20,7 @@ from src.config import (
     PROJECT_ROOT,
     pipeline_locked,
 )
-from src.ui import (
-    format_count,
-    monitoring_sidebar,
-    page_guide,
-    page_header,
-    workflow_step,
-)
+from src.ui import format_count, page_header, render_sidebar
 
 st.set_page_config(page_title="Master - Entity Resolution", page_icon="👥", layout="wide")
 page_header(
@@ -34,9 +28,7 @@ page_header(
     "Hasil akhir: satu baris per orang. Kalau ada datanya yang berbeda-beda, "
     "kolomnya ditandai agar bisa dibetulkan.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-workflow_step(__file__)
+render_sidebar("master")
 
 if not MASTER_PATH.exists() or not PROCESSED_DATA_PATH.exists():
     st.info(
@@ -69,6 +61,10 @@ MASTER_LABELS = {
 master = pd.read_parquet(MASTER_PATH)
 records = pd.read_parquet(PROCESSED_DATA_PATH)
 
+# Versi master lama tidak selalu menyimpan kolom konflik.
+if "conflicted_fields" not in master.columns:
+    master["conflicted_fields"] = [[] for _ in range(len(master))]
+
 # ---- cari entity
 st.subheader("Cari entity")
 master["_conflicted"] = master["conflicted_fields"].map(
@@ -91,6 +87,12 @@ if FLAGS_PATH_ALL.exists():
 flagged_ids = (
     set(flags_all["entity_id"].astype(str)) if not flags_all.empty else set()
 )
+
+if "record_count" not in master.columns:
+    source_records = master.get("source_records", pd.Series([[] for _ in range(len(master))], index=master.index))
+    master["record_count"] = source_records.map(
+        lambda value: len(value) if hasattr(value, "__len__") and not isinstance(value, str) else 1
+    )
 
 query = st.text_input(
     "Cari customer_id / email / entity_id",
@@ -150,8 +152,14 @@ if not open_flags.empty:
             f"pada {row.get('timestamp', '—')}."
         )
 c1, c2, c3 = st.columns(3)
-c1.metric("Jumlah record", format_count(entity["record_count"]))
-c2.metric("Customer ID berbeda", format_count(len(entity["customer_ids"])))
+record_ids = entity.get("record_ids", entity.get("source_records", []))
+customer_ids = entity.get("customer_ids", entity.get("source_record_id", []))
+if isinstance(record_ids, str):
+    record_ids = [record_ids]
+if isinstance(customer_ids, str):
+    customer_ids = [customer_ids]
+c1.metric("Jumlah record", format_count(entity.get("record_count", len(record_ids))))
+c2.metric("Customer ID berbeda", format_count(len(customer_ids)))
 c3.metric("Field konflik", format_count(len(entity["conflicted_fields"])))
 if len(entity["conflicted_fields"]):
     st.warning(f"Field konflik (record anggota beda): {', '.join(entity['conflicted_fields'])}")
@@ -159,9 +167,9 @@ if len(entity["conflicted_fields"]):
 with st.expander("Lineage (audit) — asal-usul entity ini"):
     st.caption("Kode record pembentuk · Kode customer di source · Sumber data yang dipakai")
     st.write({
-        "kode record": list(entity["record_ids"]),
-        "kode customer": list(entity["customer_ids"]),
-        "sumber data": list(entity["sources"]),
+        "kode record": list(record_ids),
+        "kode customer": list(customer_ids),
+        "sumber data": list(entity.get("sources", [])),
     })
 
 # ---- koreksi nilai master
@@ -216,7 +224,9 @@ if submitted:
 
 # ---- record anggota
 st.subheader("Record anggota")
-member_ids = entity["record_ids"]
+member_ids = entity.get("record_ids", entity.get("source_records", []))
+if isinstance(member_ids, str):
+    member_ids = [member_ids]
 members = records[records["record_id"].isin(member_ids)]
 st.caption(f"{len(members):,} record penyusun entity ini:")
 st.dataframe(

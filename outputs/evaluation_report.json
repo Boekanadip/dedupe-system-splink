@@ -1,0 +1,229 @@
+{
+  "generated_at": "2026-11-03T02:31:44+00:00",
+  "scope": "sample",
+  "model_version": "v20261102_120022",
+  "trained": true,
+  "truth_channel": {
+    "source": "device_ids_std",
+    "available": true,
+    "truth_pairs": 78,
+    "independence": {
+      "status": "measured",
+      "records_with_device": 10000,
+      "distinct_customer_id": 9924,
+      "distinct_device_id": 9924,
+      "customers_with_two_devices": 0,
+      "devices_shared_by_two_customers": 0,
+      "one_to_one": true,
+      "consequence": "ANSWER KEY: the device channel repeats customer_id, so recall/precision against it measures whether the pipeline reproduces the source grouping. Cite decision.gold_comparison for an independent accuracy figure.",
+      "scope_note": "checked on the smoke subset, not the full dataset"
+    },
+    "independent_channel": "gold_labels (human reviewed) \u2014 see decision.gold_comparison",
+    "caveat": "device_ids_std is 1:1 with customer_id on this dataset, so it is the answer key rather than independent evidence. Agreement proves the pipeline reproduces the source grouping; it proves nothing about fuzzy duplicates or any other dataset."
+  },
+  "blocking": {
+    "status": "measured",
+    "reference_pairs": 78,
+    "candidate_pairs": 4161,
+    "truth_pairs_generated_as_candidates": 78,
+    "truth_pairs_never_generated": 0,
+    "blocking_recall_ceiling": 1.0,
+    "per_rule": [
+      {
+        "rule": "email_exact",
+        "key_columns": "email_std",
+        "candidate_pairs": 129,
+        "device_truth_covered": 76,
+        "device_truth_coverage_pct": 97.436
+      },
+      {
+        "rule": "phone_exact",
+        "key_columns": "phone_std",
+        "candidate_pairs": 234,
+        "device_truth_covered": 78,
+        "device_truth_coverage_pct": 100.0
+      },
+      {
+        "rule": "name_exact",
+        "key_columns": "first_name_std+last_name_std",
+        "candidate_pairs": 621,
+        "device_truth_covered": 52,
+        "device_truth_coverage_pct": 66.667
+      },
+      {
+        "rule": "city_dob",
+        "key_columns": "city_std+dob_std",
+        "candidate_pairs": 78,
+        "device_truth_covered": 78,
+        "device_truth_coverage_pct": 100.0
+      },
+      {
+        "rule": "dob_exact",
+        "key_columns": "dob_std",
+        "candidate_pairs": 2668,
+        "device_truth_covered": 78,
+        "device_truth_coverage_pct": 100.0
+      },
+      {
+        "rule": "address_city",
+        "key_columns": "address_std+city_std",
+        "candidate_pairs": 78,
+        "device_truth_covered": 78,
+        "device_truth_coverage_pct": 100.0
+      },
+      {
+        "rule": "phone_prefix",
+        "key_columns": "phone_pre7",
+        "candidate_pairs": 241,
+        "device_truth_covered": 78,
+        "device_truth_coverage_pct": 100.0
+      },
+      {
+        "rule": "name_prefix",
+        "key_columns": "last_name_std_pre3+first_name_std_pre3",
+        "candidate_pairs": 2356,
+        "device_truth_covered": 61,
+        "device_truth_coverage_pct": 78.205
+      },
+      {
+        "rule": "name_prefix_state",
+        "key_columns": "last_name_std_pre3+state_std",
+        "candidate_pairs": 5750,
+        "device_truth_covered": 67,
+        "device_truth_coverage_pct": 85.897
+      },
+      {
+        "rule": "email_domain_name",
+        "key_columns": "email_domain_pre4+last_name_std_pre3+first_name_std_pre3",
+        "candidate_pairs": 780,
+        "device_truth_covered": 59,
+        "device_truth_coverage_pct": 75.641
+      },
+      {
+        "rule": "city_state_dob_year",
+        "key_columns": "city_std+state_std+dob_year_std",
+        "candidate_pairs": 79,
+        "device_truth_covered": 78,
+        "device_truth_coverage_pct": 100.0
+      },
+      {
+        "rule": "email_domain",
+        "key_columns": "email_domain_pre4",
+        "candidate_pairs": 16031356,
+        "device_truth_covered": 76,
+        "device_truth_coverage_pct": 97.436
+      },
+      {
+        "rule": "city_state_dob",
+        "key_columns": "city_std+state_std+dob_std",
+        "candidate_pairs": 78,
+        "device_truth_covered": 78,
+        "device_truth_coverage_pct": 100.0
+      },
+      {
+        "rule": "phone_last4",
+        "key_columns": "phone_std",
+        "candidate_pairs": 234,
+        "device_truth_covered": 78,
+        "device_truth_coverage_pct": 100.0
+      },
+      {
+        "rule": "email_domain_fuzzy",
+        "key_columns": "email_domain_pre4",
+        "candidate_pairs": 16031356,
+        "device_truth_covered": 76,
+        "device_truth_coverage_pct": 97.436
+      },
+      {
+        "rule": "city_state_dob_fuzzy",
+        "key_columns": "city_std+state_std+dob_std",
+        "candidate_pairs": 78,
+        "device_truth_covered": 78,
+        "device_truth_coverage_pct": 100.0
+      },
+      {
+        "rule": "name_fuzzy_last4",
+        "key_columns": "last_name_std_pre3+phone_last4",
+        "candidate_pairs": 95,
+        "device_truth_covered": 67,
+        "device_truth_coverage_pct": 85.897
+      }
+    ],
+    "proves": "candidate generation contains the true duplicate pairs",
+    "does_not_prove": "how the model scores them, and whether the pair should be merged \u2014 those are layers 2 and 4"
+  },
+  "linkage": {
+    "status": "measured",
+    "threshold": 0.84,
+    "truth_pairs": 78,
+    "truth_pairs_scored_above_threshold": 75,
+    "truth_pairs_scored_below_threshold": 3,
+    "match_edges": 83,
+    "false_merges": 8,
+    "unverifiable_edges": 0,
+    "recall_on_truth": 0.9615,
+    "precision_on_truth": 0.9036,
+    "truth_probability_min": 0.1813521674133148,
+    "score_distribution": {
+      "candidate_pairs": 4161,
+      "distinct_match_weights": 6,
+      "non_match_weight_min": -87.304,
+      "non_match_weight_max": -2.174,
+      "pairs_in_review_band": 0,
+      "pairs_at_probability_one": 0
+    },
+    "proves": "the model scores true pairs above the threshold and rejects others",
+    "does_not_prove": "that true pairs exist beyond those the truth channel can see \u2014 the answer-key caveat applies to every number here"
+  },
+  "decision": {
+    "status": "measured",
+    "thresholds": {
+      "match": 0.84,
+      "review": 0.35,
+      "policy": "P >= match -> MATCH; review <= P < match -> REVIEW; P < review -> NON_MATCH"
+    },
+    "candidate_pairs": 4161,
+    "counts": {
+      "NON_MATCH": 4086,
+      "MATCH": 75
+    },
+    "rates": {
+      "auto_match_rate": 0.018025,
+      "review_rate": 0.0,
+      "non_match_rate": 0.981975
+    },
+    "review_volume_per_run": 0,
+    "proves": "how much human review this policy would actually generate",
+    "does_not_prove": "that the MATCH ones are right \u2014 see the gold section",
+    "gold_comparison": {
+      "status": "measured",
+      "source": "gold (human reviewed)",
+      "reviewed_pairs": 3593,
+      "positives": 1099,
+      "negatives": 2494,
+      "note": "The review sample is stratified by the model's own behaviour, so a rate from it does not extrapolate to the whole candidate population.",
+      "usable_for": "precision and recall"
+    }
+  },
+  "entity": {
+    "status": "measured",
+    "records": 10000,
+    "entities": 9995,
+    "records_merged_away": 5,
+    "cluster_size_distribution": {
+      "1": 9990,
+      "2": 5
+    },
+    "multi_record_entities": 5,
+    "largest_entity": 2,
+    "truth_pairs_in_one_entity": 5,
+    "truth_pairs_split_across_entities": 73,
+    "entities_mixing_two_device_ids": 0,
+    "proves": "records of one real entity ended up in one entity_id",
+    "does_not_prove": "that no two different people were merged \u2014 only that no entity holds two known identities"
+  },
+  "runtime": {
+    "entity_map_training_seconds": null,
+    "note": "per-step timings for the full run are in outputs/run_summary.json"
+  }
+}

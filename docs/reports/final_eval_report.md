@@ -8,7 +8,7 @@ Mengukur recall, precision, dan F1 pada gold labels untuk kebijakan threshold ba
 
 ## Sumber Data
 - Gold labels: `data/labels/gold_labels.csv` — **3.593 pasangan** (1.099 `match`, 2.494 `no_match`).
-- Yatim skor: **378 pasangan tanpa `match_probability`** (stratum `outside_blocking_*`, `feedback_only_unverified`, sebagian `typo_*`). Pasangan ini berada di luar cakupan prediksi dan tidak dihitung di tabel utama.
+- Tanpa skor: **378 pasangan tanpa `match_probability`** (stratum `outside_blocking_*`, `feedback_only_unverified`, sebagian `typo_*`). Pasangan ini berada di luar cakupan prediksi dan tidak dihitung di tabel utama.
 - Sampel berlabel berskor: **3.215 pasangan** (851 `match`, 2.364 `no_match`), diekspor ke `outputs/gold_scored.parquet`.
 
 ## Hasil Terukur (n = 3.215 pasangan berskor)
@@ -19,7 +19,7 @@ Mengukur recall, precision, dan F1 pada gold labels untuk kebijakan threshold ba
 | 0.50 | 849 | 64 | 2 | 2.300 | 0.9976 | 0.9299 | 0.9626 |
 | 0.82 | 849 | 62 | 2 | 2.302 | 0.9976 | 0.9319 | 0.9637 |
 | **0.84** | **849** | **59** | **2** | **2.305** | **0.9976** | **0.9350** | **0.9653** |
-| 0.90 | 849 | 58 | 2 | 2.306 | 0.9976 | 0.9361 | 0.9659 |
+| 0.90 | 849 | 58 | 2 | 2.306 | 0.9754 | 0.9341 | 0.9646 |
 
 ## Distribusi Pita Keputusan pada 0.84 / 0.35 (n = 3.215)
 - **MATCH** (`P >= 0.84`): 908 pasangan

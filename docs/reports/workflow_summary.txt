@@ -1,0 +1,114 @@
+RINGKASAN ALUR KERJA SISTEM
+
+1. PENGOLAHAN INPUT
+   - Menerima berkas CSV atau sumber basis data
+   - Memvalidasi skema sebelum diproses
+   - Kolom yang diperlukan: first_name, last_name, email, phone_number
+   - Tidak mengasumsikan customer_id sumber adalah unik atau kebenaran mutlak
+
+2. PENGOLAHAN IDENTITAS REKAMAN
+   - Menghasilkan record_id internal unik untuk setiap rekaman
+   - Melestarikan record_id sumber jika tersedia
+   - record_id adalah pengenal internal, bukan identitas pelanggan
+
+3. PELINDUNGAN DATA
+   - Menyimpan nilai asli tanpa modifikasi
+   - Membuat salinan nilai terstandarisasi (misalnya first_name_std)
+   - Nilai asli dan terstandarisasi coexisting (ada bersama)
+
+4. STANDARDISASI
+   - Menerapkan transformasi pada data asli:
+     * Teks: lowercase, trim, normalisasi tanda baca
+     * Telepon: ekstrak digit, normalisasi awalan
+     * Email: lowercase, trim
+     * Tanggal: penanganan ambigu dmy/mdy berdasarkan bukti
+   - Melestarikan nilai asli; membuat salinan terstandarisasi
+
+5. REKAYASA FITUR
+   - Menghasilkan fitur turunan yang relevan untuk pengaitan:
+     * nama dinormalisasi, digit telepon, komponen email
+     * panjang nama/prefix, jumlah perangkat
+     * indikator hilangnya nilai, kunci blokir
+   - Fitur harus memiliki tujuan pengaitan yang terdokumentasi
+
+6. STRATEGI PEMBLOKIRAN
+   - Menghasilkan pasangan kandidat untuk menghindari perbandingan semua pasangan (all-pairs)
+   - Aturan pemblokir dapat dikonfigurasi dari config.py:
+     - exact_email, exact_phone
+     - name_and_dob, city_dob
+     - phone_prefix, email_domain_name
+     - aturan pencocokan kabur (fuzzy matching) untuk penanganan ketik salah
+   - Aturan dapat diukur dan diuji
+
+7. RESOLUSI ENTITAS
+   - Melakukan pemeriksaan probabilistik pada pasangan kandidat menggunakan Splink
+   - Menahan bukti perbandingan untuk kejelasan penjelasan
+   - Menggunakan ambang batas yang dapat dikonfigurasi:
+     * P < T_LOW → NON_MATCH
+     * T_LOW ≤ P < T_HIGH → REVIEW
+     * P ≥ T_HIGH → MATCH
+   - Ambang batas dievaluasi secara empiris
+
+8. LOGIKA KEPUTUSAN
+   - Keputusan keluaran: MATCH, REVIEW, NON_MATCH
+   - Ambang batas dapat dikonfigurasi di config.py:
+     * MATCH_THRESHOLD = 0.84
+     * REVIEW_THRESHOLD = 0.35
+   - Keputusan berdasarkan kombinasi bukti dari berbagai bidang
+
+9. TINJAUAN MANUSIA
+   - Pasangan yang memerlukan REVIEW masuk ke antrian tinjauan
+   - Pemilik tinjauan melihat perbandingan berdampingan
+   - Pemilik tinjauan memilih match/no_match, menyimpan keputusan
+   - Hasil tinjauan menjadi label emas untuk pelatihan
+
+10. PENGOLAHAN ENTITAS
+    - Memberikan entity_id kepada rekaman dengan entitas dunia nyata yang sama
+    - Mempertahankan hubungan sumber rekaman
+    - Melestarikan sejarah dan silsilah
+
+11. PEMBARUHAN DATA UTAMA
+    - Memperbarui representasi utama berdasarkan keputusan
+    - Menghitung ulang nilai utama untuk entitas yang terpengaruh
+    - Melestarikan nilai asli dan silsilah
+
+12. SIKLUS HIDUP MODEL
+    - Melakukan versi model dan konfigurasi
+    - Pelatihan ulang dipicu oleh bukti:
+      * Penurunan kinerja
+      * Pergeseran data
+      * Sumber data baru
+      * Perubahan skema
+      * Kasus yang ditinjau menumpuk
+    - Evaluasi offline sebelum promosi
+
+13. PENGOLAHAN INKRMENTAL
+    - Memproses batch baru tanpa pemrosesan ulang sepenuhnya
+    - Menggunakan penanda sumber stabil (updated_at)
+    - Melakukan proses perubahan untuk ditinjau sebelum diterapkan
+    - Pemrosesan penuh untuk pelatihan ulang atau pemrosesan awal
+
+14. SKALABILITAS
+    - Dirancang untuk data produksi > 50k rekaman
+    - Menghindari operasi O(n²) yang tidak perlu
+    - Melakukan benchmarking pada pembuatan pasangan kandidat
+    - Memisahkan logika bisnis dari backend eksekusi
+    - Mempertimbangkan eksekusi terdistribusi saat dipertimbangkan
+
+METRIK UTAMA YANG DIPANTAU:
+- jumlah pasangan kandidat
+- cakupan
+- waktu eksekusi
+- penggunaan memori
+- presisi, recall, F1
+- tingkat falso positif/negatif
+- tingkat cocok otomatis, tingkat tinjauan
+- tingkat penggabungan entitas
+
+AMBANG BATAS KEPUTUSAN:
+P < T_LOW (0.35) → NON_MATCH
+T_LOW ≤ P < T_HIGH (0.84) → REVIEW
+P ≥ T_HIGH (0.84) → MATCH
+
+ALUR PROSES:
+Batch baru → standarisasi → skor → pengaitan → perbarui peta → hitung ulang master → antrian tinjauan

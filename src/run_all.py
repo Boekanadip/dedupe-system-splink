@@ -108,6 +108,12 @@ def main() -> None:
         "quick smoke test cannot destroy a full pipeline result.",
     )
     parser.add_argument(
+        "--columns",
+        metavar="COL1,COL2,...",
+        default=None,
+        help="Kolom standardized yang dipakai sebagai pembanding dan bobot.",
+    )
+    parser.add_argument(
         "--date-order",
         choices=["auto", "dmy", "mdy"],
         default="auto",
@@ -137,6 +143,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     step_timeout = args.step_timeout if args.step_timeout > 0 else None
+    columns_arg = [c.strip() for c in args.columns.split(",") if c.strip()] if args.columns else []
 
     started = time.perf_counter()
     full = not args.sample
@@ -150,6 +157,8 @@ def main() -> None:
             steps.append((name, [*module_args, *flag, "--force"]))
         elif name == "splink_model" and args.reuse_model:
             steps.append((name, [*module_args, *flag, "--reuse-model", args.reuse_model]))
+        elif name == "splink_model" and columns_arg:
+            steps.append((name, [*module_args, *flag, "--columns", ",".join(columns_arg)]))
         elif name in ("blocking_benchmark", "splink_model", "clustering"):
             steps.append((name, [*module_args, *flag]))
         elif name == "standardize" and args.date_order != "auto":

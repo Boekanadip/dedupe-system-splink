@@ -22,6 +22,7 @@ from src.ui import (
     page_guide,
     page_header,
     probability_verdict,
+    render_sidebar,
     show_evidence,
     verdict_plain,
 )
@@ -32,9 +33,7 @@ page_header(
     "Pilih dua record, lalu lihat satu per satu apakah tiap data mereka "
     "mendukung atau menolak anggapan bahwa mereka orang yang sama.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-workflow_step(__file__)
+render_sidebar("explain")
 how_to_read()
 
 preds_path = predictions_path(full=True)
@@ -132,10 +131,18 @@ show_evidence(p, levels)
 
 support = 0.0
 against = 0.0
-for field in ("core_identity", "first_name_std", "last_name_std", "email_std",
-              "phone_std", "dob_std", "address_std", "city_std", "state_std",
-              "country_std"):
-    gamma_col = f"gamma_{field}"
+for field, gamma_col in {
+    "core_identity": "gamma_name",
+    "first_name": "gamma_name",
+    "last_name": "gamma_name",
+    "email": "gamma_contact",
+    "phone": "gamma_contact",
+    "dob": "gamma_contact",
+    "address": "gamma_location",
+    "city": "gamma_location",
+    "state": "gamma_location",
+    "country": "gamma_location",
+}.items():
     code = p.get(gamma_col)
     if code is None or pd.isna(code):
         continue

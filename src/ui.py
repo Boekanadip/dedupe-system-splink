@@ -13,14 +13,30 @@ import streamlit as st
 from src.config import (
     DEFAULT_BENCHMARK_RULES,
     MATCH_THRESHOLD,
-    NON_MATCH_THRESHOLD,
     OUTPUT_DIR,
     REVIEW_THRESHOLD,
     PROJECT_ROOT,
-    FieldConfig,
-    get_field_configs,
 )
 from src.splink_model import predictions_path
+
+DECISION_LABEL = {
+    "MATCH": "Digabung",
+    "REVIEW": "Perlu diperiksa",
+    "NON_MATCH": "Berbeda",
+}
+
+
+def format_duration(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "-"
+    seconds = max(0, int(seconds))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}j {minutes}m {seconds}d" if hours else f"{minutes}m {seconds}d"
+
+
+def format_threshold(value: float | int | None) -> str:
+    return "-" if value is None else f"{float(value):.3f}"
 
 
 def _is_blank(value: Any) -> bool:
@@ -61,7 +77,7 @@ def workflow_step(path: str) -> None:
             ("8", "Explain"),
             ("9", "History"),
         ]
-        icons = {i: (s := f"s{step}") and ("✅" if i < step else ("🔄" if i == step else "⬜")) for i, s in enumerate(steps)}
+        icons = {i: ("✅" if i < step else ("🔄" if i == step else "⬜")) for i, _ in enumerate(steps)}
         st.caption(" / ".join(f"{icons[i]} {name}" for i, name in steps))
 
 
@@ -70,6 +86,45 @@ def page_header(title: str, description: str = "") -> None:
     st.title(title)
     if description:
         st.markdown(f"<small>{description}</small>", unsafe_allow_html=True)
+
+
+NAV_PAGES = [
+    ("upload", "app_streamlit.py", "Upload Data"),
+    ("review", "1_review.py", "Pemeriksaan"),
+    ("master", "2_master.py", "Data Master"),
+    ("dashboard", "3_dashboard.py", "Ringkasan"),
+    ("retrain", "4_retrain.py", "Latih Ulang"),
+    ("queue", "5_queue.py", "Antrean"),
+    ("batch", "6_batch.py", "Pemrosesan Batch"),
+    ("gaps", "7_gaps.py", "Kesenjangan"),
+    ("explain", "8_explain.py", "Penjelasan"),
+    ("history", "9_history.py", "Riwayat"),
+]
+
+
+def render_sidebar(current_page_key: str) -> None:
+    st.sidebar.title("Deduplication")
+    st.sidebar.caption("CRM Entity Resolution")
+    keys = [key for key, _, _ in NAV_PAGES]
+    selected = st.sidebar.selectbox(
+        "Pilih halaman", keys, index=keys.index(current_page_key),
+        format_func=lambda key: next(title for k, _, title in NAV_PAGES if k == key),
+        key=f"app_navigation_{current_page_key}",
+    )
+    if selected != current_page_key:
+        page = st.session_state.get("registered_pages", {}).get(selected)
+        if page is None:
+            st.error(f"Halaman belum terdaftar: {selected}")
+            st.stop()
+        st.switch_page(page)
+    st.sidebar.divider()
+    title = next(title for key, _, title in NAV_PAGES if key == current_page_key)
+    st.sidebar.subheader(title)
+    st.sidebar.caption("Halaman aktif")
+    st.sidebar.divider()
+    st.sidebar.subheader("Model Aktif")
+    st.sidebar.caption(f"Threshold match: {MATCH_THRESHOLD}")
+    st.sidebar.caption(f"Threshold review: {REVIEW_THRESHOLD}")
 
 
 def page_guide(path: str) -> None:
@@ -234,6 +289,22 @@ def model_levels() -> dict:
     return settings.get("comparison_levels", {})
 
 
+def label_label(label: str | None) -> str:
+    return {"match": "Gabung", "no_match": "Bedakan", "unsure": "Tidak yakin", "": "Belum diputuskan"}.get(str(label or ""), str(label or "-"))
+
+
+def review_status_label(status: str | None) -> str:
+    return {"pending": "Menunggu", "reviewed": "Sudah diperiksa", "completed": "Selesai"}.get(str(status or ""), str(status or "-"))
+
+
+def stratum_label(value: str | None) -> str:
+    return str(value or "Tidak diketahui").replace("_", " ").title()
+
+
+def probability_band_help() -> str:
+    return "Di bawah threshold review = berbeda; di antara threshold = perlu diperiksa; di atas threshold match = sama."
+
+
 def decision_label(decision: str | None) -> str:
     """Translate decision code to human-readable label."""
     return {
@@ -243,6 +314,18 @@ def decision_label(decision: str | None) -> str:
     }.get(decision or "", "❓ Tidak diketahui")
 
 
+def format_count(value: int | float | None) -> str:
+    return "-" if value is None else f"{int(value):,}"
+
+
+def paginate(frame: Any, page_size: int = 25, key: str = "page"):
+    total = len(frame)
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = st.number_input("Halaman", min_value=1, max_value=pages, value=1, step=1, key=key)
+    start = (page - 1) * page_size
+    return frame.iloc[start:start + page_size], page
+
+
 def format_probability(prob: float | None) -> str:
     """Format probability as percentage string."""
     if prob is None:
@@ -250,8 +333,10 @@ def format_probability(prob: float | None) -> str:
     return f"{prob:.1%}"
 
 
-def format_rate(count: int, total: int) -> str:
-    """Format count/total as percentage."""
+def format_rate(count: int, total: int | None = None) -> str:
+    """Format count/total or a proportion as percentage."""
+    if total is None:
+        return f"{float(count):.1%}"
     if total == 0:
         return "0%"
     return f"{count/total:.1%}"
@@ -280,13 +365,38 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
     import pandas as pd
 
     rows = []
+    gamma_fields = {
+        "core_identity": "gamma_name",
+        "first_name": "gamma_name",
+        "last_name": "gamma_name",
+        "email": "gamma_contact",
+        "phone": "gamma_contact",
+        "dob": "gamma_contact",
+        "address": "gamma_location",
+        "city": "gamma_location",
+        "state": "gamma_location",
+        "country": "gamma_location",
+    }
+    source_fields = {
+        "core_identity": None,
+        "first_name": "first_name_std",
+        "last_name": "last_name_std",
+        "email": "email_std",
+        "phone": "phone_std",
+        "dob": "dob_std",
+        "address": "address_std",
+        "city": "city_std",
+        "state": "state_std",
+        "country": "country_std",
+    }
     for field in ("core_identity", *FIELD_LABEL):
-        gamma_col = f"gamma_{field}"
+        gamma_col = gamma_fields.get(field, f"gamma_{field}")
         code = row.get(gamma_col)
         code = None if code is None or _is_blank(code) else int(code)
         label, m, u = levels.get(gamma_col, {}).get(code, (None, 0.0, 0.0)) if code is not None else (None, 0.0, 0.0)
-        left = row.get(f"{field}_l")
-        right = row.get(f"{field}_r")
+        source_field = source_fields.get(field)
+        left = row.get(f"{source_field}_l") if source_field else row.get("first_name_std_l")
+        right = row.get(f"{source_field}_r") if source_field else row.get("first_name_std_r")
         weight = math.log2(m / u) if m > 0 and u > 0 else None
         evidence = (
             "tidak ada data"
@@ -348,7 +458,7 @@ def show_evidence(row: dict, levels: dict) -> None:
         )
 
     if support.empty and against.empty:
-        st.info("Tidak ada bukti kuat ke arah mana pun. Ini memang kasus abu-abu.")
+        return
     elif against.empty:
         st.success("Semua bukti mendukung: tidak ada satu pun field yang menolak.")
     elif support.empty:
@@ -398,6 +508,10 @@ def format_history_table(frame: Any) -> Any:
 
     # Kolom baru
     out["waktu"] = pd.to_datetime(out["timestamp"]).dt.strftime("%Y-%m-%d %H:%M")
+    if "_runtime_note" not in out.columns:
+        out["_runtime_note"] = ""
+    if "_success" not in out.columns:
+        out["_success"] = True
     out["catatan"] = out["_runtime_note"].apply(translate_note)
     out["sukses"] = out["_success"].map({True: "Ya", False: "Tidak"})
 

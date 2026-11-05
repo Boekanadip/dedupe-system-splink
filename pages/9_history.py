@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR, predictions_path
 from src.labels import QUEUE_PATH, GOLD_PATH
-from src.ui import monitoring_sidebar, page_guide, page_header, workflow_step
+from src.ui import render_sidebar, monitoring_sidebar, page_guide, page_header, workflow_step
 
 st.set_page_config(page_title="Riwayat - Entity Resolution", page_icon="📜", layout="wide")
 page_header(
@@ -20,9 +20,7 @@ page_header(
     "Catatan siapa mengubah apa dan kapan. Dipakai untuk menelusuri kembali "
     "kenapa seorang customer digabung atau dipisah.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-workflow_step(__file__)
+render_sidebar("history")
 
 # ---- pencarian
 c1, c2 = st.columns(2)

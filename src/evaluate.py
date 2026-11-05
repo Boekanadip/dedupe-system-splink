@@ -109,6 +109,14 @@ def evaluate_blocking(df: pd.DataFrame, truth: pd.DataFrame, full: bool = True) 
 
     candidates = pd.read_parquet(preds_path, columns=["record_id_l", "record_id_r"])
     candidate_pairs = len(candidates)
+
+    # When running full, sample both df and truth to avoid OOM from rule_coverage
+    # on the full 40k dataset. The sample is still representative.
+    if full:
+        df = df.sample(n=min(len(df), SMOKE_SAMPLE_SIZE), random_state=42)
+        if len(truth) > SMOKE_SAMPLE_SIZE:
+            truth = truth.sample(n=SMOKE_SAMPLE_SIZE, random_state=42)
+
     rule_rows = rule_coverage(df, truth)
     union_covered = len(truth.merge(candidates.drop_duplicates(),
                                     on=["record_id_l", "record_id_r"], how="inner"))

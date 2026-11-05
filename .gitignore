@@ -22,8 +22,12 @@ venv/
 outputs/*.parquet
 outputs/*.tmp
 outputs/.pipeline_running
+outputs/.staging/
 *.log
 .env
+
+# DuckDB temp storage (bisa ratusan MB)
+.tmp/
 
 # Testing
 .pytest_cache/

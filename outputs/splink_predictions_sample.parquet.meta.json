@@ -1,0 +1,42 @@
+{
+  "artifact": "splink_predictions",
+  "scope": "sample",
+  "input_rows": 10000,
+  "pairs_scored": 4161,
+  "blocking_rules": [
+    "email_exact",
+    "phone_exact",
+    "name_exact",
+    "city_dob",
+    "dob_exact",
+    "address_city",
+    "phone_prefix",
+    "name_prefix",
+    "name_prefix_state",
+    "email_domain_name",
+    "city_state_dob_year",
+    "email_domain",
+    "city_state_dob",
+    "phone_last4",
+    "email_domain_fuzzy",
+    "city_state_dob_fuzzy",
+    "name_fuzzy_last4"
+  ],
+  "training_rules": [
+    "phone_prefix",
+    "name_prefix",
+    "email_domain_name",
+    "email_domain",
+    "email_domain_fuzzy",
+    "name_fuzzy_last4"
+  ],
+  "lambda_recall_assumption": 1.0,
+  "m_else_level_floor": 0.05,
+  "match_threshold": 0.84,
+  "review_threshold": 0.35,
+  "random_seed": 42,
+  "splink_version": "4.0.17",
+  "model_version": "v20261102_120022",
+  "trained": true,
+  "runtime_seconds": 1.66
+}

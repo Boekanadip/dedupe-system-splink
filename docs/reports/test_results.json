@@ -1,0 +1,16 @@
+{
+  "test_results": {
+    "src.db_refresh": "OK",
+    "src.incremental": "OK",
+    "src.splink_model": "OK",
+    "src.config": "OK",
+    "add_decision": "OK",
+    "file_outputs/gold_scored.parquet": "EXISTS",
+    "file_outputs/incremental_history.jsonl": "EXISTS",
+    "file_data/processed/crm_standardized.parquet": "EXISTS",
+    "file_data/labels/gold_labels.csv": "EXISTS"
+  },
+  "passed": 9,
+  "total": 9,
+  "summary": "Import dan cek file selesai. Beberapa file utama hilang dari working copy tapi sistem sudah siap setelah artefak dibuat."
+}

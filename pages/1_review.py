@@ -9,21 +9,19 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT
+from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT, PROCESSED_DATA_PATH
 from src.labels import exclude_gold_pairs, load_labels
 from src.ui import (
-    workflow_step,
     decision_label,
     field_label,
     format_probability,
     how_to_read,
     label_label,
     model_levels,
-    monitoring_sidebar,
-    page_guide,
     page_header,
     probability_band_help,
     probability_verdict,
+    render_sidebar,
     review_status_label,
     show_evidence,
     stratum_label,
@@ -61,16 +59,12 @@ GRID_COLUMNS: list[tuple[str, str]] = [
 ]
 GRID_TITLES = {raw: title for raw, title in GRID_COLUMNS}
 
-st.set_page_config(page_title="Review Entity Resolution", page_icon="🔎", layout="wide")
 page_header(
     "Pemeriksaan Pasangan",
     "Sistem tidak yakin apakah dua record itu orang yang sama. "
     "Anda yang memutuskan, satu per satu.",
 )
-monitoring_sidebar()
-page_guide(__file__)
-how_to_read()
-workflow_step(__file__)
+render_sidebar("review")
 
 if not QUEUE_PATH.exists():
     st.info("Belum ada antrean. Jalankan pipeline dari halaman Upload dulu.")
@@ -202,21 +196,42 @@ with tab_compare:
             "dob_std", "address_std", "city_std", "state_std", "country_std",
         )
         evidence_row = {"record_id_l": row["record_id_l"], "record_id_r": row["record_id_r"]}
+        # Antrean dapat berisi pasangan lama yang sudah tidak ada di data aktif.
+        # Gunakan evidence yang sudah disimpan di baris antrean terlebih dahulu.
+        for field in value_fields:
+            for side in ("l", "r"):
+                column = f"{field}_{side}"
+                if column in row.index and pd.notna(row[column]):
+                    evidence_row[column] = row[column]
         if PREDS_PATH.exists():
             try:
-                wanted = (
-                    ["record_id_l", "record_id_r", "decision"]
-                    + [f"gamma_{f}" for f in value_fields]
-                    + [f"{f}_{side}" for f in value_fields for side in ("l", "r")]
-                )
+                pred_columns = pd.read_parquet(PREDS_PATH, columns=[]).columns.tolist()
+                wanted = ["record_id_l", "record_id_r", "decision", "gamma_name", "gamma_contact", "gamma_location"]
+                wanted += [f"{f}_{side}" for f in value_fields for side in ("l", "r")]
+                wanted = [column for column in wanted if column in pred_columns]
                 gdf = pd.read_parquet(PREDS_PATH, columns=wanted)
                 ghit = gdf[
-                    (gdf["record_id_l"] == row["record_id_l"])
-                    & (gdf["record_id_r"] == row["record_id_r"])
+                    (gdf["record_id_l"].astype(str) == str(row["record_id_l"]))
+                    & (gdf["record_id_r"].astype(str) == str(row["record_id_r"]))
                 ]
                 if not ghit.empty:
                     evidence_row.update(ghit.iloc[0].to_dict())
             except Exception:
+                pass
+
+        # Queue lama berisi evidence lengkap; fallback ke sumber standar bila
+        # pasangan tidak ada lagi di artifact prediction aktif.
+        missing_values = [f"{field}_{side}" not in evidence_row for field in value_fields for side in ("l", "r")]
+        if any(missing_values):
+            try:
+                records = pd.read_parquet(PROCESSED_DATA_PATH, columns=["record_id", *value_fields])
+                records["record_id"] = records["record_id"].astype(str)
+                left = records[records["record_id"] == str(row["record_id_l"])].iloc[0]
+                right = records[records["record_id"] == str(row["record_id_r"])].iloc[0]
+                for field in value_fields:
+                    evidence_row[f"{field}_l"] = left[field]
+                    evidence_row[f"{field}_r"] = right[field]
+            except (FileNotFoundError, IndexError, KeyError):
                 pass
 
         m1, m2 = st.columns(2)
@@ -226,6 +241,22 @@ with tab_compare:
             help=probability_band_help(),
         )
         m2.metric("Status model", decision_label(evidence_row.get("decision", "REVIEW")))
+
+        # Tampilkan isi pasangan dari hasil prediksi aktual.
+        st.subheader("Data dua record")
+        pair_values = []
+        for field, label in [
+            ("first_name_std", "Nama depan"), ("last_name_std", "Nama belakang"),
+            ("email_std", "Email"), ("phone_std", "Telepon"),
+            ("dob_std", "Tanggal lahir"), ("address_std", "Alamat"),
+            ("city_std", "Kota"), ("state_std", "Provinsi"), ("country_std", "Negara"),
+        ]:
+            pair_values.append({
+                "Informasi": label,
+                "Record A": evidence_row.get(f"{field}_l", "-"),
+                "Record B": evidence_row.get(f"{field}_r", "-"),
+            })
+        st.dataframe(pd.DataFrame(pair_values), width="stretch", hide_index=True)
 
         st.info(probability_verdict(probability))
 
@@ -367,4 +398,4 @@ if st.session_state.get("msg", "").startswith("Berhasil disimpan"):
     st.subheader("Habis ini ke mana?")
 
     if st.button("Buka Pengaturan Sistem untuk melatih ulang"):
-        st.switch_page("pages/4_retrain.py")
+        st.switch_page(st.session_state["registered_pages"]["retrain"])

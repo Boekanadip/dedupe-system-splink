@@ -1,11 +1,8 @@
+[client]
+showSidebarNavigation = false
+
 [server]
-address = "0.0.0.0"
-maxUploadSize = 200
+headless = true
 
 [browser]
 gatherUsageStats = false
-
-# Tanpa [theme] di sini: Streamlit mengikuti tema OS (light/dark). Override theme
-# paksa warna tetap padahal OS pakai dark mode, sehingga tombol primary terasa
-# "hilang". Kalau nanti perlu paksa warna tertentu, tambah blok [theme] dengan
-# base = "dark" (atau "light") — jangan set warna partial saja.

@@ -1,0 +1,8 @@
+{
+  "artifact": "master_customers",
+  "scope": "full",
+  "entities": 39873,
+  "records": 40000,
+  "source_entity_map_scope": "full",
+  "match_threshold": 0.84
+}

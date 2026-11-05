@@ -233,7 +233,7 @@ def score_new_pairs(
         )
 
     db_api = DuckDBAPI()
-    sdf = db_api.register(scored, dataset_display_name="incremental_scored")
+    sdf = db_api.register_table(scored)
     linker = Linker(sdf, patched)
     tf_tables = corpus_tf_tables(model)
     for col, table in tf_tables.items():

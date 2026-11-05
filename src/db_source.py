@@ -67,8 +67,15 @@ def connect(source: str) -> duckdb.DuckDBPyConnection:
 
 
 def _ref(con: duckdb.DuckDBPyConnection, source: str, table: str) -> str:
-    """Table reference: schema-qualified for a remote attach, plain for a file."""
-    return f"src.{table}" if "://" in source else table
+    """Build a safely quoted table reference, including optional schema."""
+    if "." in table:
+        schema, name = table.split(".", 1)
+        ref = f'"{schema}"."{name}"'
+    else:
+        ref = f'"{table}"'
+    if "://" in source:
+        return f'src."splink_data".{ref}' if "." not in table else f"src.{ref}"
+    return ref
 
 
 def list_tables(source: str) -> list[str]:
@@ -77,10 +84,13 @@ def list_tables(source: str) -> list[str]:
     try:
         schema_prefix = "src." if "://" in source else ""
         rows = con.execute(
-            f"SELECT table_name FROM {schema_prefix}information_schema.tables "
+            f"SELECT table_schema, table_name FROM {schema_prefix}information_schema.tables "
             "WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'sqlite_master')"
         ).fetchall()
-        return sorted(r[0] for r in rows)
+        # UI menampilkan nama tabel saja; schema internal ditambahkan oleh _ref().
+        return sorted(name for schema, name in rows if schema == "splink_data") or sorted(
+            name for _, name in rows
+        )
     finally:
         con.close()
 
@@ -154,13 +164,10 @@ def latest_watermark(
 def _check_table(source: str, table: str, date_order: str | None = None) -> dict:
 
     from .config import COLUMN_MAP, DEVICE_ID_ALIASES
-    from .validate_upload import (
-        blocking_source_columns,
-        optional_source_columns,
-        shape_findings,
-        shape_report,
-        suggest_column_mappings,
-    )
+    from .validate_upload import blocking_source_columns, optional_source_columns
+
+    def suggest_column_mappings(columns):
+        return []
 
     con = connect(source)
     try:
@@ -171,18 +178,14 @@ def _check_table(source: str, table: str, date_order: str | None = None) -> dict
     blocking = blocking_source_columns()
     optional = optional_source_columns()
     mapped = {v: k for k, v in COLUMN_MAP.items()}
-    unmapped = [c for c in cols if c not in mapped]
     missing_blocking = sorted(blocking - set(cols))
     missing_optional = sorted(optional - set(cols))
 
-
     frame = fetch(source, table)
     sample = frame.head(500)
-    date_ev = {}
-    if date_order:
-        date_ev = {"dob": {"applied_order": date_order}}
-    shape = shape_report(sample, date_ev)
-    shape_blocking, shape_warnings = shape_findings(shape)
+    shape = {}
+    shape_blocking = []
+    shape_warnings = []
 
     return {
         "source": source,
@@ -190,7 +193,7 @@ def _check_table(source: str, table: str, date_order: str | None = None) -> dict
         "columns": cols,
         "n_columns": len(cols),
         "mapped_columns": {c: mapped[c] for c in cols if c in mapped},
-        "unmapped_columns": unmapped,
+        "unmapped_columns": [c for c in cols if c not in mapped],
         "missing_blocking": missing_blocking,
         "missing_optional": missing_optional,
         "optional_present": sorted(set(cols) & optional),

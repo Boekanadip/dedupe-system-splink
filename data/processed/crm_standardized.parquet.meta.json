@@ -27,7 +27,7 @@
       "month_gt_12": 0,
       "ambiguous_rows": 39742,
       "detected_order": "dmy",
-      "source": "explicit",
+      "source": "detected",
       "applied_order": "dmy",
       "day_first": true
     },
@@ -37,7 +37,7 @@
       "month_gt_12": 0,
       "ambiguous_rows": 39687,
       "detected_order": "dmy",
-      "source": "explicit",
+      "source": "detected",
       "applied_order": "dmy",
       "day_first": true
     }

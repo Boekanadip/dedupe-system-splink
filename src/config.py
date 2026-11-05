@@ -19,6 +19,7 @@ MASTER_PATH = OUTPUT_DIR / "master_customers.parquet"
 
 SCOPE_SAMPLE = "sample"
 SCOPE_FULL = "full"
+SCOPE_PARTIAL = "partial"
 
 PIPELINE_LOCK = OUTPUT_DIR / ".pipeline_running"
 
@@ -252,7 +253,6 @@ def pipeline_locked() -> dict | None:
 
 COLUMN_MAP = {
     "customer_id": "customer_id",
-    "client_id": "client_id",
     "first_name": "first_name",
     "last_name": "last_name",
     "email": "email",

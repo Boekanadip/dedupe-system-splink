@@ -13,6 +13,7 @@ import pandas as pd
 from . import model_lifecycle
 from .config import (
     ENTITY_MAP_PATH,
+    MASTER_PATH,
     MATCH_THRESHOLD,
     OUTPUT_DIR,
     PROCESSED_DATA_PATH,
@@ -206,10 +207,14 @@ def update_records(
     new_edges = new_preds[new_preds["decision"] == "MATCH"][
         ["record_id_l", "record_id_r", "match_probability"]
     ]
-    stale = _stale_entities(old_edges_before, new_edges, set(record_ids))
-    if stale:
-        _write_stale(stale)
-        _enqueue_stale(stale)
+    # Opsi B: Recompute komponen yang tersentuh saja (tidak hanya tandai stale).
+    recompute_summary = _recompute_affected_entities(
+        set(record_ids),
+        new_edges,
+        predictions_path(full=True),
+        ENTITY_MAP_PATH,
+        MASTER_PATH,
+    )
 
     return {
         "updated_records": len(record_ids),
@@ -219,8 +224,9 @@ def update_records(
             set(map(tuple, old_edges_before[["record_id_l", "record_id_r"]].values))
             & set(map(tuple, new_edges[["record_id_l", "record_id_r"]].values))
         ) if len(old_edges_before) else 0,
-        "stale_entities": len(stale),
+        "stale_entities": recompute_summary["affected_entities"],
         "record_ids": record_ids,
+        "recompute": recompute_summary,
     }
 
 
@@ -280,6 +286,97 @@ def _stale_entities(
         for r in sorted(stale_records)
     ]
 
+
+def _recompute_affected_entities(
+    record_ids: set[str],
+    new_edges: pd.DataFrame,
+    preds_path: Path,
+    emap_path: Path,
+    master_path: Path,
+) -> dict:
+    """Hitung ulang entity yang tersentuh update-in-place, lalu simpan ulang.
+
+    Menggantikan pendekatan lama yang hanya menandai entity sebagai "stale":
+    entity_map dan master_customers langsung diperbarui dari MATCH edge terbaru.
+    Grafik dipecah ulang per komponen yang tersentuh saja, bukan seluruh dataset.
+    """
+    from .master_record import build_lineage, pick_master_values
+
+    emap_path, master_path = Path(emap_path), Path(master_path)
+    emap = pd.read_parquet(emap_path)
+    by_rec = dict(zip(emap["record_id"], emap["entity_id"]))
+    touched = {by_rec[rid] for rid in record_ids if rid in by_rec}
+
+    # Record seeds: seluruh anggota entity lama yang tersentuh. Komponen baru
+    # dihitung dengan incremental_cluster, yang hanya meng-union record baru
+    # ke entity lama lewat MATCH edge.
+    seeds = set(record_ids)
+    for rid, eid in by_rec.items():
+        if eid in touched:
+            seeds.add(rid)
+
+    updated_map, merge_events, n_new = incremental_cluster(
+        emap, seeds, new_edges[["record_id_l", "record_id_r"]]
+    )
+    updated_map.to_parquet(emap_path, index=False)
+    write_meta(
+        emap_path,
+        artifact="entity_map",
+        scope=SCOPE_FULL,
+        records=len(updated_map),
+        entities=int(updated_map["entity_id"].nunique()),
+        incremental_batch="db_refresh",
+    )
+
+    # Perbarui master_customers untuk entity yang tersentuh. Baris lama dihapus
+    # dan dibangun ulang dari record + entity_map terbaru, bukan dari baris
+    # master lama: entity yang dipecah/merge harus hilang sepenuhnya.
+    affected = touched | {e for ev in merge_events for e in ev["entities"]}
+    rebuilt = 0
+    if master_path.exists() and affected:
+        new_map = dict(zip(updated_map["record_id"], updated_map["entity_id"]))
+        rows = _old_rows_by_ids({r for r, e in new_map.items() if e in affected})
+        if not rows.empty:
+            rows["entity_id"] = rows["record_id"].map(new_map)
+            rebuilt_frame = build_lineage(rows).merge(
+                pick_master_values(rows), on="entity_id", how="left"
+            )
+            rebuilt = int(rebuilt_frame["entity_id"].nunique())
+            master = pd.read_parquet(master_path)
+            master = master[~master["entity_id"].isin(affected)]
+            master = pd.concat([master, rebuilt_frame], ignore_index=True)
+            master.to_parquet(master_path, index=False)
+            write_meta(
+                master_path,
+                artifact="master_customers",
+                scope=SCOPE_FULL,
+                entities=len(master),
+                records=int(master["record_count"].sum()),
+                incremental_batch="db_refresh",
+            )
+
+    return {
+        "affected_entities": len(affected),
+        "entities_updated": int(updated_map["entity_id"].nunique()),
+        "new_entities": n_new,
+        "merged_entities": len(merge_events),
+        "master_rows_rebuilt": rebuilt,
+    }
+
+
+def _old_rows_by_ids(record_ids: set[str]) -> pd.DataFrame:
+    """Ambil baris parquet berdasarkan record_id tanpa memuat seluruh berkas."""
+    ids = sorted(record_ids)
+    if not ids:
+        return pd.DataFrame()
+    con = duckdb.connect()
+    con.register("wanted", pd.DataFrame({"record_id": ids}))
+    rows = con.execute(
+        f"SELECT o.* FROM read_parquet('{PROCESSED_DATA_PATH}') o "
+        "JOIN wanted w ON w.record_id = o.record_id"
+    ).df()
+    con.close()
+    return rows
 
 def _write_stale(stale: list[dict]) -> None:
     existing = json.loads(STALE_PATH.read_text(encoding="utf-8")) if STALE_PATH.exists() else []

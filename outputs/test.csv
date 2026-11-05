@@ -1,0 +1,4 @@
+record_id_l,record_id_r,match_probability,decision,business_rule
+a,d,0.95,MATCH,
+b,e,0.5,REVIEW,
+c,f,0.1,NON_MATCH,

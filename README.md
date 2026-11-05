@@ -1,52 +1,149 @@
-# System Dedupe with Splink
+# CRM Entity Resolution dengan Splink
 
-### Probabilistic Record Linkage menggunakan Splink
+Aplikasi Streamlit untuk menemukan kemungkinan duplikasi customer melalui **probabilistic record linkage**. Sistem membandingkan beberapa record, memberi skor kemiripan, mengelompokkan record ke `entity_id`, lalu menyediakan antrean pemeriksaan manusia.
 
-Sistem **CRM Entity Resolution & Deduplication** untuk mendeteksi, mengevaluasi, dan mengelola duplikasi data pelanggan menggunakan pendekatan *probabilistic record linkage*.
+> Status: prototype/demo lokal. `MATCH` adalah hasil model, bukan kebenaran yang sudah diverifikasi. `REVIEW` tetap perlu diperiksa manusia.
 
-Secara garis besar:
+## Menjalankan aplikasi
 
-<img width="576" height="274" alt="Image" src="https://github.com/user-attachments/assets/d2e68744-cc55-4b2a-8e71-8785df8c22dd" />
+### Prasyarat
 
-## Instalasi
+- Python 3.11+.
+- Dependensi pada `requirements.txt`.
+- Dataset CSV dengan minimal `first_name`, `last_name`, serta salah satu `email` atau `phone_number`.
+- Docker hanya diperlukan untuk fitur PostgreSQL/database. Analisis CSV lokal tidak wajib memakai Docker.
 
-1. Clone repository
-2. Install dependensi: `pip install -r requirements.txt`
-3. Jalankan Docker: `docker-compose up -d`
-4. Jalankan aplikasi: `streamlit run pages/upload.py`
+### Instalasi
 
-## Struktur Folder
-
-```
-├── .opencode/        <-- Folder implementasi AI agent (tidak dipush ke GitHub)
-├── .gitignore        <-- File ignore Git
-├── .env.example      <-- Contoh variabel environment
-├── config/           <-- Konfigurasi Splink dan blocking rules
-├── data/             <-- Data mentah dan hasil processing
-├── outputs/          <-- File output (parquet, results)
-├── scripts/          <-- Script batch dan otomasi
-├── src/              <-- Source code utama
-│   └── config.py     <-- Column mapping dan konfigurasi
-├── tests/            <-- Test suite
-├── pages/            <-- Aplikasi Streamlit
-├── api/              <-- FastAPI endpoints
-├── ui/               <-- Antarmuka pengguna
-├── docker/           <-- Konfigurasi Docker
-├── .env              <-- Environment variables (lokal)
-├── Makefile          <-- Perintah build dan testing
-├── requirements.txt  <-- Dependensi Python
-└── README.md         <-- Dokumentasi ini
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 ```
 
-## Kegunaan File Utama
+### Menjalankan Streamlit
 
-- `src/config.py` - Konfigurasi column mapping Splink dan 14 blocking rules
-- `scripts/batch_predict.py` - Script prediksi batch harian
-- `pages/1_review.py` - Review pasangan ambiguitas secara manual
-- `pages/5_queue.py` - Antrean pasangan REVIEW yang pending
-- `pages/6_batch.py` - Batch review sebelum digabung ke master
-- `api/app.py` - REST API endpoint untuk aplikasi eksternal
-- `ui/app.py` - Dashboard Streamlit interaktif
-- `docker-compose.yml` - Layanan PostgreSQL, Streamlit, dan lainnya
-- `Makefile` - Target build, test, dan pipeline otomatisasi
-- `.env.example` - Contoh variabel environment untuk development
+```powershell
+streamlit run app.py
+```
+
+Buka `http://localhost:8501`. Jika port tersebut terpakai:
+
+```powershell
+streamlit run app.py --server.port 8502
+```
+
+Gunakan `app.py` sebagai entrypoint utama. File `pages/app_streamlit.py` adalah halaman Upload yang didaftarkan melalui `st.navigation`.
+
+## Cara memakai aplikasi
+
+1. Buka **Upload**.
+2. Pilih **File CSV**.
+3. Upload file customer.
+4. Periksa jumlah baris, kolom, delimiter, encoding, nilai kosong, dan duplikat persis.
+5. Pilih kolom pembanding: nama, email, telepon, alamat, kota, provinsi, negara, dan tanggal lahir sesuai data yang tersedia.
+6. Klik **Analisis batch**.
+7. Buka **Ringkasan** untuk melihat hasil umum.
+8. Buka **Kesenjangan** untuk melihat record sendirian serta pasangan `REVIEW` yang belum masuk antrean.
+9. Masukkan sedikit pasangan, misalnya 20–50, ke **Antrean**.
+10. Buka **Pemeriksaan**. Bandingkan dua record lalu pilih gabungkan, bedakan, atau tidak yakin.
+11. Buka **Data Master** untuk melihat ringkasan entitas jika artefaknya tersedia.
+12. Lewati **Latih Ulang** untuk demo pada dataset besar. Retrain membaca seluruh batch yang terdaftar dan dapat membutuhkan RAM/CPU besar.
+
+## Arti status
+
+- **MATCH / Digabung**: model menilai dua record kemungkinan besar berasal dari entitas yang sama. Record sumber tidak dihapus.
+- **REVIEW / Perlu diperiksa**: bukti belum cukup; keputusan manusia diperlukan.
+- **NON_MATCH / Berbeda**: model menilai dua record kemungkinan berasal dari entitas berbeda.
+
+`record_id` adalah ID setiap baris. `customer_id` adalah ID dari sistem sumber. `entity_id` adalah ID kelompok hasil resolusi. Ketiganya tidak boleh disamakan.
+
+## Alur di belakang layar
+
+```text
+Upload CSV
+  -> validasi dan profiling
+  -> batch terdaftar
+  -> standardisasi kolom menjadi *_std
+  -> blocking untuk mencari pasangan kandidat
+  -> Splink menghitung match_weight dan match_probability
+  -> keputusan MATCH / REVIEW / NON_MATCH
+  -> entity_map dan master_customers
+  -> review manusia dan evaluasi
+```
+
+Data mentah tetap dipertahankan. Standardisasi membuat kolom baru; nilai mentah tidak seharusnya ditimpa.
+
+## Pipeline penuh
+
+`python -m src.run_all` menjalankan tahap berikut:
+
+```text
+profiling
+standardize
+labels_silver
+blocking_benchmark
+splink_model
+labels_review_queue
+clustering
+master_record
+evaluate
+version_gold_scores
+```
+
+Untuk data besar, jalankan hanya setelah memastikan kapasitas komputer memadai. Gunakan `--sample` untuk smoke test, bukan sebagai hasil produksi:
+
+```powershell
+python -m src.run_all --sample
+```
+
+Parameter `--full-u-estimation` dapat membutuhkan memori besar. Jangan menjalankannya pada PC demo tanpa mengukur jumlah pasangan terlebih dahulu.
+
+## Pembobotan dan keterbatasan
+
+Model membandingkan kolom terstandardisasi seperti `first_name_std`, `last_name_std`, `email_std`, `phone_std`, lokasi, dan tanggal lahir. `match_probability` adalah bukti model yang perlu dievaluasi; bukan label ground truth.
+
+Distribusi skor harus diperiksa sebelum menetapkan threshold. Dataset tanpa kasus abu-abu dapat menghasilkan hampir semua pasangan berada di ujung skor. Evaluasi yang bermakna membutuhkan label manual, kasus typo, perubahan email/telepon, perubahan alamat, serta tanggal lahir yang tidak sempurna.
+
+Retrain dan perubahan pembobotan tidak dijalankan otomatis setiap kali CSV masuk. Simpan model, evaluasi hasilnya, lalu promosikan versi baru hanya setelah pemeriksaan.
+
+## Struktur utama
+
+```text
+app.py                 entrypoint Streamlit dan st.navigation
+pages/                 halaman Upload, Ringkasan, Pemeriksaan, Antrean, dan lainnya
+src/                   pipeline, standardisasi, Splink, clustering, evaluasi
+data/raw/              batch CSV sumber
+data/processed/        data terstandardisasi
+outputs/               prediksi, entity map, master, laporan
+data/labels/           label gold dan antrean review
+scripts/                skrip operasional
+scripts/dev_checks/    skrip diagnosis/eksperimen lokal
+tests/                 pengujian
+Dockerfile*             konfigurasi container
+docker/                  schema dan migration database
+```
+
+## Verifikasi cepat
+
+```powershell
+python -m py_compile src/*.py pages/*.py
+```
+
+Jalankan test yang relevan sebelum demo:
+
+```powershell
+pytest -q
+```
+
+## Database/Docker
+
+```powershell
+docker compose up -d
+```
+
+Gunakan database hanya jika alur koneksi database atau ekspor memang diperlukan. Untuk demo CSV lokal, Docker dapat tetap dimatikan agar RAM tersedia untuk pipeline.
+
+## Catatan keamanan
+
+Jangan commit `.env`, password, token, data customer sensitif, atau artefak besar yang tidak dibutuhkan. Periksa `git status` sebelum commit dan push.

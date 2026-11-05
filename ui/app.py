@@ -150,8 +150,8 @@ elif page == "Model Info":
     st.subheader("Threshold Configuration")
     st.json({
         "auto_match": ">= 0.84",
-        "review": "0.35 - 0.84",
-        "auto_non_match": "< 0.35"
+        "review": "0.35 - 0.84",buka
+        "auto_non_match": "<= 0.35"
     })
     
     st.subheader("Evaluation Results (Threshold 0.86)")
@@ -183,4 +183,4 @@ elif page == "Model Info":
         st.code(f"{i+1}. {rule}", language="text")
 
 st.sidebar.markdown("---")
-st.sidebar.info("CRM Entity Resolution System v1.0")
+st.sidebar.info("CRM Entity Resolution")
