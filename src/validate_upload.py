@@ -51,7 +51,7 @@ def read_csv_any(path: Path) -> tuple[pd.DataFrame, dict]:
     best = max(DELIMITERS, key=lambda d: first_line.count(d))
     if first_line.count(best) == 0:
         # biarkan pandas mendeteksi pemisah.
-        frame = pd.read_csv(path, sep=None, engine="python", low_memory=False)
+        frame = pd.read_csv(path, sep=None, engine="python")
         return frame, {
             "delimiter": "sniffed",
             "encoding": encoding_used,

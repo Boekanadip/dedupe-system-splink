@@ -458,7 +458,7 @@ def show_evidence(row: dict, levels: dict) -> None:
         )
 
     if support.empty and against.empty:
-        st.info("Tidak ada bukti kuat ke arah mana pun. Ini memang kasus abu-abu.")
+        return
     elif against.empty:
         st.success("Semua bukti mendukung: tidak ada satu pun field yang menolak.")
     elif support.empty:

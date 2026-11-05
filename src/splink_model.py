@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import time
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -32,7 +33,6 @@ from .config import (
 
 
 def build_name_comparison() -> cl.CustomComparison:
-    """Nama: ejaan persis (kuat) + fonetik + fuzzy typo + Else (lemah)."""
     both_null = (
         "(first_name_std_l IS NULL OR last_name_std_l IS NULL) "
         "AND (first_name_std_r IS NULL OR last_name_std_r IS NULL)"
@@ -61,7 +61,7 @@ def build_name_comparison() -> cl.CustomComparison:
             is_null_level=True
         ),
         CustomLevel(exact, label_for_charts="ejaan persis").configure(
-            m_probability=0.85
+            m_probability=0.70
         ),
         CustomLevel(fuzzy, label_for_charts="fuzzy match (typo)").configure(
             m_probability=0.50
@@ -134,7 +134,7 @@ def _normalize_fixed_m(comparisons):
                     )
                     for lv in levels
                 ],
-                output_column_name=comp.output_column_name,
+                output_column_name=comp._output_column_name,
             )
     return comparisons
 
@@ -343,72 +343,73 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
             "AND last_name_std_l IS NOT NULL AND last_name_std_r IS NOT NULL "
             "AND last_name_std_l = last_name_std_r"
         )
-        # Fuzzy jaro-winkler default di sekitar 0.85
+        # Fuzzy jaro-winkler untuk typo
         fuzzy = (
             "(first_name_std_l IS NOT NULL AND first_name_std_r IS NOT NULL "
             "AND last_name_std_l IS NOT NULL AND last_name_std_r IS NOT NULL "
             "AND jaro_winkler_similarity(first_name_std_l || ' ' || last_name_std_l, "
             "                             first_name_std_r || ' ' || last_name_std_r) >= 0.85)"
         )
-        phonetic = (
-            "phonetic_first_name_l IS NOT NULL AND phonetic_first_name_r IS NOT NULL "
-            "AND phonetic_last_name_l IS NOT NULL AND phonetic_last_name_r IS NOT NULL "
-            "AND phonetic_first_name_l = phonetic_first_name_r "
-            "AND phonetic_last_name_l = phonetic_last_name_r"
-        )
-        
         levels = [
             CustomLevel(both_null, label_for_charts="nama kosong").configure(is_null_level=True),
-            CustomLevel(exact, label_for_charts="ejaan persis").configure(m_probability=0.85),
-            CustomLevel(fuzzy, label_for_charts="fuzzy match (typo)").configure(m_probability=0.50),
-            CustomLevel(phonetic, label_for_charts="fonetik saja").configure(m_probability=0.30),
-            ElseLevel().configure(m_probability=0.10),
+            CustomLevel(exact, label_for_charts="ejaan persis").configure(m_probability=0.70),
+            CustomLevel(fuzzy, label_for_charts="fonetik/typos").configure(m_probability=0.35),
+            ElseLevel().configure(m_probability=0.05),
         ]
         comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="name"))
     
-    # 2. Contact comparison (email + phone): jika ada email_std atau phone_std
-    has_contact = any(c in selected_columns for c in ["email_std", "phone_std"])
-    if has_contact:
-        contact_null = (
-            "(email_std_l IS NULL AND phone_std_l IS NULL) "
-            "OR (email_std_r IS NULL AND phone_std_r IS NULL)"
+    # 2a. Email comparison: jika ada email_std
+    has_email = "email_std" in selected_columns
+    if has_email:
+        email_null = "(email_std_l IS NULL AND email_std_r IS NULL)"
+        both_email = (
+            "email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l = email_std_r"
         )
-        both = (
-            "email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l = email_std_r "
-            "AND phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l = phone_std_r"
-        )
-        one = (
-            "(email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l = email_std_r) "
-            "OR (phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l = phone_std_r)"
-        )
-        # Penentuan m-probability berdasarkan kombinasi yang dipilih
-        if "email_std" in selected_columns and "phone_std" in selected_columns:
-            m_both = 0.70  # both strong
-        elif "email_std" in selected_columns:
-            m_both = 0.60  # email only
-        elif "phone_std" in selected_columns:
-            m_both = 0.55  # phone only
-        else:
-            m_both = 0.50
-            
         email_fuzzy = (
             "email_std_l IS NOT NULL AND email_std_r IS NOT NULL AND email_std_l <> email_std_r "
             "AND jaro_winkler_similarity(email_std_l, email_std_r) >= 0.85"
         )
-        phone_fuzzy = (
-            "phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l <> phone_std_r "
-            "AND jaro_winkler_similarity(phone_std_l, phone_std_r) >= 0.90"
+        email_localpart = (
+            "email_std_l IS NOT NULL AND email_std_r IS NOT NULL "
+            "AND email_std_l <> email_std_r "
+            "AND substring(email_std_l, 1, instr(email_std_l, '@') - 1) "
+            "= substring(email_std_r, 1, instr(email_std_r, '@') - 1)"
         )
         
-        levels = [
-            CustomLevel(contact_null, label_for_charts="kontak kosong").configure(is_null_level=True),
-            CustomLevel(both, label_for_charts="email dan telepon").configure(m_probability=m_both),
-            CustomLevel(one, label_for_charts="email atau telepon").configure(m_probability=0.45),
-            CustomLevel(email_fuzzy, label_for_charts="email mirip (typo)").configure(m_probability=0.45),
-            CustomLevel(phone_fuzzy, label_for_charts="telepon mirip (typo)").configure(m_probability=0.40),
-            ElseLevel().configure(m_probability=0.10),
+        levels_email = [
+            CustomLevel(email_null, label_for_charts="email kosong").configure(is_null_level=True),
+            CustomLevel(both_email, label_for_charts="email persis").configure(m_probability=0.70),
+            CustomLevel(email_fuzzy, label_for_charts="email mirip (JW >= 0.85)").configure(m_probability=0.45),
+            CustomLevel(email_localpart, label_for_charts="local-part sama").configure(m_probability=0.30),
+            ElseLevel().configure(m_probability=0.05),
         ]
-        comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="contact"))
+        comparisons.append(cl.CustomComparison(comparison_levels=levels_email, output_column_name="email"))
+    
+    # 2b. Phone comparison: jika ada phone_std
+    has_phone = "phone_std" in selected_columns
+    if has_phone:
+        phone_null = "(phone_std_l IS NULL AND phone_std_r IS NULL)"
+        both_phone = (
+            "phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l = phone_std_r"
+        )
+        phone_fuzzy = (
+            "phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL AND phone_std_l <> phone_std_r "
+            "AND jaro_winkler_similarity(CAST(phone_std_l AS VARCHAR), CAST(phone_std_r AS VARCHAR)) >= 0.90"
+        )
+        phone_pre7 = (
+            "phone_std_l IS NOT NULL AND phone_std_r IS NOT NULL "
+            "AND phone_std_l <> phone_std_r "
+            "AND substring(CAST(phone_std_l AS VARCHAR), 1, 7) = substring(CAST(phone_std_r AS VARCHAR), 1, 7)"
+        )
+        
+        levels_phone = [
+            CustomLevel(phone_null, label_for_charts="telepon kosong").configure(is_null_level=True),
+            CustomLevel(both_phone, label_for_charts="telepon persis").configure(m_probability=0.70),
+            CustomLevel(phone_fuzzy, label_for_charts="telepon mirip (JW >= 0.90)").configure(m_probability=0.45),
+            CustomLevel(phone_pre7, label_for_charts="7 digit awal sama").configure(m_probability=0.30),
+            ElseLevel().configure(m_probability=0.05),
+        ]
+        comparisons.append(cl.CustomComparison(comparison_levels=levels_phone, output_column_name="phone"))
     
     # 3. Location/Address comparison: jika ada address_std atau city_std
     has_location = any(c in selected_columns for c in ["address_std", "city_std", "state_std", "country_std"])
@@ -422,23 +423,22 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
             "AND city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r "
             "AND state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r"
         )
-        city_match = (
-            "city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r"
+        city_state = (
+            "city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r "
+            "AND state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r "
+            "AND (address_std_l IS NULL OR address_std_r IS NULL OR address_std_l <> address_std_r)"
         )
-        state_match = (
-            "state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r"
-        )
-        country_match = (
-            "country_std_l IS NOT NULL AND country_std_r IS NOT NULL AND country_std_l = country_std_r"
+        city_only = (
+            "city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r "
+            "AND (state_std_l IS NULL OR state_std_r IS NULL OR state_std_l <> state_std_r)"
         )
         
         levels = [
             CustomLevel(location_null, label_for_charts="lokasi kosong").configure(is_null_level=True),
-            CustomLevel(full_match, label_for_charts="alamat + city + state cocok").configure(m_probability=0.40),
-            CustomLevel(city_match, label_for_charts="city cocok").configure(m_probability=0.25),
-            CustomLevel(state_match, label_for_charts="state cocok").configure(m_probability=0.30),
-            CustomLevel(country_match, label_for_charts="country cocok").configure(m_probability=0.20),
-            ElseLevel().configure(m_probability=0.10),
+            CustomLevel(full_match, label_for_charts="alamat + city + state cocok").configure(m_probability=0.60),
+            CustomLevel(city_state, label_for_charts="city + state cocok").configure(m_probability=0.35),
+            CustomLevel(city_only, label_for_charts="city cocok saja").configure(m_probability=0.20),
+            ElseLevel().configure(m_probability=0.05),
         ]
         comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="location"))
     
@@ -449,22 +449,26 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
         match_exact = (
             "dob_std_l IS NOT NULL AND dob_std_r IS NOT NULL AND dob_std_l = dob_std_r"
         )
-        match_fuzzy = (
+        dob_year_month = (
             "dob_std_l IS NOT NULL AND dob_std_r IS NOT NULL "
-            "AND (dob_std_l = dob_std_r OR "
-            "dob_year_std_l IS NOT NULL AND dob_year_std_r IS NOT NULL "
-            "AND ABS(CAST(dob_year_std_l AS INTEGER) - CAST(dob_year_std_r AS INTEGER)) <= 1)"
+            "AND dob_std_l <> dob_std_r "
+            "AND substr(dob_std_l, 1, 7) = substr(dob_std_r, 1, 7)"
+        )
+        dob_year_close = (
+            "dob_std_l IS NOT NULL AND dob_std_r IS NOT NULL "
+            "AND dob_year_std_l IS NOT NULL AND dob_year_std_r IS NOT NULL "
+            "AND ABS(CAST(dob_year_std_l AS INTEGER) - CAST(dob_year_std_r AS INTEGER)) <= 1"
         )
         
         levels = [
             CustomLevel(dob_null, label_for_charts="dob kosong").configure(is_null_level=True),
-            CustomLevel(match_exact, label_for_charts="tanggal lahir persis").configure(m_probability=0.30),
-            CustomLevel(match_fuzzy, label_for_charts="tanggal lahir mendekat (year)").configure(m_probability=0.25),
-            ElseLevel().configure(m_probability=0.12),
+            CustomLevel(match_exact, label_for_charts="tanggal lahir persis").configure(m_probability=0.70),
+            CustomLevel(dob_year_month, label_for_charts="tahun + bulan sama").configure(m_probability=0.40),
+            CustomLevel(dob_year_close, label_for_charts="tahun ±1").configure(m_probability=0.25),
+            ElseLevel().configure(m_probability=0.05),
         ]
         comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="dob"))
     
-    # --- BUILD BLOCKING RULES berdasarkan kolom yang dipilih ---
     
     # Email blocking jika email_std dipilih
     if "email_std" in selected_columns:
@@ -481,6 +485,12 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
     # DOB blocking jika dob_std dipilih
     if "dob_std" in selected_columns:
         blocking_rules.append(block_on("dob_std"))
+
+    # Blocking tambahan untuk kandidat ambigu; tidak menggantikan exact blocks.
+    if "last_name_std" in selected_columns and "dob_year_std" in selected_columns:
+        blocking_rules.append(block_on("last_name_std", "dob_year_std"))
+    if "first_name_std" in selected_columns and "city_std" in selected_columns:
+        blocking_rules.append(block_on("first_name_std", "city_std"))
     
     # Default blocking jika hanya name yang dipilih (pakai last_name_std)
     if not blocking_rules and has_name:
@@ -490,23 +500,18 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
     if not blocking_rules and has_location:
         blocking_rules.append(block_on("city_std"))
     
-    # Blocking cadangan untuk case: tidak ada blocking utama (email/phone/city/dob)
-    # Gunakan dob_year + city untuk recall yang lebih baik (fuzzy match via Splink)
     if not blocking_rules and has_dob:
         if "dob_year_std" in selected_columns:
             blocking_rules.append(block_on("dob_year_std"))
         elif "dob_std" in selected_columns:
             blocking_rules.append(block_on("dob_std"))
     
-    if not blocking_rules and has_contact:
-        if "phone_std" in selected_columns:
-            blocking_rules.append(block_on("phone_std"))
-        elif "email_std" in selected_columns:
-            blocking_rules.append(block_on("email_std"))
-    
     # Fallback terakhir: gunakan last_name_std sebagai blocking (hampir pasti ada)
     if not blocking_rules:
         blocking_rules.append(block_on("last_name_std"))
+    
+    # Normalisasi m_probability agar jumlah per komparasi = 1
+    comparisons = _normalize_fixed_m(comparisons)
     
     return {
         "comparisons": comparisons,
@@ -516,7 +521,6 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
 
 # Fungsi bantu: dapatkan daftar kolom standar yang ada di dataset yang diproses
 def get_valid_comparison_columns() -> set:
-    """Mengembalikan set nama kolom standar (_std suffix) yang bisa digunakan untuk pencocokan."""
     return {
         "first_name_std", "last_name_std",
         "email_std", "phone_std",
@@ -574,8 +578,9 @@ def apply_business_rules(pred_df: pd.DataFrame, verbose: bool = False) -> pd.Dat
         return out
 
     email_diff = out["email_std_l"].ne(out["email_std_r"])
+    first_name_diff = out["first_name_std_l"].ne(out["first_name_std_r"])
     last_name_diff = out["last_name_std_l"].ne(out["last_name_std_r"])
-    force_non_by_email_last = email_diff & last_name_diff
+    force_non_by_email_fullname = email_diff & first_name_diff & last_name_diff
 
     keys_same = pd.Series(True, index=out.index)
     for col in BUSINESS_RULE_KEYS:
@@ -593,22 +598,18 @@ def apply_business_rules(pred_df: pd.DataFrame, verbose: bool = False) -> pd.Dat
         any_agree |= left.notna() & right.notna() & left.eq(right)
     force_non = ~any_agree
 
-    force_non = force_non | force_non_by_email_last
-
     out["business_rule"] = None
-    out.loc[force_match, "business_rule"] = "same_person_email_name_address"
-    out.loc[force_non & ~force_non_by_email_last, "business_rule"] = "no_field_agrees"
-    out.loc[force_non_by_email_last, "business_rule"] = "different_identity_email_lastname"
-    out.loc[force_match, "decision"] = "MATCH"
-    out.loc[force_review, "decision"] = "REVIEW"
-    out.loc[force_non, "decision"] = "NON_MATCH"
+    out.loc[force_match, "business_rule"] = "strong_agreement_email_name_address"
+    out.loc[force_non & ~force_non_by_email_fullname, "business_rule"] = "no_field_agreement"
+    out.loc[force_non_by_email_fullname, "business_rule"] = "conflicting_email_fullname"
 
+    # match_probability dan threshold yang sudah dihitung model.
     if verbose:
         print(
-            f"Business rules: {int(force_match.sum()):,} dipaksa MATCH "
-            f"(email + nama + alamat sama), "
-            f"{int(force_non.sum()):,} dipaksa NON_MATCH "
-            f"(nol field cocok + email/lastname berbeda)"
+            f"Business-rule evidence: strong={int(force_match.sum()):,}, "
+            f"no_agreement={int(force_non.sum()):,}, "
+            f"conflict_email_fullname={int(force_non_by_email_fullname.sum()):,}; "
+            "decision tidak ditimpa"
         )
     return out
 
@@ -619,7 +620,6 @@ def _fuzzy_match_candidates(
     columns: list[str],
     threshold: float = 80.0,
 ) -> pd.Series:
-    """Fuzzy matching untuk kandidat: nama/kota mirip juga ikut terdeteksi."""
     from rapidfuzz import fuzz, process
 
     candidate_mask = pd.Series(False, index=existing_df.index)
@@ -663,7 +663,6 @@ def _candidate_rows_for_new_records(
     selected_columns: list[str] | None = None,
     fuzzy_threshold: float = 80.0,
 ) -> pd.DataFrame:
-    """Pilih kandidat existing via exact + fuzzy blocking; tanpa full pair scan."""
     fields = selected_columns or [
         "email_std", "phone_std", "last_name_std", "first_name_std",
         "city_std", "dob_year_std",
@@ -685,7 +684,6 @@ def predict_new_records(
     selected_columns: list[str] | None = None,
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, object]:
-    """Score record baru terhadap kandidat existing, tanpa retraining/full pair scan."""
     if "record_id" not in new_df or "record_id" not in existing_df:
         raise ValueError("new_df dan existing_df wajib memiliki record_id")
     new_ids = set(new_df["record_id"])
@@ -700,18 +698,39 @@ def predict_new_records(
     return predictions, linker
 
 
+def _validate_fully_trained(linker) -> None:
+    settings = linker._settings_obj.as_dict()
+    missing = []
+    for comparison in settings.get("comparisons", []):
+        name = comparison.get("output_column_name", "unknown")
+        for index, level in enumerate(comparison.get("comparison_levels", [])):
+            if level.get("is_null_level") or level.get("sql_condition") == "ELSE":
+                continue
+            for parameter in ("m_probability", "u_probability"):
+                if level.get(parameter) is None:
+                    missing.append(f"{name}[{index}].{parameter}")
+    if missing:
+        raise RuntimeError(
+            "Scoring dihentikan: model belum fully trained; parameter kosong: "
+            + ", ".join(missing)
+            + ". Kurangi level langka atau latih u_probability pada seluruh pasangan."
+        )
+
+
 def train_and_predict(
     df: pd.DataFrame,
     verbose: bool = True,
     model: dict | None = None,
     selected_columns: list[str] | None = None,
-    max_pairs: int = 20_000,
+    max_pairs: int = 100_000,
+    training_df: pd.DataFrame | None = None,
+    full_u_estimation: bool = False,
 ) -> tuple[pd.DataFrame, object]:
 
     if model is not None:
         db_api = DuckDBAPI()
-        db_api.register_multiple_tables([df], ['input_data'], overwrite=True)
-        linker = Linker('input_data', model, db_api)
+        sdf = db_api.register(df, table_name="input_data")
+        linker = Linker(sdf, model)
         if verbose:
             print("Loaded saved model — skipping EM training (MC section 15).")
         preds = add_decision(linker.inference.predict().as_pandas_dataframe())
@@ -733,8 +752,8 @@ def train_and_predict(
         comparisons = []
         blocking_rules = []
         # fallback ke build_settings jika tidak ada seleksi
-        db_api.register_multiple_tables([df], ['input_data'], overwrite=True)
-        linker = Linker('input_data', build_settings(), db_api)
+        sdf = db_api.register(df, table_name="input_data")
+        linker = Linker(sdf, build_settings())
         if verbose:
             print("Estimating model parameters with EM...")
         linker.training.estimate_probability_two_random_records_match(
@@ -748,16 +767,35 @@ def train_and_predict(
         pred_df = add_decision(linker.inference.predict().as_pandas_dataframe())
         return apply_business_rules(pred_df, verbose=verbose), linker
     
-    # Build linker with dynamic settings + EM training
+    # Latih parameter pada data training terpisah; scoring tetap pada kandidat df.
+    train_frame = training_df if training_df is not None else df
+    if full_u_estimation:
+        total_pairs = len(train_frame) * (len(train_frame) - 1) // 2
+        if total_pairs > 5_000_000:
+            raise ValueError(
+                "full_u_estimation ditolak: "
+                f"{total_pairs:,} pasangan melebihi batas 5,000,000. "
+                "Gunakan max_pairs 1,000,000-5,000,000."
+            )
+        max_pairs = total_pairs
+    if "record_id" not in train_frame:
+        raise ValueError("training_df wajib memiliki record_id")
+    if training_df is not None and set(train_frame["record_id"]) & set(df["record_id"]):
+        warnings.warn(
+            "training_df dan df scoring memiliki record_id yang overlap. "
+            "Ini dapat menyebabkan data leakage. Untuk eksperimen ini aman, "
+            "untuk produksi gunakan data training yang disjoint.",
+            stacklevel=2,
+        )
+
     settings = SettingsCreator(
         link_type="dedupe_only",
         unique_id_column_name="record_id",
         comparisons=comparisons,
         blocking_rules_to_generate_predictions=blocking_rules,
     )
-    db_api.register_multiple_tables([df], ['input_data'], overwrite=True)
-    sdf = db_api.table_to_splink_dataframe('input_data', 'input_data')
-    linker = Linker('input_data', settings, db_api)
+    train_sdf = db_api.register(train_frame, table_name="training_data")
+    linker = Linker(train_sdf, settings)
     
     if verbose:
         print("Estimating model parameters with EM...")
@@ -765,11 +803,13 @@ def train_and_predict(
     linker.training.estimate_probability_two_random_records_match(
         DETERMINISTIC_RULES, recall=LAMBDA_RECALL_ASSUMPTION
     )
-    linker.training.estimate_u_using_random_sampling(max_pairs=max_pairs, seed=RANDOM_SEED)
+    # Estimasi u memakai seluruh ruang pasangan jika muat; max_pairs membatasi RAM.
+    total_pairs = len(train_frame) * (len(train_frame) - 1) // 2
+    u_pairs = min(max_pairs, total_pairs)
+    linker.training.estimate_u_using_random_sampling(max_pairs=u_pairs, seed=RANDOM_SEED)
     
     # EM training: pakai dynamic blocking_rules jika ada, else TRAINING_RULES global
     if blocking_rules:
-        # blocking_rules already list of block_on(...) from build_dynamic_settings_from_columns
         for i, rule in enumerate(blocking_rules):
             if verbose:
                 print(f"EM on dynamic block {i}")
@@ -780,8 +820,14 @@ def train_and_predict(
                 print(f"EM on {name}")
             linker.training.estimate_parameters_using_expectation_maximisation(rule)
     
-    pred_df = add_decision(linker.inference.predict().as_pandas_dataframe())
-    return apply_business_rules(pred_df, verbose=verbose), linker
+    _validate_fully_trained(linker)
+    # Setelah training selesai, buat linker scoring terpisah untuk kandidat.
+    settings_dict = linker._settings_obj.as_dict()
+    score_sdf = db_api.register(df, table_name="scoring_data")
+    scoring_linker = Linker(score_sdf, settings_dict)
+    _validate_fully_trained(scoring_linker)
+    pred_df = add_decision(scoring_linker.inference.predict().as_pandas_dataframe())
+    return apply_business_rules(pred_df, verbose=verbose), scoring_linker
 
 
 def main() -> None:
@@ -821,6 +867,11 @@ def main() -> None:
         type=int,
         default=10_000,
         help="Max pairs for EM sampling (default: 10000). Use 1-5M for production.",
+    )
+    parser.add_argument(
+        "--full-u-estimation",
+        action="store_true",
+        help="Estimate u_probability over all training pairs; may require substantial memory.",
     )
     parser.add_argument(
         "--new-data",
@@ -875,6 +926,7 @@ def main() -> None:
             model=saved,
             selected_columns=selected_columns,
             max_pairs=args.max_pairs,
+            full_u_estimation=args.full_u_estimation,
         )
     out_path = predictions_path(full=args.full)
     out_path.parent.mkdir(parents=True, exist_ok=True)

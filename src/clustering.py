@@ -12,6 +12,7 @@ from .config import (
     PROCESSED_DATA_PATH,
     REVIEW_THRESHOLD,
     SCOPE_FULL,
+    SCOPE_PARTIAL,
     predictions_path,
     read_meta,
     scope_of,
@@ -154,6 +155,12 @@ def main() -> None:
 
     model_version = None
     preds_meta = read_meta(active_path(predictions_path(full=args.full)))
+    # Derive scope honestly: if any records were not scored, scope is partial
+    # even if --full was used (e.g. old sample predictions, data gaps).
+    if unscored:
+        scope = SCOPE_PARTIAL
+    else:
+        scope = scope_of(args.full)
     model_version = preds_meta.get("model_version") or (
         _model_latest().name if _model_latest() else None
     )
@@ -171,7 +178,7 @@ def main() -> None:
         "singleton_entities": int((sizes == 1).sum()),
         "unscored_records": unscored,
         "threshold": MATCH_THRESHOLD,
-        "scope": scope_of(args.full),
+        "scope": scope,
         "model_version": model_version,
         "runtime_seconds": round(time.perf_counter() - started, 2),
     }

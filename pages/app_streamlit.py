@@ -27,13 +27,12 @@ BATCH_REPORT = OUTPUT_DIR / "batch_linkage_report.json"
 st.set_page_config(page_title="Upload - Entity Resolution", page_icon="📤", layout="wide")
 page_header(
     "Upload Data",
-    "Tambahkan data customer baru. Data lama tidak akan hilang atau ditimpa.",
+    "Tambahkan data customer baru",
 )
-
+render_sidebar("upload")
 st.caption("Pilih sumber data untuk diproses.")
 tab_csv, tab_db = st.tabs(["📤 File CSV", "📥 Koneksi Database"])
 
-# Shared state
 if "source_type" not in st.session_state:
     st.session_state.source_type = None
 if "source_data" not in st.session_state:
@@ -112,7 +111,7 @@ def process_pipeline(date_order: str = "auto", batch_file: str | None = None, se
         json.loads(RUN_SUMMARY.read_text(encoding="utf-8"))
         if RUN_SUMMARY.exists()
         else {}
-    )
+    )com
     batch_result = (
         json.loads(BATCH_REPORT.read_text(encoding="utf-8"))
         if BATCH_REPORT.exists()
@@ -192,7 +191,6 @@ with tab_csv:
             "digest": digest[:8],
         }
 
-    # Show CSV validation info if we have a CSV source selected
     if st.session_state.source_type == "csv" and st.session_state.source_data:
         data = st.session_state.source_data
         report = data["report"]
@@ -514,4 +512,3 @@ with tab_db:
                     selected_columns=st.session_state.get("db_selected_match_columns"),
                 )
 
-render_sidebar("upload")

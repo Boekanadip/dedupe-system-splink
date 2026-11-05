@@ -21,12 +21,14 @@ from src.ui import (
 from src.splink_model import get_valid_comparison_columns
 from src.config import (
     ENTITY_MAP_PATH,
+    MASTER_PATH,
     PROCESSED_DATA_PATH,
     SMOKE_SAMPLE_SIZE,
     predictions_path,
     read_meta,
 )
-from src.export import csv_bytes, save_to_database
+from src.export import csv_bytes, save_snapshot, save_to_database
+from src.provenance import current_run_info
 
 st.set_page_config(page_title="Dashboard - Entity Resolution", page_icon="📊", layout="wide")
 page_header(
@@ -218,10 +220,60 @@ else:
 
 st.subheader("📊 Unduh / Simpan Hasil")
 st.caption(
-    "Dua opsi di bawah berdiri sendiri: mengunduh CSV tidak memerlukan database, "
-    "dan menyimpan ke database tidak memerlukan unduhan."
+    "Pilih hasil pasangan atau master customer bersih. Unduh CSV tidak memerlukan database; "
+    "penyimpanan database hanya memakai tabel tujuan yang Anda isi."
 )
 c_dl, c_db = st.columns(2)
+
+st.subheader("Master Customer Hasil Resolusi")
+if MASTER_PATH.exists():
+    master_export = pd.read_parquet(MASTER_PATH)
+    if "conflicted_fields" not in master_export.columns:
+        master_export["conflicted_fields"] = [[] for _ in range(len(master_export))]
+    master_export["resolution_status"] = master_export["conflicted_fields"].map(
+        lambda value: "CONFLICTED" if isinstance(value, (list, tuple, set)) and len(value) else "CONFIRMED"
+    )
+    status_filter = st.selectbox(
+        "Status Master Customer Hasil Resolusi",
+        ["Semua", "CONFIRMED", "CONFLICTED"],
+        help="CONFLICTED berarti ada perbedaan field yang belum diselesaikan.",
+        key="master_export_status",
+    )
+    if status_filter != "Semua":
+        master_export = master_export[master_export["resolution_status"] == status_filter].copy()
+    export_meta = current_run_info()
+    for meta_key, meta_value in export_meta.items():
+        master_export[meta_key] = meta_value
+    st.caption(f"{len(master_export):,} entity/customer — satu baris per entity.")
+    clean_name = st.text_input("Nama file CSV", value="master_customer_hasil_resolusi.csv")
+    master_table = st.text_input(
+        "Nama tabel database tujuan",
+        value="splink_data.master_customer_bersih",
+        help="Ketik schema.table yang sudah ada. Tabel sumber tidak ditimpa.",
+    )
+    mc1, mc2 = st.columns(2)
+    with mc1:
+        st.download_button(
+            "Unduh Master Customer Hasil Resolusi (CSV)",
+            data=csv_bytes(master_export),
+            file_name=clean_name if clean_name.endswith(".csv") else clean_name + ".csv",
+            mime="text/csv",
+            key="download_clean_master",
+        )
+    with mc2:
+        if st.button("Simpan Master Customer Hasil Resolusi ke Database", key="save_clean_master"):
+            try:
+                rows = save_to_database(master_export, master_table)
+                meta = current_run_info()
+                snap_rows = save_snapshot(master_export, metadata=meta)
+                st.success(
+                    f"Berhasil disimpan: {rows:,} baris ke {master_table}; "
+                    f"snapshot: {snap_rows:,} baris."
+                )
+            except Exception as e:
+                st.error(f"Gagal menyimpan master customer: {e}")
+else:
+    st.info("Master customer belum tersedia. Jalankan pipeline dari Upload Data terlebih dahulu.")
 
 # Buat DataFrame ekspor dengan kolom yang relevan
 export_df = preds.copy()
@@ -256,7 +308,7 @@ if not export_df.empty:
         db_table = st.text_input(
             "Nama tabel tujuan", 
             value="splink_data.dedup_outputs",
-            help="Nama tabel tujuan. Tabel sumber tidak pernah ditimpa."
+            help="Ketik schema.table yang sudah ada. Tabel sumber tidak pernah ditimpa."
         )
         if st.button("Simpan ke database", disabled=export_df.empty):
             try:
