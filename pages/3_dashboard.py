@@ -279,11 +279,24 @@ else:
 export_df = preds.copy()
 if not export_df.empty:
     # Pastikan kolom keputusan ada
-    if "decision" not in export_df.columns and "match_probability" in export_df.columns:
-        export_df["decision"] = export_df["match_probability"].apply(
-            lambda p: "MATCH" if p >= match_threshold
-            else ("REVIEW" if p >= review_threshold else "NON_MATCH")
-        )
+    if "decision" not in export_df.columns:
+        if "match_probability" in export_df.columns and not export_df.empty:
+            # Coba buat decision dari threshold, tapi tandai bahwa model belum full trained
+            try:
+                export_df["decision"] = export_df["match_probability"].apply(
+                    lambda p: "MATCH" if p >= 0.84
+                    else ("REVIEW" if p >= 0.35 else "NON_MATCH")
+                )
+                # Tandai bahwa decisions ini bersifat estimasi, bukan hasil fully trained
+                export_df._splink_full_trained = False
+            except Exception:
+                export_df["decision"] = "NON_MATCH"
+                export_df._splink_full_trained = False
+        else:
+            export_df["decision"] = "NON_MATCH"
+            export_df._splink_full_trained = False
+    else:
+        export_df._splink_full_trained = True
     
     if "decision" in export_df.columns:
         reviewed = int((export_df["decision"] == "REVIEW").sum())

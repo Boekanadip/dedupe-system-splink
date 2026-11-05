@@ -45,7 +45,7 @@
   "column_profile": [
     {
       "column": "record_id",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 0,
       "null_pct": 0.0,
@@ -55,7 +55,7 @@
     },
     {
       "column": "customer_id",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 0,
       "null_pct": 0.0,
@@ -65,7 +65,7 @@
     },
     {
       "column": "first_name",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 0,
       "null_pct": 0.0,
@@ -75,7 +75,7 @@
     },
     {
       "column": "last_name",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 0,
       "null_pct": 0.0,
@@ -85,7 +85,7 @@
     },
     {
       "column": "email",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 1441,
       "null_pct": 1.329,
@@ -95,7 +95,7 @@
     },
     {
       "column": "phone_number",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 363,
       "null_pct": 0.3348,
@@ -105,7 +105,7 @@
     },
     {
       "column": "gender",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 366,
       "null_pct": 0.3376,
@@ -115,7 +115,7 @@
     },
     {
       "column": "dob",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 380,
       "null_pct": 0.3505,
@@ -125,7 +125,7 @@
     },
     {
       "column": "signup_date",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 0,
       "null_pct": 0.0,
@@ -135,7 +135,7 @@
     },
     {
       "column": "address",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 356,
       "null_pct": 0.3283,
@@ -145,7 +145,7 @@
     },
     {
       "column": "city",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 357,
       "null_pct": 0.3293,
@@ -155,7 +155,7 @@
     },
     {
       "column": "state",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 375,
       "null_pct": 0.3459,
@@ -165,7 +165,7 @@
     },
     {
       "column": "country",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 356,
       "null_pct": 0.3283,
@@ -185,7 +185,7 @@
     },
     {
       "column": "source",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 1648,
       "null_pct": 1.5199,
@@ -225,7 +225,7 @@
     },
     {
       "column": "first_name_std",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 0,
       "null_pct": 0.0,
@@ -235,7 +235,7 @@
     },
     {
       "column": "last_name_std",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 0,
       "null_pct": 0.0,
@@ -245,7 +245,7 @@
     },
     {
       "column": "address_std",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 356,
       "null_pct": 0.3283,
@@ -255,7 +255,7 @@
     },
     {
       "column": "city_std",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 357,
       "null_pct": 0.3293,
@@ -265,7 +265,7 @@
     },
     {
       "column": "state_std",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 375,
       "null_pct": 0.3459,
@@ -275,7 +275,7 @@
     },
     {
       "column": "country_std",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 356,
       "null_pct": 0.3283,
@@ -285,7 +285,7 @@
     },
     {
       "column": "email_std",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 1441,
       "null_pct": 1.329,
@@ -335,7 +335,7 @@
     },
     {
       "column": "first_name_std_pre3",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 658,
       "null_pct": 0.6069,
@@ -345,7 +345,7 @@
     },
     {
       "column": "last_name_std_pre3",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 1,
       "null_pct": 0.0009,
@@ -355,7 +355,7 @@
     },
     {
       "column": "email_local_pre3",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 2105,
       "null_pct": 1.9414,
@@ -365,7 +365,7 @@
     },
     {
       "column": "email_domain_pre4",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 1441,
       "null_pct": 1.329,
@@ -395,7 +395,7 @@
     },
     {
       "column": "phonetic_last_name",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 0,
       "null_pct": 0.0,
@@ -405,7 +405,7 @@
     },
     {
       "column": "phonetic_first_name",
-      "dtype": "str",
+      "dtype": "object",
       "rows": 108427,
       "null_count": 0,
       "null_pct": 0.0,
@@ -548,11 +548,11 @@
         "count": 1162
       },
       {
-        "last_name": "Brown",
+        "last_name": "Jones",
         "count": 997
       },
       {
-        "last_name": "Jones",
+        "last_name": "Brown",
         "count": 997
       },
       {
@@ -606,27 +606,15 @@
         "count": 11
       },
       {
-        "email": "shared1640@hotmail.com",
-        "count": 8
-      },
-      {
         "email": "shared1774@gmail.com",
         "count": 8
       },
       {
-        "email": "shared1105@yahoo.com",
-        "count": 7
+        "email": "shared1640@hotmail.com",
+        "count": 8
       },
       {
-        "email": "shared1049@hotmail.com",
-        "count": 7
-      },
-      {
-        "email": "shared1510@yahoo.com",
-        "count": 7
-      },
-      {
-        "email": "shared1047@yahoo.com",
+        "email": "maya.wijaya322@outlook.com",
         "count": 7
       },
       {
@@ -634,11 +622,27 @@
         "count": 7
       },
       {
-        "email": "maya.wijaya322@outlook.com",
+        "email": "shared1047@yahoo.com",
         "count": 7
       },
       {
-        "email": "shared1129@yahoo.com",
+        "email": "shared1049@hotmail.com",
+        "count": 7
+      },
+      {
+        "email": "shared1105@yahoo.com",
+        "count": 7
+      },
+      {
+        "email": "shared1510@yahoo.com",
+        "count": 7
+      },
+      {
+        "email": "putri.halim852@yahoo.com",
+        "count": 6
+      },
+      {
+        "email": "jonathan.lopez684@gmail.com",
         "count": 6
       },
       {
@@ -646,15 +650,11 @@
         "count": 6
       },
       {
-        "email": "shared1176@yahoo.com",
+        "email": "dewi.hidayat109@yahoo.com",
         "count": 6
       },
       {
-        "email": "shared1655@yahoo.com",
-        "count": 6
-      },
-      {
-        "email": "shared1161@gmail.com",
+        "email": "joko.prasetyo595@company.co.id",
         "count": 6
       }
     ],
@@ -672,23 +672,7 @@
         "count": 10
       },
       {
-        "phone_number": "9.855.655.722",
-        "count": 9
-      },
-      {
-        "phone_number": "586-049-5136",
-        "count": 9
-      },
-      {
-        "phone_number": "1.548.782.024",
-        "count": 9
-      },
-      {
-        "phone_number": "001-836-144-1830",
-        "count": 9
-      },
-      {
-        "phone_number": "+1-909-524-5319x40721",
+        "phone_number": "434.256.8275x442",
         "count": 9
       },
       {
@@ -696,11 +680,19 @@
         "count": 9
       },
       {
-        "phone_number": "434.256.8275x442",
+        "phone_number": "+1-909-524-5319x40721",
         "count": 9
       },
       {
-        "phone_number": "+1-510-098-1404x9349",
+        "phone_number": "1.548.782.024",
+        "count": 9
+      },
+      {
+        "phone_number": "586-049-5136",
+        "count": 9
+      },
+      {
+        "phone_number": "001-836-144-1830",
         "count": 9
       },
       {
@@ -708,15 +700,23 @@
         "count": 9
       },
       {
-        "phone_number": "275.276.5852x01711",
-        "count": 8
+        "phone_number": "+1-510-098-1404x9349",
+        "count": 9
+      },
+      {
+        "phone_number": "9.855.655.722",
+        "count": 9
       },
       {
         "phone_number": "001-340-838-2879x01375",
         "count": 8
       },
       {
-        "phone_number": "2672843186",
+        "phone_number": "+1-677-688-4459x44079",
+        "count": 8
+      },
+      {
+        "phone_number": "+1-926-824-7992x2480",
         "count": 8
       }
     ],
@@ -730,11 +730,11 @@
         "count": 12
       },
       {
-        "address": "Jl. Merdeka No. 405",
+        "address": "Jl. Thamrin No. 283",
         "count": 11
       },
       {
-        "address": "Jl. Thamrin No. 283",
+        "address": "Jl. Merdeka No. 405",
         "count": 11
       },
       {
@@ -742,11 +742,7 @@
         "count": 11
       },
       {
-        "address": "Jl. Asia Afrika No. 80",
-        "count": 10
-      },
-      {
-        "address": "Jl. Merdeka No. 586",
+        "address": "Jl. Thamrin No. 789",
         "count": 10
       },
       {
@@ -754,11 +750,19 @@
         "count": 10
       },
       {
-        "address": "Jl. Thamrin No. 789",
+        "address": "Jl. Merdeka No. 586",
+        "count": 10
+      },
+      {
+        "address": "Jl. Asia Afrika No. 80",
         "count": 10
       },
       {
         "address": "Jl. Thamrin No. 522",
+        "count": 9
+      },
+      {
+        "address": "Jl. Merdeka No. 597",
         "count": 9
       },
       {
@@ -770,15 +774,11 @@
         "count": 9
       },
       {
-        "address": "Jl. Sudirman No. 313",
+        "address": "Jl. Merdeka No. 411",
         "count": 9
       },
       {
-        "address": "Jl. Merdeka No. 597",
-        "count": 9
-      },
-      {
-        "address": "Jl. Sudirman No. 215",
+        "address": "Jl. Asia Afrika No. 159",
         "count": 9
       }
     ],
@@ -792,31 +792,7 @@
         "count": 5
       },
       {
-        "device_id(s)": "2e1ce2ff-2b00-46e4-ac0c-d49b8002450d",
-        "count": 4
-      },
-      {
-        "device_id(s)": "df987435-1583-423c-8646-d922a91a45f2",
-        "count": 4
-      },
-      {
-        "device_id(s)": "499338f8-6b97-4a6d-b53c-d06590d04b1f",
-        "count": 4
-      },
-      {
-        "device_id(s)": "334f2623-6707-4db4-b4c4-e712ee3b4e11",
-        "count": 4
-      },
-      {
-        "device_id(s)": "c0f5ca5e-acc8-493b-b9c1-e0c33f544bf9",
-        "count": 4
-      },
-      {
-        "device_id(s)": "f24a7d1d-e445-4f49-9d10-281db893c23d",
-        "count": 4
-      },
-      {
-        "device_id(s)": "3e3635be-2f30-4dcf-ab18-5a151ffd7701",
+        "device_id(s)": "ece39bbb-4824-460a-ac4e-37aaf6234a0e",
         "count": 4
       },
       {
@@ -824,23 +800,47 @@
         "count": 4
       },
       {
-        "device_id(s)": "ece39bbb-4824-460a-ac4e-37aaf6234a0e",
+        "device_id(s)": "3e3635be-2f30-4dcf-ab18-5a151ffd7701",
         "count": 4
       },
       {
-        "device_id(s)": "751d4410-3d73-4f4c-b432-10a0213b925f",
+        "device_id(s)": "499338f8-6b97-4a6d-b53c-d06590d04b1f",
+        "count": 4
+      },
+      {
+        "device_id(s)": "df987435-1583-423c-8646-d922a91a45f2",
+        "count": 4
+      },
+      {
+        "device_id(s)": "334f2623-6707-4db4-b4c4-e712ee3b4e11",
+        "count": 4
+      },
+      {
+        "device_id(s)": "f24a7d1d-e445-4f49-9d10-281db893c23d",
+        "count": 4
+      },
+      {
+        "device_id(s)": "2e1ce2ff-2b00-46e4-ac0c-d49b8002450d",
+        "count": 4
+      },
+      {
+        "device_id(s)": "c0f5ca5e-acc8-493b-b9c1-e0c33f544bf9",
+        "count": 4
+      },
+      {
+        "device_id(s)": "b32ccda8-9a29-456c-b0a5-779e8f6c6628",
         "count": 3
       },
       {
-        "device_id(s)": "eee90259-6af3-43d5-b155-8346ce75eedb",
+        "device_id(s)": "6d595a7f-b02a-44bc-9e7d-3c2ea6d4ca4c",
         "count": 3
       },
       {
-        "device_id(s)": "9a017a61-a399-4d76-8858-ed9c4511fa1e",
+        "device_id(s)": "1e4affb1-0eb4-491a-ac7b-ee7cec06a710",
         "count": 3
       },
       {
-        "device_id(s)": "9aaec221-55ee-4ec0-b914-3c51ea8b2d2f",
+        "device_id(s)": "4285aa99-819d-43ea-acc9-9934ce5c459a",
         "count": 3
       }
     ]

@@ -51,6 +51,14 @@ def save_to_database(df: pd.DataFrame, table_name: str = "splink_data.dedup_outp
 
     Re-running with the same keys raises psycopg2.errors.UniqueViolation;
     the caller decides whether that is an error or expected.
+
+    Args:
+        df: DataFrame to save.
+        table_name: Qualified table name in schema.table format or just table name.
+            Defaults to "splink_data.dedup_outputs" which must exist in the database.
+
+    Raises:
+        ValueError: If table_name is invalid or the target table does not exist.
     """
     import psycopg2
     from psycopg2.extras import execute_values
@@ -78,13 +86,19 @@ def save_to_database(df: pd.DataFrame, table_name: str = "splink_data.dedup_outp
         password=os.getenv("POSTGRES_PASSWORD", "crm_password_2026"),
     )
     try:
-        with conn, conn.cursor() as cur:
+        with conn.cursor() as cur:
             cur.execute(
                 "SELECT to_regclass(%s)",
                 (f"{schema}.{table}" if schema else table,),
             )
             if cur.fetchone()[0] is None:
-                raise ValueError(f"Tabel tujuan tidak ditemukan: {table_name}")
+                raise ValueError(
+                    f"Tabel tujuan tidak ditemukan: {table_name}. "
+                    "Pastikan tabel sudah dibuat di database atau "
+                    "gunakan nama tabel yang benar. "
+                    "Daftar tabel di schema splink_data bisa dilihat melalui psql:\n"
+                    "  SELECT table_name FROM information_schema.tables WHERE table_schema = 'splink_data'"
+                )
             rows = [tuple(_clean(v) for v in r) for r in df.itertuples(index=False)]
             execute_values(cur, insert, rows)
         return len(df)
@@ -190,7 +204,7 @@ def save_snapshot(
         password=os.getenv("POSTGRES_PASSWORD", "crm_password_2026"),
     )
     try:
-        with conn, conn.cursor() as cur:
+        with conn.cursor() as cur:
             cur.execute(create)
             execute_values(
                 cur,

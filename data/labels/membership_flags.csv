@@ -55,3 +55,4 @@ timestamp,entity_id,issue,reviewer,note,status
 2026-10-16T13:32:08,ent_094322,wrong_merge,reviewer,,open
 2026-10-16T13:32:28,ent_094448,wrong_merge,reviewer,,open
 2026-10-28T03:22:46,ent_005211,wrong_split,reviewer,,open
+2026-11-05T13:59:03,ent_000994,wrong_merge,reviewer,,open
