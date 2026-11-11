@@ -11,7 +11,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import MATCH_THRESHOLD, OUTPUT_DIR, REVIEW_THRESHOLD, predictions_path
-from src.data_access import read_processed
+from src.data_access import read_pairs, read_processed
 from src.ui import (
     workflow_step,
     decision_label,
@@ -43,6 +43,8 @@ preds = read_pairs()
 if preds.empty:
     st.info("Belum ada data hasil pemeriksaan di database. Jalankan pipeline dulu dari halaman Upload.")
     st.stop()
+
+levels = model_levels()
 if not levels:
     st.warning(
         "Bobot per field belum bisa ditampilkan (model aktif sedang ditulis atau belum tersimpan). "
