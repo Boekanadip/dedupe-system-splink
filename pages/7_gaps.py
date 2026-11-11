@@ -74,7 +74,7 @@ def _pair_key(left, right) -> tuple[str, str]:
 
 def enqueue(pairs: pd.DataFrame, stratum: str) -> int:
     """Tambahkan pasangan ke antrean pemeriksaan beserta bukti kedua sisinya."""
-    records = pd.read_parquet(PROCESSED_DATA_PATH)
+    records = read_processed()
     new = pairs[["record_id_l", "record_id_r", "match_probability"]].copy()
     new = agree_fields(records, new)
     new = new.merge(

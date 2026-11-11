@@ -16,10 +16,10 @@ from src.config import (
     LABELS_DIR,
     MASTER_PATH,
     OUTPUT_DIR,
-    PROCESSED_DATA_PATH,
     PROJECT_ROOT,
     pipeline_locked,
 )
+from src.data_access import read_master, read_processed
 from src.persist import update_master_row
 from src.ui import format_count, page_header, render_sidebar
 
@@ -32,24 +32,26 @@ page_header(
 )
 render_sidebar("master")
 
-if not MASTER_PATH.exists() or not PROCESSED_DATA_PATH.exists():
-    db_master = read_master(limit=1)
-    if not db_master.empty:
-        master_empty = False
-    else:
-        master_empty = True
-    # Fallback to parquet if DB also empty
-    if master_empty:
-        st.info(
-            "Belum ada master record. Jalankan pipeline dari halaman Upload dulu "
-            "(clustering + master_record)."
-        )
-        st.stop()
-    else:
-        # DB has data, fall through to use DB data
-        pass
-else:
-    master_empty = True
+master = read_master()
+if master.empty and MASTER_PATH.exists():
+    # DB kosong/tidak tersedia: pakai artefak parquet lama sebagai cadangan.
+    master = pd.read_parquet(MASTER_PATH)
+
+if master.empty:
+    st.info(
+        "Belum ada master record. Jalankan pipeline dari halaman Upload dulu "
+        "(clustering + master_record)."
+    )
+    st.stop()
+
+# read_master() memakai nama kolom DB (master_first_name). Halaman ini memakai
+# nama kolom artefak (master_first_name_std); samakan agar kode lama tetap jalan.
+master = master.rename(
+    columns={f"master_{f}": f"master_{f}_std" for f in (
+        "first_name", "last_name", "email", "phone", "dob",
+        "address", "city", "state", "country",
+    )}
+)
 
 AUDIT_PATH = LABELS_DIR / "master_corrections.csv"
 
@@ -72,8 +74,7 @@ MASTER_LABELS = {
     "master_country_std": "Negara",
 }
 
-master = pd.read_parquet(MASTER_PATH)
-records = pd.read_parquet(PROCESSED_DATA_PATH)
+records = read_processed()
 
 # Versi master sebelumnya
 if "conflicted_fields" not in master.columns:

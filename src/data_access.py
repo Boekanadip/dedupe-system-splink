@@ -88,10 +88,11 @@ def read_pairs(
     def compute():
         try:
             if table_rows("splink_data.dedup_outputs") > 0:
+                # columns=None → ambil semua kolom (page explain memakai gamma_*).
                 select = (
                     ", ".join(f'"{c}"' for c in columns)
                     if columns
-                    else "record_id_l, record_id_r, match_probability, match_weight, decision"
+                    else "*"
                 )
                 sql = f"SELECT {select} FROM splink_data.dedup_outputs"
                 params: tuple = ()

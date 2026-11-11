@@ -39,18 +39,17 @@ render_sidebar("explain")
 how_to_read()
 
 preds_path = predictions_path(full=True)
-if not preds_path.exists():
-    st.info("Belum ada data hasil pemeriksaan. Jalankan pipeline dulu dari halaman Upload.")
+preds = read_pairs()
+if preds.empty:
+    st.info("Belum ada data hasil pemeriksaan di database. Jalankan pipeline dulu dari halaman Upload.")
     st.stop()
-
-levels = model_levels()
 if not levels:
     st.warning(
         "Bobot per field belum bisa ditampilkan (model aktif sedang ditulis atau belum tersimpan). "
         "Tabel perbandingan di bawah tetap muncul, hanya saja kolom bobot masing-masing field kosong."
     )
 
-preds = pd.read_parquet(preds_path)
+preds = read_pairs()
 
 value_fields = (
     "first_name_std", "last_name_std", "email_std", "phone_std",
@@ -188,18 +187,21 @@ for field, gamma_col in {
         support += max(weight, 0.0)
         against += min(weight, 0.0)
 
-if levels:
-    c1, c2 = st.columns(2)
-    c1.metric("Total bukti mendukung", f"+{support:.0f}")
-    c2.metric("Total bukti menolak", f"{against:.0f}")
-    st.caption(
-        "Bukti positif berarti data yang sama sulitnya muncul kalau kebetulan orang "
-        "beda. Bukti negatif sebaliknya. Untuk kota, provinsi, dan negara, sistem "
-        "mengurangi bobot nama yang umum (misal \"Springfield\") karena nama "
-        "seperti itu banyak dipakai orang berbeda."
-    )
-
 if p.get("decision") == "REVIEW":
+    # Hanya tampilkan metrik bukti bila ada data gamma_*; jika tidak, skip agar
+    # tidak menampilkan nol yang menyesatkan.
+    if any(c in p for c in ["gamma_name", "gamma_contact", "gamma_location"]):
+        c1, c2 = st.columns(2)
+        c1.metric("Total bukti mendukung", f"+{support:.0f}")
+        c2.metric("Total bukti menolak", f"{against:.0f}")
+        st.caption(
+            "Bukti positif berarti data yang sama sulitnya muncul kalau kebetulan orang "
+            "beda. Bukti negatif sebaliknya. Untuk kota, provinsi, dan negara, sistem "
+            "mengurangi bobot nama yang umum (misal \"Springfield\") karena nama "
+            "seperti itu banyak dipakai orang berbeda."
+        )
+    else:
+        st.info("Data bukti tidak tersedia (gamma_*), angka di atas tidak dihitung.")
     st.info(
         "Pasangan ini menunggu keputusan manusia. Buka halaman **Pemeriksaan** "
         "untuk menilai sendiri — angka di sini tidak otomatis dipakai."
