@@ -1,4 +1,0 @@
-record_id_l,record_id_r,match_probability,match_weight,decision,review_status,email_l,email_r,name_l,name_r
-new_test_001,rec_032824,0.9997601835098091,12.025435491661208,MATCH,pending,juan.allen552@yahoo.com,juan.allen552@yahoo.com,jose lam,jose lam
-new_test_002,rec_016299,0.9997601835098091,12.025435491661208,MATCH,pending,alyssa.richardson374@yahoo.com,alyssa.richardson374@yahoo.com,alyssa richardson,alyssa richardson
-new_test_003,rec_028506,0.9997601835098091,12.025435491661208,MATCH,pending,david.russell706@gmail.com,david.russell706@gmail.com,david russell,david russell
