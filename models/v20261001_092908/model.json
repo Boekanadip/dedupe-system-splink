@@ -1,0 +1,406 @@
+{
+  "link_type": "dedupe_only",
+  "probability_two_random_records_match": 9.367989539416228e-06,
+  "retain_matching_columns": true,
+  "retain_intermediate_calculation_columns": false,
+  "additional_columns_to_retain": [],
+  "sql_dialect": "duckdb",
+  "linker_uid": "kq479v3v",
+  "em_convergence": 0.0001,
+  "max_iterations": 25,
+  "bayes_factor_column_prefix": "bf_",
+  "term_frequency_adjustment_column_prefix": "tf_",
+  "comparison_vector_value_column_prefix": "gamma_",
+  "unique_id_column_name": "record_id",
+  "source_dataset_column_name": "source_dataset",
+  "blocking_rules_to_generate_predictions": [
+    {
+      "blocking_rule": "l.\"email_std\" = r.\"email_std\"",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.\"phone_std\" = r.\"phone_std\"",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"first_name_std\" = r.\"first_name_std\") AND (l.\"last_name_std\" = r.\"last_name_std\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"city_std\" = r.\"city_std\") AND (l.\"dob_std\" = r.\"dob_std\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.\"dob_std\" = r.\"dob_std\"",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"address_std\" = r.\"address_std\") AND (l.\"city_std\" = r.\"city_std\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "l.\"phone_pre7\" = r.\"phone_pre7\"",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"last_name_std_pre3\" = r.\"last_name_std_pre3\") AND (l.\"first_name_std_pre3\" = r.\"first_name_std_pre3\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"last_name_std_pre3\" = r.\"last_name_std_pre3\") AND (l.\"state_std\" = r.\"state_std\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"email_local_pre3\" = r.\"email_local_pre3\") AND (l.\"last_name_std_pre3\" = r.\"last_name_std_pre3\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"email_domain_pre4\" = r.\"email_domain_pre4\") AND (l.\"last_name_std_pre3\" = r.\"last_name_std_pre3\") AND (l.\"first_name_std_pre3\" = r.\"first_name_std_pre3\")",
+      "sql_dialect": "duckdb"
+    },
+    {
+      "blocking_rule": "(l.\"city_std\" = r.\"city_std\") AND (l.\"state_std\" = r.\"state_std\") AND (l.\"dob_year_std\" = r.\"dob_year_std\")",
+      "sql_dialect": "duckdb"
+    }
+  ],
+  "comparisons": [
+    {
+      "output_column_name": "gamma_first_name_std",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"first_name_std_l\" = \"first_name_std_r\"",
+          "label_for_charts": "Exact match on first_name_std",
+          "m_probability": 0.8876518218623481,
+          "u_probability": 0.004321080946965515,
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "tf_adjustment_column": "first_name_std",
+          "tf_adjustment_weight": 1.0
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"first_name_std_l\", \"first_name_std_r\") >= 0.92",
+          "label_for_charts": "Jaro-Winkler distance of first_name_std >= 0.92",
+          "m_probability": 0.07017543859649122,
+          "u_probability": 0.0015898405756368643,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"first_name_std_l\", \"first_name_std_r\") >= 0.88",
+          "label_for_charts": "Jaro-Winkler distance of first_name_std >= 0.88",
+          "m_probability": 0.02422591383153505,
+          "u_probability": 0.0012721054689326656,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"first_name_std_l\", \"first_name_std_r\") >= 0.7",
+          "label_for_charts": "Jaro-Winkler distance of first_name_std >= 0.7",
+          "m_probability": 0.017496632850559232,
+          "u_probability": 0.02416163770211271,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.05,
+          "u_probability": 0.9686553353063523,
+          "fix_m_probability": true,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "gamma_last_name_std",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"last_name_std_l\" = \"last_name_std_r\"",
+          "label_for_charts": "Exact match on last_name_std",
+          "m_probability": 0.8819163292847504,
+          "u_probability": 0.0029520560261522225,
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "tf_adjustment_column": "last_name_std",
+          "tf_adjustment_weight": 1.0
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"last_name_std_l\", \"last_name_std_r\") >= 0.92",
+          "label_for_charts": "Jaro-Winkler distance of last_name_std >= 0.92",
+          "m_probability": 0.07759784075573549,
+          "u_probability": 0.0006722594312569711,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"last_name_std_l\", \"last_name_std_r\") >= 0.88",
+          "label_for_charts": "Jaro-Winkler distance of last_name_std >= 0.88",
+          "m_probability": 0.026581381559237848,
+          "u_probability": 0.0005844494035064714,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"last_name_std_l\", \"last_name_std_r\") >= 0.7",
+          "label_for_charts": "Jaro-Winkler distance of last_name_std >= 0.7",
+          "m_probability": 0.013795421395754395,
+          "u_probability": 0.020229921865044413,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.05,
+          "u_probability": 0.9755613132740399,
+          "fix_m_probability": true,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "gamma_email_std",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"email_std_l\" = \"email_std_r\"",
+          "label_for_charts": "Exact match on email_std",
+          "m_probability": 0.9350589781755198,
+          "u_probability": 3.675908744902539e-06,
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "tf_adjustment_column": "email_std",
+          "tf_adjustment_weight": 1.0
+        },
+        {
+          "sql_condition": "NULLIF(regexp_extract(\"email_std_l\", '^[^@]+', 0), '') = NULLIF(regexp_extract(\"email_std_r\", '^[^@]+', 0), '')",
+          "label_for_charts": "Exact match on username",
+          "m_probability": 0.012112956915767525,
+          "u_probability": 6.026079909676294e-08,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"email_std_l\", \"email_std_r\") >= 0.88",
+          "label_for_charts": "Jaro-Winkler distance of email_std >= 0.88",
+          "m_probability": 0.027254153060476932,
+          "u_probability": 0.0012319014724686086,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(NULLIF(regexp_extract(\"email_std_l\", '^[^@]+', 0), ''), NULLIF(regexp_extract(\"email_std_r\", '^[^@]+', 0), '')) >= 0.88",
+          "label_for_charts": "Jaro-Winkler >0.88 on username",
+          "m_probability": 5.577805285507918e-29,
+          "u_probability": 0.0005339006365308035,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.05,
+          "u_probability": 0.9982304617214566,
+          "fix_m_probability": true,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "gamma_address_std",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"address_std_l\" = \"address_std_r\"",
+          "label_for_charts": "Exact match on address_std",
+          "m_probability": 0.9969715987732115,
+          "u_probability": 2.520910095547916e-06,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"address_std_l\", \"address_std_r\") >= 0.95",
+          "label_for_charts": "Jaro-Winkler distance of address_std >= 0.95",
+          "m_probability": 0.0016842044507540458,
+          "u_probability": 1.7073893077416166e-07,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"address_std_l\", \"address_std_r\") >= 0.9",
+          "label_for_charts": "Jaro-Winkler distance of address_std >= 0.9",
+          "m_probability": 1.3007776273268325e-46,
+          "u_probability": 2.380301564322136e-06,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "jaro_winkler_similarity(\"address_std_l\", \"address_std_r\") >= 0.8",
+          "label_for_charts": "Jaro-Winkler distance of address_std >= 0.8",
+          "m_probability": 1.1422123426364502e-49,
+          "u_probability": 0.0002473304064261473,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.05,
+          "u_probability": 0.9997475976429832,
+          "fix_m_probability": true,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "gamma_city_std",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"city_std_l\" = \"city_std_r\"",
+          "label_for_charts": "Exact match on city_std",
+          "m_probability": 0.9995179431330296,
+          "u_probability": 8.168351317566216e-05,
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "tf_adjustment_column": "city_std",
+          "tf_adjustment_weight": 1.0
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.05,
+          "u_probability": 0.9999183164868244,
+          "fix_m_probability": true,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "gamma_state_std",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"state_std_l\" = \"state_std_r\"",
+          "label_for_charts": "Exact match on state_std",
+          "m_probability": 0.9996503351948445,
+          "u_probability": 0.019837523628259326,
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "tf_adjustment_column": "state_std",
+          "tf_adjustment_weight": 1.0
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.05,
+          "u_probability": 0.9801624763717407,
+          "fix_m_probability": true,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "gamma_country_std",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"country_std_l\" = \"country_std_r\"",
+          "label_for_charts": "Exact match on country_std",
+          "m_probability": 0.9988897451978951,
+          "u_probability": 0.004148001888493096,
+          "fix_m_probability": false,
+          "fix_u_probability": false,
+          "tf_adjustment_column": "country_std",
+          "tf_adjustment_weight": 1.0
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.05,
+          "u_probability": 0.9958519981115069,
+          "fix_m_probability": true,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "gamma_dob_std",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"dob_std_l\" = \"dob_std_r\"",
+          "label_for_charts": "Exact match on date of birth",
+          "m_probability": 0.999578472770069,
+          "u_probability": 5.409411065586086e-05,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "damerau_levenshtein(\"dob_std_l\", \"dob_std_r\") <= 1",
+          "label_for_charts": "DamerauLevenshtein distance <= 1",
+          "m_probability": 1.3928675422865477e-57,
+          "u_probability": 0.0015101557122979114,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ABS(EPOCH(try_strptime(\"dob_std_l\", '%Y-%m-%d')) - EPOCH(try_strptime(\"dob_std_r\", '%Y-%m-%d'))) <= 2629800.0",
+          "label_for_charts": "Abs date difference <= 1 month",
+          "m_probability": 2.1760017524558646e-42,
+          "u_probability": 0.002519172575840626,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ABS(EPOCH(try_strptime(\"dob_std_l\", '%Y-%m-%d')) - EPOCH(try_strptime(\"dob_std_r\", '%Y-%m-%d'))) <= 31557600.0",
+          "label_for_charts": "Abs date difference <= 1 year",
+          "m_probability": 4.2552447651287795e-18,
+          "u_probability": 0.03394647491198308,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ABS(EPOCH(try_strptime(\"dob_std_l\", '%Y-%m-%d')) - EPOCH(try_strptime(\"dob_std_r\", '%Y-%m-%d'))) <= 315576000.0",
+          "label_for_charts": "Abs date difference <= 10 year",
+          "m_probability": 1.6510088947113422e-07,
+          "u_probability": 0.30600607533306945,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.05,
+          "u_probability": 0.655964027356153,
+          "fix_m_probability": true,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    },
+    {
+      "output_column_name": "gamma_phone_std",
+      "comparison_levels": [
+        {
+          "sql_condition": "\"phone_std_l\" = \"phone_std_r\"",
+          "label_for_charts": "Exact match on phone_std",
+          "m_probability": 0.9979810198992054,
+          "u_probability": 5.704688981160224e-06,
+          "fix_m_probability": false,
+          "fix_u_probability": false
+        },
+        {
+          "sql_condition": "ELSE",
+          "label_for_charts": "All other comparisons",
+          "m_probability": 0.05,
+          "u_probability": 0.9999942953110188,
+          "fix_m_probability": true,
+          "fix_u_probability": false
+        }
+      ],
+      "comparison_description": "CustomComparison"
+    }
+  ]
+}

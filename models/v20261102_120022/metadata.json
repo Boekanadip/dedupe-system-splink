@@ -1,0 +1,49 @@
+{
+  "version": "v20261102_120022",
+  "created_at": "2026-11-02T12:00:22",
+  "scope": "sample",
+  "input_rows": 10000,
+  "pairs_scored": 4161,
+  "blocking_rules": [
+    "email_exact",
+    "phone_exact",
+    "name_exact",
+    "city_dob",
+    "dob_exact",
+    "address_city",
+    "phone_prefix",
+    "name_prefix",
+    "name_prefix_state",
+    "email_domain_name",
+    "city_state_dob_year",
+    "email_domain",
+    "city_state_dob",
+    "phone_last4",
+    "email_domain_fuzzy",
+    "city_state_dob_fuzzy",
+    "name_fuzzy_last4"
+  ],
+  "lambda_recall_assumption": 1.0,
+  "m_else_level_floor": 0.05,
+  "m_else_level_floor_by_field": {
+    "dob_std": 0.001,
+    "phone_std": 0.001,
+    "email_std": 0.005,
+    "first_name_std": 0.02,
+    "last_name_std": 0.01,
+    "address_std": 0.02,
+    "state_std": 0.02
+  },
+  "random_seed": 42,
+  "splink_version": "4.0.17",
+  "runtime_seconds": 1.66,
+  "training_rules": [
+    "phone_prefix",
+    "name_prefix",
+    "email_domain_name",
+    "email_domain",
+    "email_domain_fuzzy",
+    "name_fuzzy_last4"
+  ],
+  "trained": true
+}

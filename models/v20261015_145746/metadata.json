@@ -1,0 +1,52 @@
+{
+  "version": "v20261015_145746",
+  "created_at": "2026-10-15T14:57:46",
+  "scope": "full",
+  "input_rows": 107427,
+  "pairs_scored": 1590053,
+  "blocking_rules": [
+    "email_exact",
+    "phone_exact",
+    "name_exact",
+    "city_dob",
+    "dob_exact",
+    "address_city",
+    "phone_prefix",
+    "name_prefix",
+    "name_prefix_state",
+    "email_local_name",
+    "email_domain_name",
+    "city_state_dob_year",
+    "last_name_phonetic_city"
+  ],
+  "lambda_recall_assumption": 1.0,
+  "m_else_level_floor": 0.05,
+  "m_else_level_floor_by_field": {
+    "dob_std": 0.001,
+    "phone_std": 0.001,
+    "email_std": 0.005,
+    "first_name_std": 0.02,
+    "last_name_std": 0.02,
+    "address_std": 0.02,
+    "state_std": 0.02
+  },
+  "random_seed": 42,
+  "splink_version": "4.0.17",
+  "runtime_seconds": 148.93,
+  "training_rules": [
+    "email_exact",
+    "phone_exact",
+    "name_exact",
+    "city_dob",
+    "dob_exact",
+    "address_city",
+    "phone_prefix",
+    "name_prefix",
+    "name_prefix_state",
+    "email_local_name",
+    "email_domain_name",
+    "city_state_dob_year",
+    "last_name_phonetic_city"
+  ],
+  "trained": true
+}
