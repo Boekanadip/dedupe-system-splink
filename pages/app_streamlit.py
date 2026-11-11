@@ -25,6 +25,7 @@ RUN_SUMMARY = OUTPUT_DIR / "run_summary.json"
 BATCH_REPORT = OUTPUT_DIR / "batch_linkage_report.json"
 
 st.set_page_config(page_title="Upload - Entity Resolution", page_icon="📤", layout="wide")
+
 page_header(
     "Upload Data",
     "Tambahkan data customer baru",
@@ -91,15 +92,13 @@ def process_pipeline(date_order: str = "auto", batch_file: str | None = None, se
         st.caption("Belum ada model — run pertama melatih model (full pipeline).")
     if date_order != "auto":
         command += ["--date-order", date_order]
-    if selected_columns and command[-2:] != ["--stage", "--columns"]:
-        command += ["--columns", ",".join(selected_columns)]
     outcome = run_pipeline(command)
     outcome["status_box"].empty()
     outcome["log_box"].empty()
     if outcome["returncode"] == 0:
         st.success(
-            "Analisis selesai. Buka halaman Data Batch Baru untuk melihat proposal "
-            "dan menerapkannya."
+            "Analisis selesai. Hasil otomatis disimpan ke PostgreSQL. "
+            "Buka halaman Data Batch Baru untuk melihat proposal dan menerapkannya."
         )
     else:
         st.error(
@@ -111,7 +110,7 @@ def process_pipeline(date_order: str = "auto", batch_file: str | None = None, se
         json.loads(RUN_SUMMARY.read_text(encoding="utf-8"))
         if RUN_SUMMARY.exists()
         else {}
-    )com
+    )
     batch_result = (
         json.loads(BATCH_REPORT.read_text(encoding="utf-8"))
         if BATCH_REPORT.exists()
@@ -163,7 +162,7 @@ with tab_csv:
         if size_mb > MAX_UPLOAD_MB:
             st.error(
                 f"File {size_mb:.1f} MB melebihi batas {MAX_UPLOAD_MB} MB. "
-                "Tidak ada yang disimpan. Pecah jadi beberapa batch."
+                "Pecah jadi beberapa batch"
             )
             st.stop()
         digest = hashlib.sha256(payload).hexdigest()
@@ -176,7 +175,7 @@ with tab_csv:
             "uploaded_name": uploaded.name,
         }
         if report["blocking"]:
-            st.warning("Pilih kolom pembanding di bagian validasi sebelum melanjutkan.")
+            st.warning("Pilih kolom pembanding di bagian validasi sebelum melanjutkan")
         st.session_state.source_type = "csv"
         st.session_state.source_data = {
             "payload": payload,
@@ -238,7 +237,7 @@ with tab_csv:
             )
         if report["exact_duplicate_rows"]:
             st.info(
-                f"{report['exact_duplicate_rows']:,} baris identik persis di dalam batch ini."
+                f"{report['exact_duplicate_rows']:,} baris identik persis di dalam batch ini"
             )
         orphans = sorted(
             p.name
@@ -250,7 +249,7 @@ with tab_csv:
                 "File lama di data/raw yang tidak terdaftar (tidak dipakai pipeline, "
                 "boleh dihapus manual): " + ", ".join(orphans)
             )
-        # ---- Kolom pembanding dan pengaruh bobot
+        
         st.subheader("3 · Pilih kolom pembanding")
         raw_columns = report.get("available_columns", [])
         canonical = {
@@ -280,7 +279,7 @@ with tab_csv:
             st.warning("Konfigurasi ini lemah: satu field lokasi/tahun lahir dapat menghasilkan banyak false positive.")
             if not st.checkbox("Saya memahami risikonya dan tetap lanjutkan", key="csv_weak_model"):
                 st.stop()
-        st.warning("Pilihan kolom mengubah comparison dan bobot model. Blocking tetap memakai rules default; hasil ini adalah konfigurasi model baru.")
+        st.warning("Pilihan kolom mengubah comparison dan bobot model. Blocking tetap memakai rules default. hasil ini adalah konfigurasi model baru.")
         st.session_state["selected_match_columns"] = chosen
 
         # ---- 4 Tanggal
@@ -331,6 +330,13 @@ with tab_csv:
                 dest.unlink(missing_ok=True)
                 st.error(str(exc))
                 st.stop()
+        try:
+            from src.persist import persist_raw_csv
+
+            raw_rows = persist_raw_csv(RAW_DIR / batch["file"])
+            st.caption(f"Database: {raw_rows:,} baris data mentah tersimpan di `splink_data.customers`.")
+        except Exception as exc:
+            st.warning(f"Data mentah belum tersimpan ke database: {exc}")
         st.success(
             f"Tersimpan: `{batch['file']}` · {batch['rows']:,} baris · "
             f"{batch['record_id_range'][0]}..{batch['record_id_range'][1]}"
@@ -497,6 +503,15 @@ with tab_db:
                     )
                     st.session_state.pending_batch = None
                     st.stop()
+                try:
+                    from src.persist import persist_raw_csv
+
+                    raw_rows = persist_raw_csv(RAW_DIR / result["batch_file"])
+                    st.caption(
+                        f"Database: {raw_rows:,} baris data mentah tersimpan di `splink_data.customers`."
+                    )
+                except Exception as exc:
+                    st.warning(f"Data mentah belum tersimpan ke database: {exc}")
                 st.success(
                     f"Tabel diekspor sebagai `{result['batch_file']}` "
                     f"({result['rows']:,} baris)"
@@ -511,4 +526,3 @@ with tab_db:
                     batch_file=result["batch_file"],
                     selected_columns=st.session_state.get("db_selected_match_columns"),
                 )
-

@@ -15,6 +15,7 @@ from src.labels import QUEUE_PATH, GOLD_PATH
 from src.ui import render_sidebar, monitoring_sidebar, page_guide, page_header, workflow_step
 
 st.set_page_config(page_title="Riwayat - Entity Resolution", page_icon="📜", layout="wide")
+
 page_header(
     "Riwayat Keputusan",
     "Catatan siapa mengubah apa dan kapan. Dipakai untuk menelusuri kembali "

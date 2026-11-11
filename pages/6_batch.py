@@ -17,6 +17,7 @@ from src.ui import format_probability, monitoring_sidebar, page_guide, page_head
 from src.validate_upload import validate_file
 
 st.set_page_config(page_title="Batch - Entity Resolution", page_icon="📦", layout="wide")
+
 page_header(
     "Data Batch Baru",
     "Sebelum data baru dipakai, periksa dulu setiap barisnya. Baris yang tidak "
@@ -119,8 +120,8 @@ if "model_version" in staging.columns:
 st.subheader("Detail — centang record yang disetujui")
 st.caption(
     "Default: semua record disetujui. Record yang di-uncheck TIDAK digabung ke "
-    "entity yang diusulkan — record tetap masuk data sebagai entity baru "
-    "sendiri (tidak pernah dihapus)."
+    "entity yang diusulkan - record tetap masuk data sebagai entity baru "
+    "sendiri"
 )
 master_lookup = pd.read_parquet(MASTER_PATH).set_index("entity_id")
 display = staging.copy()
@@ -169,10 +170,10 @@ if a2.button("Terapkan proposal", type="primary"):
     with st.expander("Log apply", expanded=code != 0):
         st.code(log[-3000:])
     if code == 0:
-        st.success("Proposal diterapkan. Batch sudah digabung — cek halaman Daftar Customer & Ringkasan.")
+        st.success("Proposal diterapkan, cek halaman Daftar Customer & Ringkasan")
         st.rerun()
     else:
-        st.error("Apply gagal — lihat log.")
+        st.error("Apply gagal, lihat LOG")
 
 st.divider()
 st.subheader("Tolak proposal")
@@ -192,4 +193,4 @@ if st.button("Tolak proposal", type="secondary", disabled=not confirm_reject):
         st.success("Proposal dibatalkan. Staging dihapus; batch tetap terdaftar.")
         st.rerun()
     else:
-        st.error("Reject gagal — lihat log.")
+        st.error("Reject gagal  lihat log.")

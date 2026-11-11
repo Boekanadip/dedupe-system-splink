@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -16,11 +17,16 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 
 def _clean(value):
-    """Convert pandas NA to None; leave everything else untouched."""
-    try:
-        return None if pd.isna(value) else value
-    except (TypeError, ValueError):  # arrays/lists: isna is ambiguous
-        return value
+    """Convert pandas/numpy types to native Python for psycopg2 compatibility."""
+    if value is None:
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    if isinstance(value, (list, tuple, set)):
+        return [_clean(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return _clean(value.tolist())
+    return value
 
 
 def export_to_csv(df: pd.DataFrame, output_path: str | Path) -> Path:
@@ -66,6 +72,24 @@ def save_to_database(df: pd.DataFrame, table_name: str = "splink_data.dedup_outp
     if df.empty:
         return 0
 
+    # master_customer_bersih menyimpan field canonical dengan suffix _std;
+    # dashboard/export memakai nama field master biasa. Sesuaikan hanya untuk
+    # tabel ini agar master_customer_current/snapshot tidak ikut berubah.
+    if table_name == "splink_data.master_customer_bersih":
+        df = df.copy()
+        field_map = {
+            "first_name": "first_name_std",
+            "last_name": "last_name_std",
+            "email": "email_std",
+            "phone": "phone_std",
+            "address": "address_std",
+            "city": "city_std",
+            "state": "state_std",
+            "country": "country_std",
+            "dob": "dob_std",
+        }
+        df = df.rename(columns={k: v for k, v in field_map.items() if k in df.columns and v not in df.columns})
+
     schema, _, table = table_name.rpartition(".")
     if not table or not table_name.replace("_", "").replace(".", "").isalnum():
         raise ValueError("Nama tabel harus berupa schema.table atau table yang valid.")
@@ -75,6 +99,8 @@ def save_to_database(df: pd.DataFrame, table_name: str = "splink_data.dedup_outp
         insert = f"INSERT INTO {qualified} ({col_names}) VALUES %s ON CONFLICT (entity_id) DO UPDATE SET " + ", ".join(
             f'"{c}" = EXCLUDED."{c}"' for c in df.columns if c != "entity_id"
         )
+    elif {"record_id_l", "record_id_r"} <= set(df.columns):
+        insert = f"INSERT INTO {qualified} ({col_names}) VALUES %s ON CONFLICT DO NOTHING"
     else:
         insert = f"INSERT INTO {qualified} ({col_names}) VALUES %s"
 
@@ -101,6 +127,7 @@ def save_to_database(df: pd.DataFrame, table_name: str = "splink_data.dedup_outp
                 )
             rows = [tuple(_clean(v) for v in r) for r in df.itertuples(index=False)]
             execute_values(cur, insert, rows)
+        conn.commit()
         return len(df)
     finally:
         conn.close()

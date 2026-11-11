@@ -345,19 +345,26 @@ def carry_over_reviewed(queue: pd.DataFrame) -> pd.DataFrame:
         return queue
 
     keys = ["record_id_l", "record_id_r"]
+    carried_cols = [
+        "label", "reviewer", "reviewer_note",
+        "agree_email", "agree_phone", "agree_dob", "agree_name", "agree_city",
+    ]
     queue = queue.copy()
     reviewed = reviewed.copy()
     for frame in (queue, reviewed):
         for key in keys:
             frame[key] = frame[key].astype(str).str.strip()
-    carried = reviewed[keys + ["label", "reviewer", "reviewer_note"]].drop_duplicates(keys)
+    carried_cols = [c for c in carried_cols if c in reviewed.columns]
+    carried = reviewed[keys + carried_cols].drop_duplicates(keys)
     for column in ("label", "reviewer", "reviewer_note"):
         if column not in queue.columns:
             queue[column] = None
 
     before = queue["label"].notna().sum()
     queue = queue.merge(carried, on=keys, how="left", suffixes=("", "_carried"))
-    for column in ("label", "reviewer", "reviewer_note"):
+    for column in carried_cols:
+        if f"{column}_carried" not in queue.columns:
+            continue
         queue[column] = queue[f"{column}_carried"].where(
             queue[f"{column}_carried"].notna(), queue[column]
         )
@@ -377,6 +384,12 @@ def save_review_queue(df: pd.DataFrame, full: bool = False) -> pd.DataFrame:
         LABELS_DIR.mkdir(parents=True, exist_ok=True)
         queue = carry_over_reviewed(queue)
         atomic_write_csv(queue, QUEUE_PATH)
+        try:
+            from .review_db import upsert_queue
+
+            upsert_queue(queue)
+        except Exception as exc:
+            print(f"PostgreSQL review queue unavailable ({exc}); CSV written only")
     return queue
 
 
@@ -416,11 +429,21 @@ def _backup_gold() -> Path | None:
 
 def promote_gold() -> int:
     sources = [path for path in (QUEUE_PATH, FP_SAMPLE_PATH) if path.exists()]
-    if not sources:
+    db_queue = pd.DataFrame()
+    try:
+        from .review_db import load_queue as load_db_queue
+
+        db_queue = load_db_queue()
+    except Exception as exc:
+        print(f"PostgreSQL review queue unavailable ({exc}); using CSV only")
+    if not sources and db_queue.empty:
         raise FileNotFoundError(
-            f"No review queue at {QUEUE_PATH} and no FP sample at {FP_SAMPLE_PATH}"
+            f"No review queue at {QUEUE_PATH}, no DB queue, and no FP sample at {FP_SAMPLE_PATH}"
         )
     frames = []
+    if not db_queue.empty:
+        frames.append(db_queue)
+        print(f"Reading PostgreSQL review queue: {len(db_queue):,} rows")
     for path in sources:
         frame = _read_review(path)
         # Deteksi kolom angka yang berubah akibat pengaturan desimal berkoma di Excel.
@@ -444,6 +467,10 @@ def promote_gold() -> int:
         frames.append(frame)
         print(f"Reading {path.name}: {len(frame):,} rows")
     queue = pd.concat(frames, ignore_index=True)
+    if {"record_id_l", "record_id_r"} <= set(queue.columns):
+        ids = queue[["record_id_l", "record_id_r"]].astype(str)
+        queue["record_id_l"] = ids.min(axis=1)
+        queue["record_id_r"] = ids.max(axis=1)
 
     raw = queue["label"].astype(str).str.strip()
     reviewed = queue[queue["label"].map(normalise_label).notna()].copy()
@@ -469,6 +496,9 @@ def promote_gold() -> int:
         "agree_email", "agree_phone", "agree_dob", "agree_name", "agree_city",
         "match_probability",
     ]
+    for col in keep_cols:
+        if col not in reviewed.columns:
+            reviewed[col] = None
     new = reviewed[keep_cols]
     n_before = 0
     if GOLD_PATH.exists() and GOLD_PATH.stat().st_size > 0:

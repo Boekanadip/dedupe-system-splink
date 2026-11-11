@@ -32,6 +32,7 @@ from src.ui import (
 import psutil
 
 st.set_page_config(page_title="Model - Entity Resolution", page_icon="⚙️", layout="wide")
+
 page_header(
     "Pengaturan Sistem",
     "Halaman ini tempat mengubah batas kepastian dan melatih ulang sistem. "
@@ -87,7 +88,7 @@ STALE_SEC = 600
 
 
 def lock_status() -> tuple[bool, int, bool]:
-    """(ada_lock, detik sejak log terakhir tumbuh, pid masih hidup)."""
+
     if not LOCK.exists():
         return False, 0, False
     ref = RETRAIN_LOG if RETRAIN_LOG.exists() else LOCK
@@ -108,15 +109,7 @@ st.caption(
 
 @st.fragment(run_every=2)
 def retrain_runner() -> None:
-    """Pantau pelatihan ulang melalui berkas log, bukan pipe stdout.
 
-    Sebelumnya subprocess di-pipe ke `for line in process.stdout` di dalam
-    fragment ber-`run_every`. Rerun fragment memutus loop itu, menutup pipe,
-    menghentikan proses pelatihan di tengah jalan, dan `LOCK.unlink()` tidak
-    pernah tercapai — kunci basi selamanya. Proses terpisah dengan log di disk
-    tidak dapat terputus dengan cara itu; keaktifan proses diperiksa melalui PID
-    pada berkas kunci.
-    """
     locked, idle, alive = lock_status()
 
     if locked and not alive:

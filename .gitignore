@@ -42,3 +42,55 @@ outputs/.staging/
 
 # AI Agent implementation (local only)
 .opencode/
+
+# Generated outputs (not tracked in Git)
+outputs/
+
+# Raw data CSVs (development dataset, not production client data)
+data/raw/*.csv
+
+# Processed data artifacts
+data/processed/*.parquet
+data/processed/*.json
+data/processed/*.jsonl
+
+# Pipeline runtime artifacts
+.tmp/
+
+# Temporary check scripts (local/dev only)
+_check_cols.py
+_check_maps.py
+_check_maps2.py
+
+# Smoke/fix output artifacts
+_smoke_out.txt
+_verify_fix.py
+_verify_fix2.py
+
+# Label/export files with timestamps
+data/labels/*_*.csv
+
+# Databricks/BridgeDB watermark
+data/processed/db_watermark.json
+
+# Excel artifacts (not source)
+*.xlsx
+
+# Local database diagnostic scripts (contain local credentials)
+check_db.py
+scripts/dev_checks/verify_review_db.py
+
+# Streamlit session state
+.toml
+
+# Generated outputs (not tracked in Git)
+outputs/
+
+# Raw data (development dataset, not production client data)
+data/raw/*.csv
+
+# Processed data artifacts
+data/processed/*.parquet
+
+# Pipeline runtime artifacts
+.tmp/

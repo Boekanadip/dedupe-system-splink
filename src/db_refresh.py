@@ -430,10 +430,16 @@ def _enqueue_stale(stale: list[dict]) -> int:
     new = new[~new.apply(lambda r: (str(r["record_id_l"]), str(r["record_id_r"])) in existing, axis=1)]
     if new.empty:
         return 0
-    combined = pd.concat([queue, new], ignore_index=True)
-    combined = carry_over_reviewed(combined)
-    combined.to_csv(QUEUE_PATH, index=False)
-    return len(new)
+    try:
+        from .review_db import upsert_queue
+
+        return upsert_queue(new)
+    except Exception as exc:
+        print(f"PostgreSQL review queue unavailable ({exc}); writing CSV only")
+        combined = pd.concat([queue, new], ignore_index=True)
+        combined = carry_over_reviewed(combined)
+        combined.to_csv(QUEUE_PATH, index=False)
+        return len(new)
 
 
 def main() -> None:

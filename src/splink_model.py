@@ -76,6 +76,11 @@ def build_name_comparison() -> cl.CustomComparison:
     )
 
 
+# Ambang "tahun lahir masih sama" untuk uji: selisih DOB > 366 hari = orang lain.
+# ponytail: 366 hari, bukan perbandingan tahun kalender; ganti kalau aturan
+# pemilik berubah jadi tahun-kalender penuh.
+DOB_SAME_YEAR_DAYS = 366
+
 DETERMINISTIC_RULES = [
     block_on("email_std"),
     block_on("phone_pre7"),  
@@ -611,6 +616,16 @@ def apply_business_rules(pred_df: pd.DataFrame, verbose: bool = False) -> pd.Dat
             f"conflict_email_fullname={int(force_non_by_email_fullname.sum()):,}; "
             "decision tidak ditimpa"
         )
+    # Jika nama+email+alamat sama persis tapi DOB beda/kosong, jadikan REVIEW
+    # demi manusia bisa memeriksa kapanDOBnya tidak konsisten.
+    dob_l = out.get("dob_std_l")
+    dob_r = out.get("dob_std_r")
+    if dob_l is not None and dob_r is not None:
+        dob_both = dob_l.notna() & dob_r.notna() & (dob_l == dob_r)
+        unverified = keys_same & ~dob_both
+        already = out["business_rule"].isna()
+        out.loc[unverified & already, "business_rule"] = "unverified_dob"
+        out.loc[unverified & already, "decision"] = "REVIEW"
     return out
 
 

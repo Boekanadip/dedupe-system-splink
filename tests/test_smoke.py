@@ -700,9 +700,9 @@ def decision_column_is_present_and_ordered():
 
     forced = preds[overridden]
     rejected = forced[forced["decision"] == "NON_MATCH"]
-    bad_reject = int((rejected["business_rule"] != "no_field_agrees").sum())
+    bad_reject = int((rejected["business_rule"] != "no_field_agreement").sum())
     assert bad_reject == 0, (
-        f"{bad_reject} pair(s) were rejected by a rule other than 'no_field_agrees'; "
+        f"{bad_reject} pair(s) were rejected by a rule other than 'no_field_agreement'; "
         "only a zero-evidence rejection is validated, an unverifiable dob must "
         "queue for a human instead"
     )

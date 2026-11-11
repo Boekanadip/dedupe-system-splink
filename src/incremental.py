@@ -72,16 +72,18 @@ def candidate_old_rows(
 ) -> pd.DataFrame:
     con = duckdb.connect()
     con.register("new_batch", new_std)
-    exists = " OR ".join(
-        "EXISTS (SELECT 1 FROM new_batch n WHERE "
-        + " AND ".join(f'n."{left}" = o."{right}"' for left, right in pairs)
-        + ")"
+    join_condition = " OR ".join(
+        "(" + " AND ".join(
+            f'n."{left}" = o."{right}"' for left, right in pairs
+        ) + ")"
         for pairs in key_pairs
     )
+    # JOIN dipakai, bukan correlated EXISTS bertingkat. DuckDB gagal me-resolve
+    # alias `n` pada EXISTS tertentu setelah rule blocking bertambah kompleks.
     sql = (
-        f"SELECT o.* FROM read_parquet('{PROCESSED_DATA_PATH}') o "
-        f"WHERE ({exists}) "
-        "AND NOT EXISTS (SELECT 1 FROM new_batch n WHERE n.record_id = o.record_id)"
+        f"SELECT DISTINCT o.* FROM read_parquet('{PROCESSED_DATA_PATH}') o "
+        f"JOIN new_batch n ON ({join_condition}) "
+        'WHERE n."record_id" <> o."record_id"'
     )
     return con.execute(sql).df()
 
@@ -233,7 +235,7 @@ def score_new_pairs(
         )
 
     db_api = DuckDBAPI()
-    sdf = db_api.register_table(scored)
+    sdf = db_api.register(scored, table_name="input_data")
     linker = Linker(sdf, patched)
     tf_tables = corpus_tf_tables(model)
     for col, table in tf_tables.items():
@@ -397,12 +399,17 @@ def update_review_queue(new_preds: pd.DataFrame, full_std: pd.DataFrame) -> int:
         "label", "review_status", "reviewer", "reviewer_note",
     ]
     new_rows = review[columns]
-    old_queue = pd.read_csv(QUEUE_PATH) if QUEUE_PATH.exists() else pd.DataFrame()
-    combined = pd.concat([old_queue, new_rows], ignore_index=True)
-    combined = carry_over_reviewed(combined)
-    LABELS_DIR.mkdir(parents=True, exist_ok=True)
-    combined.to_csv(QUEUE_PATH, index=False)
-    return len(new_rows)
+    try:
+        from .review_db import upsert_queue
+        return upsert_queue(new_rows)
+    except Exception as exc:
+        print(f"PostgreSQL review queue unavailable ({exc}); falling back to CSV")
+        old_queue = pd.read_csv(QUEUE_PATH) if QUEUE_PATH.exists() else pd.DataFrame()
+        combined = pd.concat([old_queue, new_rows], ignore_index=True)
+        combined = carry_over_reviewed(combined)
+        LABELS_DIR.mkdir(parents=True, exist_ok=True)
+        combined.to_csv(QUEUE_PATH, index=False)
+        return len(new_rows)
 
 
 def compute(batch: dict, date_order: str | None) -> dict:
@@ -718,6 +725,9 @@ def main() -> None:
             release_pipeline_lock()
 
         finalize_staged()
+        from .persist import persist_pipeline, print_result
+        print("\nMenyimpan batch hasil apply ke PostgreSQL...")
+        print_result(persist_pipeline(full=True, snapshot=False))
         return
 
     acquire_pipeline_lock(note=f"incremental compute {batch['file']}")
