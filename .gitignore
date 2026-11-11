@@ -94,3 +94,11 @@ data/processed/*.parquet
 
 # Pipeline runtime artifacts
 .tmp/
+
+# Local artifacts and experiments
+models/
+data/synthetic/
+data/synthetic_review.parquet
+scripts/dev_checks/
+scripts/seed_customers_v2.sql
+
