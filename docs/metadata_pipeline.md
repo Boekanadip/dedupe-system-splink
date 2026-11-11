@@ -2,14 +2,14 @@
 
 ## 1. Ingestion → Raw Data
 
-**Source file:** `data/raw/crm_50000_customers_dirty_v3.csv`
+**Source file:** batch CSV lokal yang terdaftar di `data/raw/`; nama dan jumlah batch dapat berbeda antar lingkungan
 - 50K customer records (development dataset)
 - Columns: `customer_id`, `first_name`, `last_name`, `email`, `phone_number`, `dob`, `address`, `city`, `state`, `country`, `source`, `gender`
 - Encoding: UTF-8 with some legacy variants
 
 ## 2. Standardization → Feature Engineering
 
-**Output:** `data/processed/crm_standardized.parquet` (108,427 records)
+**Output:** `data/processed/crm_standardized.parquet` (artefak lokal; jumlah record bergantung input)
 
 | Raw Column | Standardized Column | Transformation |
 |---|---|---|
