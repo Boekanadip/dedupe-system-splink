@@ -10,7 +10,9 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR, PROJECT_ROOT, PROCESSED_DATA_PATH
+from src.data_access import read_pairs, read_processed
 from src.labels import exclude_gold_pairs, load_labels
+from src.review_db import load_queue as load_db_queue, update_decisions
 from src.ui import (
     decision_label,
     field_label,
@@ -66,11 +68,18 @@ page_header(
 )
 render_sidebar("review")
 
-if not QUEUE_PATH.exists():
+try:
+    queue = load_db_queue()
+except Exception as exc:
+    st.warning(f"Database review belum tersedia; memakai file lokal sementara: {exc}")
+    queue = pd.read_csv(QUEUE_PATH) if QUEUE_PATH.exists() else pd.DataFrame()
+
+if queue.empty and not QUEUE_PATH.exists():
     st.info("Belum ada antrean. Jalankan pipeline dari halaman Upload dulu.")
     st.stop()
-
-queue = pd.read_csv(QUEUE_PATH)
+if queue.empty:
+    st.info("Belum ada antrean.")
+    st.stop()
 for col in EDITABLE:
     queue[col] = queue[col].where(queue[col].notna(), "").astype(str)
 hidden_gold_count = 0
@@ -123,26 +132,38 @@ tab_compare, tab_list = st.tabs(["Bandingkan satu per satu", "Daftar (massal)"])
 
 
 def apply_labels(pairs: list[tuple[str, str, str, str, str]]) -> int:
-    """pairs: (l, r, label, reviewer, note). Ubah antrean langsung, lalu simpan."""
+    """pairs: (l, r, label, reviewer, note). Simpan ke PostgreSQL, fallback ke CSV."""
     if not pairs:
         return 0
-    frame = pd.read_csv(QUEUE_PATH)
-    for c in EDITABLE:
-        frame[c] = frame[c].where(frame[c].notna(), "").astype(str)
+    updates = pd.DataFrame(
+        [
+            {"record_id_l": l, "record_id_r": r, "label": label,
+             "reviewer": reviewer, "reviewer_note": note or ""}
+            for l, r, label, reviewer, note in pairs
+        ]
+    )
+    try:
+        update_decisions(updates)
+    except Exception as exc:
+        frame = pd.read_csv(QUEUE_PATH)
+        for c in EDITABLE:
+            frame[c] = frame[c].where(frame[c].notna(), "").astype(str)
+        for rid_l, rid_r, label, reviewer, note in pairs:
+            mask = (frame["record_id_l"] == rid_l) & (frame["record_id_r"] == rid_r)
+            frame.loc[mask, "label"] = label
+            frame.loc[mask, "reviewer"] = reviewer
+            if note is not None:
+                frame.loc[mask, "reviewer_note"] = note
+            frame.loc[mask, "review_status"] = "reviewed" if label else "pending"
+        frame.to_csv(QUEUE_PATH, index=False)
+        st.warning(f"PostgreSQL gagal; keputusan disimpan lokal sementara: {exc}")
     for rid_l, rid_r, label, reviewer, note in pairs:
-        mask = (frame["record_id_l"] == rid_l) & (frame["record_id_r"] == rid_r)
-        frame.loc[mask, "label"] = label
-        frame.loc[mask, "reviewer"] = reviewer
-        if note is not None:
-            frame.loc[mask, "reviewer_note"] = note
-        frame.loc[mask, "review_status"] = "reviewed" if label else "pending"
         queue_mask = (queue["record_id_l"] == rid_l) & (queue["record_id_r"] == rid_r)
         queue.loc[queue_mask, "label"] = label
         queue.loc[queue_mask, "reviewer"] = reviewer
         if note is not None:
             queue.loc[queue_mask, "reviewer_note"] = note
         queue.loc[queue_mask, "review_status"] = "reviewed" if label else "pending"
-    frame.to_csv(QUEUE_PATH, index=False)
     return len(pairs)
 
 
@@ -205,15 +226,15 @@ with tab_compare:
                     evidence_row[column] = row[column]
         if PREDS_PATH.exists():
             try:
-                pred_columns = pd.read_parquet(PREDS_PATH, columns=[]).columns.tolist()
+                pred_columns = read_pairs(columns=[]).columns.tolist()
                 wanted = ["record_id_l", "record_id_r", "decision", "gamma_name", "gamma_contact", "gamma_location"]
                 wanted += [f"{f}_{side}" for f in value_fields for side in ("l", "r")]
                 wanted = [column for column in wanted if column in pred_columns]
-                gdf = pd.read_parquet(PREDS_PATH, columns=wanted)
+                gdf = read_pairs(columns=wanted) if wanted else pd.DataFrame()
                 ghit = gdf[
                     (gdf["record_id_l"].astype(str) == str(row["record_id_l"]))
                     & (gdf["record_id_r"].astype(str) == str(row["record_id_r"]))
-                ]
+                ] if not gdf.empty else pd.DataFrame()
                 if not ghit.empty:
                     evidence_row.update(ghit.iloc[0].to_dict())
             except Exception:
@@ -224,7 +245,7 @@ with tab_compare:
         missing_values = [f"{field}_{side}" not in evidence_row for field in value_fields for side in ("l", "r")]
         if any(missing_values):
             try:
-                records = pd.read_parquet(PROCESSED_DATA_PATH, columns=["record_id", *value_fields])
+                records = read_processed(columns=["record_id", *value_fields])
                 records["record_id"] = records["record_id"].astype(str)
                 left = records[records["record_id"] == str(row["record_id_l"])].iloc[0]
                 right = records[records["record_id"] == str(row["record_id_r"])].iloc[0]
@@ -355,18 +376,20 @@ with tab_list:
             edited[col] = edited[col].fillna("").astype(str)
 
     if st.button("Simpan semua perubahan", type="primary"):
-        merged = pd.read_csv(QUEUE_PATH)
-        for c in EDITABLE:
-            merged[c] = merged[c].where(merged[c].notna(), "").astype(str)
-        for _, r in edited.iterrows():
-            mask = (merged["record_id_l"] == r["record_id_l"]) & (
-                merged["record_id_r"] == r["record_id_r"]
-            )
-            for col in EDITABLE:
-                v = r[col]
-                merged.loc[mask, col] = "" if pd.isna(v) else str(v)
-            merged.loc[mask, "review_status"] = "reviewed" if r["label"] else "pending"
-        merged.to_csv(QUEUE_PATH, index=False)
+        updates = edited[["record_id_l", "record_id_r", *EDITABLE]].copy()
+        try:
+            update_decisions(updates)
+        except Exception as exc:
+            merged = pd.read_csv(QUEUE_PATH) if QUEUE_PATH.exists() else pd.DataFrame()
+            for _, r in updates.iterrows():
+                mask = (merged["record_id_l"] == r["record_id_l"]) & (
+                    merged["record_id_r"] == r["record_id_r"]
+                )
+                for col in EDITABLE:
+                    merged.loc[mask, col] = "" if pd.isna(r[col]) else str(r[col])
+                merged.loc[mask, "review_status"] = "reviewed" if r["label"] else "pending"
+            merged.to_csv(QUEUE_PATH, index=False)
+            st.warning(f"PostgreSQL gagal; keputusan disimpan lokal sementara: {exc}")
         st.session_state["msg"] = f"Tersimpan {len(edited):,} baris dari Daftar."
         st.toast("tersimpan")
         st.rerun()

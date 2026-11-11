@@ -12,11 +12,13 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import MASTER_PATH, OUTPUT_DIR, PROJECT_ROOT
+from src.data_access import read_master
 from src.profiling import load_raw
 from src.ui import format_probability, monitoring_sidebar, page_guide, page_header, render_sidebar, workflow_step
 from src.validate_upload import validate_file
 
 st.set_page_config(page_title="Batch - Entity Resolution", page_icon="📦", layout="wide")
+
 page_header(
     "Data Batch Baru",
     "Sebelum data baru dipakai, periksa dulu setiap barisnya. Baris yang tidak "
@@ -119,10 +121,29 @@ if "model_version" in staging.columns:
 st.subheader("Detail — centang record yang disetujui")
 st.caption(
     "Default: semua record disetujui. Record yang di-uncheck TIDAK digabung ke "
-    "entity yang diusulkan — record tetap masuk data sebagai entity baru "
-    "sendiri (tidak pernah dihapus)."
+    "entity yang diusulkan - record tetap masuk data sebagai entity baru "
+    "sendiri"
 )
-master_lookup = pd.read_parquet(MASTER_PATH).set_index("entity_id")
+master_df = read_master()
+if master_df.empty and MASTER_PATH.exists():
+    master_df = pd.read_parquet(MASTER_PATH)
+
+# read_master() (DB) memakai nama kolom tanpa suffix _std; samakan dengan
+# artefak parquet agar map di bawah tetap bekerja dengan dua sumber.
+master_df = master_df.rename(
+    columns={f"master_{f}": f"master_{f}_std" for f in (
+        "first_name", "last_name", "email", "phone", "dob",
+        "address", "city", "state", "country",
+    )}
+)
+_needed_lookup = [
+    "entity_id", "master_first_name_std", "master_last_name_std",
+    "master_email_std", "master_phone_std",
+]
+master_lookup = master_df.set_index("entity_id") if not master_df.empty else pd.DataFrame(index=pd.Index(name="entity_id"))
+for col in _needed_lookup[1:]:
+    if col not in master_lookup.columns:
+        master_lookup[col] = ""
 display = staging.copy()
 if "approved" not in display.columns:
     display["approved"] = True
@@ -169,10 +190,10 @@ if a2.button("Terapkan proposal", type="primary"):
     with st.expander("Log apply", expanded=code != 0):
         st.code(log[-3000:])
     if code == 0:
-        st.success("Proposal diterapkan. Batch sudah digabung — cek halaman Daftar Customer & Ringkasan.")
+        st.success("Proposal diterapkan, cek halaman Daftar Customer & Ringkasan")
         st.rerun()
     else:
-        st.error("Apply gagal — lihat log.")
+        st.error("Apply gagal, lihat LOG")
 
 st.divider()
 st.subheader("Tolak proposal")
@@ -192,4 +213,4 @@ if st.button("Tolak proposal", type="secondary", disabled=not confirm_reject):
         st.success("Proposal dibatalkan. Staging dihapus; batch tetap terdaftar.")
         st.rerun()
     else:
-        st.error("Reject gagal — lihat log.")
+        st.error("Reject gagal  lihat log.")

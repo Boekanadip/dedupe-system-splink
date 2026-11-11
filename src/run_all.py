@@ -197,6 +197,16 @@ def main() -> None:
     if swapped:
         print(f"\nCommit: {swapped} artefak ditukar serentak.")
 
+    # PostgreSQL ditulis setelah commit staging. Gagal di sini tidak mengubah
+    # artefak parquet yang sudah committed; UI akan menampilkan error persist.
+    try:
+        from .persist import persist_pipeline, print_result
+        print("\nMenyimpan hasil ke PostgreSQL...")
+        db_result = persist_pipeline(full=full, snapshot=full)
+        print_result(db_result)
+    except Exception as exc:
+        raise SystemExit(f"Persist PostgreSQL gagal setelah commit artefak: {exc}") from exc
+
     from .model_lifecycle import latest
 
     model_version = latest().name if latest() else None

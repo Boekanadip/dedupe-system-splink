@@ -57,7 +57,7 @@ def current_run_info() -> dict[str, str | None]:
         "model_version": model_version(),
         "pipeline_run_id": f"run-{now:%Y%m%dT%H%M%SZ}",
         "source_scope": source_scope(),
-        "exported_at": now.isoformat(timespec="seconds"),
+        "exported_at": now,
     }
 
 

@@ -11,6 +11,8 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR
+from src.data_access import read_pairs, read_processed
+from src.review_db import load_queue as load_db_queue, upsert_queue
 from src.ui import (
     format_probability,
     monitoring_sidebar,
@@ -39,18 +41,18 @@ if not PREDS_PATH.exists():
     st.info("Belum ada data hasil pemeriksaan. Jalankan pipeline dulu dari halaman Upload.")
     st.stop()
 
-preds = pd.read_parquet(
-    PREDS_PATH,
-    columns=["record_id_l", "record_id_r", "match_probability", "decision"],
-)
-# Gunakan kolom decision sebagai penyaring
+preds = read_pairs(columns=["record_id_l", "record_id_r", "match_probability", "decision"])
 review = preds[preds["decision"] == "REVIEW"].copy()
+if review.empty:
+    st.info("Tidak ada pasangan REVIEW. Semua hasil prediksi adalah MATCH / NON_MATCH.")
+    st.stop()
 
-if QUEUE_PATH.exists():
-    queue = pd.read_csv(QUEUE_PATH)
-    queued = set(zip(queue["record_id_l"], queue["record_id_r"]))
-else:
-    queued = set()
+try:
+    queue = load_db_queue()
+except Exception as exc:
+    st.warning(f"Database review belum tersedia; memakai file lokal sementara: {exc}")
+    queue = pd.read_csv(QUEUE_PATH) if QUEUE_PATH.exists() else pd.DataFrame()
+queued = set(zip(queue.get("record_id_l", []), queue.get("record_id_r", [])))
 review["sudah_di_antrean"] = [
     (l, r) in queued for l, r in zip(review["record_id_l"], review["record_id_r"])
 ]
@@ -78,6 +80,14 @@ st.caption(f"Menampilkan {len(filtered):,} dari {total:,} pasangan.")
 
 st.subheader("Daftar pasangan")
 page_df, _ = paginate(filtered, page_size=50, key="queue_page")
+if page_df.empty:
+    st.info("Tidak ada pasangan untuk ditampilkan di halaman ini.")
+    st.stop()
+# Pastikan kolom yang dibutuhkan ada
+for col in ["record_id_l", "record_id_r", "match_probability", "sudah_di_antrean"]:
+    if col not in page_df.columns:
+        st.warning(f"Kolom {col} tidak tersedia di halaman ini.")
+        st.stop()
 table = page_df[["record_id_l", "record_id_r", "match_probability", "sudah_di_antrean"]].copy()
 table["Peluang sama"] = table["match_probability"].map(format_probability)
 table["Di antrean"] = table["sudah_di_antrean"].map(
@@ -101,44 +111,4 @@ st.caption(
     "bisa diputuskan di halaman **Pemeriksaan**. Memakai antrean tidak mengubah "
     "data asli apa pun."
 )
-
 BULK_ADD_CAP = 5000
-
-st.caption(
-    f"Maksimal **{BULK_ADD_CAP} pasangan per klik**, diurutkan dari peluang tertinggi"
-)
-
-bulk_pool = filtered.sort_values("match_probability", ascending=False).head(BULK_ADD_CAP)
-st.caption(f"Pratinjau {len(bulk_pool):,} pasangan yang akan ditambahkan (peluang tertinggi):")
-st.dataframe(
-    bulk_pool[["record_id_l", "record_id_r", "match_probability"]].head(20),
-    width="stretch",
-    hide_index=True,
-    height=300,
-)
-
-if st.button(f"Tambahkan {len(bulk_pool):,} pasangan tertinggi ke antrean"):
-    from src.config import PROCESSED_DATA_PATH
-    from src.labels import QUEUE_COLUMNS, attach_evidence, carry_over_reviewed
-
-    records = pd.read_parquet(PROCESSED_DATA_PATH)
-    new_rows = bulk_pool[["record_id_l", "record_id_r", "match_probability"]].copy()
-    new_rows = attach_evidence(records, new_rows)
-    new_rows["stratum"] = "manual_review"
-    new_rows["label"] = None
-    new_rows["review_status"] = "pending"
-    new_rows["reviewer"] = None
-    new_rows["reviewer_note"] = None
-    for col in QUEUE_COLUMNS:
-        if col not in new_rows.columns:
-            new_rows[col] = None
-    new_rows = new_rows[[c for c in QUEUE_COLUMNS if c in new_rows.columns]]
-
-    old_queue = pd.read_csv(QUEUE_PATH) if QUEUE_PATH.exists() else pd.DataFrame()
-    combined = pd.concat([old_queue, new_rows], ignore_index=True)
-    # tidak menumpuk pasangan yang sama dua kali.
-    combined = combined.drop_duplicates(subset=["record_id_l", "record_id_r"], keep="first")
-    combined = carry_over_reviewed(combined)
-    combined.to_csv(QUEUE_PATH, index=False)
-    st.success(f"Menambahkan {len(new_rows):,} pasangan ke antrean kerja.")
-    st.rerun()

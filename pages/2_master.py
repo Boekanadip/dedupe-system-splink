@@ -16,13 +16,15 @@ from src.config import (
     LABELS_DIR,
     MASTER_PATH,
     OUTPUT_DIR,
-    PROCESSED_DATA_PATH,
     PROJECT_ROOT,
     pipeline_locked,
 )
+from src.data_access import read_master, read_processed
+from src.persist import update_master_row
 from src.ui import format_count, page_header, render_sidebar
 
 st.set_page_config(page_title="Master - Entity Resolution", page_icon="👥", layout="wide")
+
 page_header(
     "Daftar Customer",
     "Hasil akhir: satu baris per orang. Kalau ada datanya yang berbeda-beda, "
@@ -30,12 +32,26 @@ page_header(
 )
 render_sidebar("master")
 
-if not MASTER_PATH.exists() or not PROCESSED_DATA_PATH.exists():
+master = read_master()
+if master.empty and MASTER_PATH.exists():
+    # DB kosong/tidak tersedia: pakai artefak parquet lama sebagai cadangan.
+    master = pd.read_parquet(MASTER_PATH)
+
+if master.empty:
     st.info(
         "Belum ada master record. Jalankan pipeline dari halaman Upload dulu "
         "(clustering + master_record)."
     )
     st.stop()
+
+# read_master() memakai nama kolom DB (master_first_name). Halaman ini memakai
+# nama kolom artefak (master_first_name_std); samakan agar kode lama tetap jalan.
+master = master.rename(
+    columns={f"master_{f}": f"master_{f}_std" for f in (
+        "first_name", "last_name", "email", "phone", "dob",
+        "address", "city", "state", "country",
+    )}
+)
 
 AUDIT_PATH = LABELS_DIR / "master_corrections.csv"
 
@@ -58,10 +74,9 @@ MASTER_LABELS = {
     "master_country_std": "Negara",
 }
 
-master = pd.read_parquet(MASTER_PATH)
-records = pd.read_parquet(PROCESSED_DATA_PATH)
+records = read_processed()
 
-# Versi master lama tidak selalu menyimpan kolom konflik.
+# Versi master sebelumnya
 if "conflicted_fields" not in master.columns:
     master["conflicted_fields"] = [[] for _ in range(len(master))]
 
@@ -196,11 +211,41 @@ if submitted:
     if not changes:
         st.info("Tidak ada perubahan.")
     else:
-        # Perbarui master_customers.parquet.
+        # Perbarui parquet.
         mask = master["entity_id"] == entity_id
         for f, (_, v) in changes.items():
             master.loc[mask, f] = v
         master.to_parquet(MASTER_PATH, index=False)
+        # Perbarui database juga (idempoten).
+        updated = update_master_row(entity_id, {
+            f"master_{key}": value
+            for key, value in changes.items()
+            if key in MASTER_FIELDS
+        })
+        # Kalau entity baru / tidak ada di DB, copy ke database sebagai upaya fallback.
+        if updated == 0:
+            from src.persist import persist_master
+
+            # Build minimal master_df row from entity & processed data
+            pers_df = pd.DataFrame([{
+                "entity_id": entity_id,
+                "first_name": entity.get("master_first_name_std", None),
+                "last_name": entity.get("master_last_name_std", None),
+                "email": entity.get("master_email_std", None),
+                "phone": entity.get("master_phone_std", None),
+                "address": entity.get("master_address_std", None),
+                "city": entity.get("master_city_std", None),
+                "state": entity.get("master_state_std", None),
+                "country": entity.get("master_country_std", None),
+                "dob": entity.get("master_dob_std", None),
+                "resolution_status": entity.get("resolution_status", "CONFIRMED"),
+                "model_version": entity.get("_model_version", meta.get("model_version")),
+                "pipeline_run_id": entity.get("_run_id", meta.get("pipeline_run_id")),
+                "source_scope": meta.get("source_scope", "full"),
+                "conflicted_fields": entity.get("conflicted_fields", []),
+            }])
+            persist_master(pers_df, meta.get("pipeline_run_id", "unknown"),
+                           meta.get("source_scope", "full"), meta.get("model_version"))
         # Catatan audit.
         LABELS_DIR.mkdir(parents=True, exist_ok=True)
         audit = pd.DataFrame(
@@ -379,20 +424,10 @@ if not open_flags.empty:
         st.info(f"Jenis laporan `{issue}` belum memiliki tindakan koreksi.")
 
 
-# ---- tandai salah gabung / salah pecah
-# def dulu, baru tombol: Streamlit mengeksekusi script atas-ke-bawah, jadi
-# _flag harus sudah terdefinisi pada saat tombol dievaluasi.
 FLAGS_PATH = LABELS_DIR / "membership_flags.csv"
 
 
 def _flag(entity_id: str, kind: str, reviewer: str) -> None:
-    """Catat laporan keanggotaan ke file terpisah.
-
-    feedback.csv sengaja TIDAK dipakai: skemanya per-pasangan dengan label
-    match/no_match, dan menyisipkan 'wrong_merge' di sana merusak validasi
-    feedback dan menumpuk duplikat. File terpisah punya status sendiri
-    (open -> resolved) supaya triage bisa dilakukan di halaman retrain.
-    """
     LABELS_DIR.mkdir(parents=True, exist_ok=True)
     row = pd.DataFrame(
         [
@@ -426,13 +461,13 @@ st.caption(
 )
 reviewer_name = st.text_input("Reviewer untuk penandaan", value="reviewer")
 f1, f2 = st.columns(2)
-if f1.button("Tandai salah gabung"):
+if f1.button("Tandai Beda Orang"):
     _flag(entity_id, "wrong_merge", reviewer_name)
-if f2.button("Tandai salah pecah"):
+if f2.button("Tandai Orang Sama"):
     _flag(entity_id, "wrong_split", reviewer_name)
 
 
-# ---- daftar entity bermasalah (setelah penandaan, supaya daftar selalu mencakup yang baru)
+# ---- daftar entity bermasalah 
 if FLAGS_PATH.exists():
     try:
         _all_flags = pd.read_csv(FLAGS_PATH)

@@ -215,7 +215,7 @@ def add_blocking_keys(df: pd.DataFrame) -> pd.DataFrame:
     if "email_std" in df:
         local = df["email_std"].str.split("@", n=1).str[0]
         domain = df["email_std"].str.split("@", n=1).str[-1]
-        df["email_local_pre3"] = local.str.slice(0, 3)
+        # df["email_local_pre3"] = local.str.slice(0, 3)
         df["email_domain_pre4"] = domain.str.slice(0, 4)
 
     if "phone_std" in df:
@@ -299,9 +299,15 @@ def standardize(
     if source in df:
         df["email_std"] = df[source].map(normalize_email)
 
-    source = COLUMN_MAP["phone"]
-    if source in df:
-        df["phone_std"] = df[source].map(normalize_phone)
+    # Canonicalisasi alias telepon sebelum standardisasi. Sumber berbeda pernah
+    # memakai `phone` atau `phone_number`; pipeline selalu menghasilkan phone_std.
+    phone_source = next((c for c in (COLUMN_MAP["phone"], "phone", "phone_number") if c in df), None)
+    if phone_source is not None:
+        df["phone_std"] = df[phone_source].map(normalize_phone)
+    else:
+        # Kolom opsional: tetap hadir agar blocking/model tidak gagal saat sumber
+        # tertentu tidak menyediakan telepon.
+        df["phone_std"] = pd.NA
     date_evidence: dict[str, dict] = {}
     for canonical in ("dob", "signup_date"):
         source = COLUMN_MAP[canonical]

@@ -256,7 +256,7 @@ COLUMN_MAP = {
     "first_name": "first_name",
     "last_name": "last_name",
     "email": "email",
-    "phone": "phone_number",
+    "phone": "phone",  # canonical input; standardize() also accepts phone_number
     "gender": "gender",
     "dob": "dob",
     "signup_date": "signup_date",
@@ -318,11 +318,11 @@ DEFAULT_BENCHMARK_RULES: list[tuple[str, list[str]]] = [
     ("email_domain_name", ["email_domain_pre4", "last_name_std_pre3", "first_name_std_pre3"]),
     ("city_state_dob_year", ["city_std", "state_std", "dob_year_std"]),
     # Tambahan blocking rules baru untuk kurangi candidate pairs
-    ("email_domain", ["email_domain_pre4"]),
+    ("email_domain", ["email_domain_pre4", "first_name_std_pre3"]),
     ("city_state_dob", ["city_std", "state_std", "dob_std"]),
-    ("phone_last4", ["phone_std"]),  # 4 digit terakhir telepon
+    ("phone_last4", ["phone_last4", "dob_year_std"]),  # 4 digit telepon + tahun lahir
     # Blocking rules untuk fuzzy match
-    ("email_domain_fuzzy", ["email_domain_pre4"]),
+    ("email_domain_fuzzy", ["email_domain_pre4", "first_name_std_pre3"]),
     ("city_state_dob_fuzzy", ["city_std", "state_std", "dob_std"]),
     ("name_fuzzy_last4", ["last_name_std_pre3", "phone_last4"]),
 ]

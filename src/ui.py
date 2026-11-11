@@ -245,16 +245,23 @@ def similarity_text(label: str | None, code: int | None) -> str:
     
     # For gamma_name, gamma_contact, gamma_location, gamma_dob
     if code is not None and code >= 0:
-        level_info = LEVEL_LABELS.get(code, (None, "tidak diketahui", "netral"))
-        return level_info[1]
-    
+        level_info = LEVEL_LABELS.get(code)
+        if level_info:
+            return level_info[1]
+        return f"level perbandingan L{code}"
+
     return str(label) if label else "tidak ada data"
 
 
 def format_score(weight: float | None) -> str:
     """Format log-odds weight as human-readable string."""
-    if weight is None or weight == float("-inf"):
+    if weight is None:
         return "tidak ada data"
+    # Weight tak terhingga (u = 0): bobot maksimal
+    if weight == float("inf"):
+        return "+∞ bit"
+    if weight == float("-inf"):
+        return "-∞ bit"
     sign = "+" if weight > 0 else ""
     return f"{sign}{weight:.1f} bit"
 
@@ -393,15 +400,34 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
         gamma_col = gamma_fields.get(field, f"gamma_{field}")
         code = row.get(gamma_col)
         code = None if code is None or _is_blank(code) else int(code)
-        label, m, u = levels.get(gamma_col, {}).get(code, (None, 0.0, 0.0)) if code is not None else (None, 0.0, 0.0)
+        
+        # Default dari settings.json jika ada
+        default = levels.get(gamma_col, {}).get(code, (None, 0.0, 0.0)) if code is not None else (None, 0.0, 0.0)
+        
+        fallback_direction = None
+        # Fallback: settings.json tidak tersedia. Tampilkan kategori gamma,
+        # tanpa mengarang bobot statistik model.
+        if code is not None and code >= 0 and default == (None, 0.0, 0.0):
+            fallback = LEVEL_LABELS.get(code)
+            if fallback:
+                label = fallback[0]
+                fallback_direction = fallback[2]
+            else:
+                label = None
+            m, u = 0.0, 0.0
+        else:
+            label, m, u = default
+        
+        weight = math.log2(m / u) if m > 0 and u > 0 else None
         source_field = source_fields.get(field)
         left = row.get(f"{source_field}_l") if source_field else row.get("first_name_std_l")
         right = row.get(f"{source_field}_r") if source_field else row.get("first_name_std_r")
-        weight = math.log2(m / u) if m > 0 and u > 0 else None
         evidence = (
             "tidak ada data"
             if code == -1
-            else format_score(weight) if weight is not None else "tidak ada data"
+            else format_score(weight) if weight is not None
+            else f"{fallback_direction} (bobot belum tersedia)" if fallback_direction
+            else "tidak ada data"
         )
         # Gamma description
         gamma_desc = similarity_text(label, code)
@@ -436,8 +462,8 @@ def show_evidence(row: dict, levels: dict) -> None:
         },
     )
 
-    support = frame.loc[frame["bukti"].str.contains("mendukung"), "bukti"]
-    against = frame.loc[frame["bukti"].str.contains("menolak"), "bukti"]
+    support = frame.loc[frame["bukti"].str.contains("mendukung|∞", na=False), "bukti"]
+    against = frame.loc[frame["bukti"].str.contains("menolak|-∞", na=False), "bukti"]
 
     # Peringatan konflik: naive Bayes overconfident, jadi pasangan dengan >= 1
     # field yang menolak tetap bisa mendapat peluang "sangat tinggi". Tanpa

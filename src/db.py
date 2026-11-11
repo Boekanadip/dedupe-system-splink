@@ -24,6 +24,10 @@ def get_connection():
     conn = psycopg2.connect(DATABASE_URL)
     try:
         yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

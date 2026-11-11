@@ -134,11 +134,42 @@ def load_model_json(path: Path | str) -> dict:
 
 
 def latest() -> Path | None:
-    if not LATEST_POINTER.exists():
+    """Return the active complete model, repairing a stale pointer when needed."""
+    target = None
+    if LATEST_POINTER.exists():
+        try:
+            pointer = json.loads(LATEST_POINTER.read_text(encoding="utf-8"))
+            candidate = Path(pointer["path"])
+            if (candidate / "model.json").exists():
+                target = candidate
+        except (OSError, KeyError, TypeError, json.JSONDecodeError):
+            target = None
+
+    if target is not None:
+        return target
+
+    complete = [
+        item for item in list_versions()
+        if item["complete"] and item.get("scope") == "full"
+    ]
+    if not complete:
         return None
-    pointer = json.loads(LATEST_POINTER.read_text(encoding="utf-8"))
-    target = Path(pointer["path"])
-    return target if target.exists() else None
+
+    selected = max(complete, key=lambda item: item.get("created_at") or "")
+    version = selected["version"]
+    target = version_dir(version)
+    LATEST_POINTER.write_text(
+        json.dumps(
+            {
+                "version": version,
+                "path": str(target),
+                "created_at": selected.get("created_at"),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return target
 
 
 def list_versions() -> list[dict]:

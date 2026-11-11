@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import ENTITY_MAP_PATH, LABELS_DIR, MASTER_PATH, PROCESSED_DATA_PATH, predictions_path
 from src.labels import REVIEW_FIELDS, QUEUE_PATH, agree_fields, attach_evidence, carry_over_reviewed
+from src.data_access import read_entity_map, read_processed, read_pairs, read_master, read_conflicted_count
 from src.ui import (
     decision_label,
     field_label,
@@ -27,6 +28,7 @@ from src.ui import (
 )
 
 st.set_page_config(page_title="Celah - Entity Resolution", page_icon="🕳️", layout="wide")
+
 page_header(
     "Celah yang Terlewat",
     "Dua hal yang tidak muncul di halaman lain: record yang tidak pernah tergabung, "
@@ -50,6 +52,13 @@ QUEUE_COLUMNS = [
 
 
 def load_queue() -> pd.DataFrame:
+    try:
+        from src.review_db import load_queue as load_db_queue
+        queue = load_db_queue()
+        if not queue.empty:
+            return queue
+    except Exception as exc:
+        st.warning(f"Database review belum tersedia; memakai file lokal sementara: {exc}")
     if QUEUE_PATH.exists():
         queue = pd.read_csv(QUEUE_PATH)
         for col in ("stratum", "label", "review_status", "reviewer", "reviewer_note"):
@@ -59,9 +68,13 @@ def load_queue() -> pd.DataFrame:
     return pd.DataFrame(columns=QUEUE_COLUMNS)
 
 
+def _pair_key(left, right) -> tuple[str, str]:
+    return tuple(sorted((str(left), str(right))))
+
+
 def enqueue(pairs: pd.DataFrame, stratum: str) -> int:
     """Tambahkan pasangan ke antrean pemeriksaan beserta bukti kedua sisinya."""
-    records = pd.read_parquet(PROCESSED_DATA_PATH)
+    records = read_processed()
     new = pairs[["record_id_l", "record_id_r", "match_probability"]].copy()
     new = agree_fields(records, new)
     new = new.merge(
@@ -78,27 +91,42 @@ def enqueue(pairs: pd.DataFrame, stratum: str) -> int:
         if col not in new.columns:
             new[col] = None
     new = new[QUEUE_COLUMNS]
-    queue = load_queue()
-    existing = set(zip(queue["record_id_l"].astype(str), queue["record_id_r"].astype(str)))
-    new = new[~new.apply(lambda r: (str(r["record_id_l"]), str(r["record_id_r"])) in existing, axis=1)]
+    try:
+        from src.review_db import load_queue as load_db_queue
+        queue = load_db_queue()
+    except Exception:
+        queue = pd.read_csv(QUEUE_PATH) if QUEUE_PATH.exists() else pd.DataFrame()
+    existing = {
+        _pair_key(l, r)
+        for l, r in zip(
+            queue.get("record_id_l", pd.Series(dtype=str)),
+            queue.get("record_id_r", pd.Series(dtype=str)),
+        )
+    }
+    new = new[~new.apply(lambda row: _pair_key(row["record_id_l"], row["record_id_r"]) in existing, axis=1)]
     if new.empty:
         return 0
-    combined = pd.concat([queue, new], ignore_index=True)
-    combined = carry_over_reviewed(combined)
-    combined.to_csv(QUEUE_PATH, index=False)
-    return len(new)
+    try:
+        from src.review_db import upsert_queue
+        return upsert_queue(new)
+    except Exception as exc:
+        combined = pd.concat([queue, new], ignore_index=True)
+        combined = carry_over_reviewed(combined)
+        combined.to_csv(QUEUE_PATH, index=False)
+        st.warning(f"PostgreSQL gagal; antrean disimpan lokal sementara: {exc}")
+        return len(new)
 
 
-entity_map = pd.read_parquet(ENTITY_MAP_PATH)
-records = pd.read_parquet(PROCESSED_DATA_PATH)
-preds = pd.read_parquet(predictions_path(full=True))
+entity_map = read_entity_map()
+records = read_processed()
+preds = read_pairs(columns=["record_id_l", "record_id_r", "match_probability", "decision"])
 # Versi prediksi lama kadang belum menyimpan probabilitas; gunakan bobot sebagai fallback.
 if "match_probability" not in preds.columns and "match_weight" in preds.columns:
     preds["match_probability"] = 1 / (1 + 2 ** (-preds["match_weight"].astype(float)))
 required_prediction_columns = {"record_id_l", "record_id_r", "match_probability", "decision"}
 missing_prediction_columns = required_prediction_columns - set(preds.columns)
 queue = load_queue()
-queued = set(zip(queue["record_id_l"].astype(str), queue["record_id_r"].astype(str)))
+queued = {_pair_key(l, r) for l, r in zip(queue["record_id_l"], queue["record_id_r"])}
 
 sizes = entity_map.groupby("entity_id")["record_id"].transform("size")
 singletons = entity_map[sizes == 1]["record_id"]
@@ -130,14 +158,7 @@ c2.metric(
     help="Pasangan yang perlu dilihat manusia, tapi belum masuk antrean kerja.",
 )
 c3.metric("Sudah di antrean", f"{int(review['sudah_di_antrean'].sum()):,}")
-conflicted = 0
-if MASTER_PATH.exists():
-    master_columns = pd.read_parquet(MASTER_PATH, columns=[]).columns
-    if "conflicted_fields" in master_columns:
-        conflicted = int(
-            pd.read_parquet(MASTER_PATH, columns=["conflicted_fields"])["conflicted_fields"]
-            .map(len).gt(0).sum()
-        )
+conflicted = read_conflicted_count()
 c4.metric(
     "Entitas dengan data berbeda",
     conflicted,
@@ -151,12 +172,12 @@ with tab_s:
     st.caption(
         f"{len(singletons):,} record belum pernah bergabung dengan siapa pun. "
         "Sebagian besar memang customer unik. Tapi kalau ternyata ada yang "
-        "seharusnya bergabung, itu berarti sistem melewatkannya — dan itu "
+        "seharusnya bergabung, itu berarti sistem melewatkannya, dan "
         "tidak akan terlihat di halaman mana pun."
     )
     single_records = records[records["record_id"].isin(set(singletons))].copy()
 
-    unlinkable = single_records["email"].isna() & single_records["phone_number"].isna()
+    unlinkable = single_records["email_std"].isna() & single_records["phone_std"].isna()
     show = st.radio(
         "Tampilkan",
         ["Semua record sendirian", "Hanya yang tidak punya email & telepon"],

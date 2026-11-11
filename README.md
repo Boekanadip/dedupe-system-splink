@@ -136,6 +136,34 @@ Jalankan test yang relevan sebelum demo:
 pytest -q
 ```
 
+## Penyimpanan antrean review
+
+Antrean pemeriksaan utama disimpan di PostgreSQL:
+
+```text
+splink_data.review_queue_records
+```
+
+Kolom utamanya:
+
+```text
+record_id_l, record_id_r, stratum, match_probability,
+evidence(JSONB), label, review_status, reviewer, reviewer_note,
+created_at, updated_at, reviewed_at
+```
+
+- `status = pending`: menunggu pemeriksaan manusia.
+- `status = reviewed`: sudah diputuskan.
+- Bukti perbandingan disimpan sebagai `evidence` JSONB, sehingga review tidak membaca seluruh parquet setiap kali.
+
+File `data/labels/review_queue.csv` tetap dipertahankan sebagai mirror/ekspor untuk kompatibilitas. Jika PostgreSQL tidak tersedia, aplikasi otomatis menyimpan sementara ke file lokal.
+
+Migrasi tabel review:
+
+```text
+docker/migrations/002_review_queue_records.sql
+```
+
 ## Database/Docker
 
 ```powershell

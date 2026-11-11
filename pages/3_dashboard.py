@@ -27,10 +27,12 @@ from src.config import (
     predictions_path,
     read_meta,
 )
+from src.data_access import read_entity_map, read_master, read_pairs, read_processed
 from src.export import csv_bytes, save_snapshot, save_to_database
 from src.provenance import current_run_info
 
 st.set_page_config(page_title="Dashboard - Entity Resolution", page_icon="📊", layout="wide")
+
 page_header(
     "Ringkasan",
     "Kondisi hasil deduplikasi sekarang: berapa customer yang berhasil dipastikan "
@@ -58,9 +60,6 @@ page_header(
     "Kondisi hasil deduplikasi sekarang: berapa customer yang berhasil dipastikan "
     "dan berapa yang masih perlu diperiksa.",
 )
-# =============================================================================
-# LAPORAN PEMILIHAN KOLOM DINAMIS
-# =============================================================================
 
 st.subheader("🔧 Pilih Kolom untuk Pencocokan")
 st.caption(
@@ -73,13 +72,9 @@ st.caption(
 valid_columns = sorted(list(get_valid_comparison_columns()))
 
 # Dapatkan kolom yang ada di data standar (jika file ada)
-available_cols = valid_columns.copy()
-if PROCESSED_DATA_PATH.exists():
-    try:
-        df_sample = pd.read_parquet(PROCESSED_DATA_PATH)
-        available_cols = [c for c in valid_columns if c in df_sample.columns]
-    except Exception:
-        available_cols = valid_columns  # fallback
+available_cols = sorted(
+    {c for c in read_processed(limit=1).columns} & set(valid_columns)
+)
 
 # Inisialisasi session state
 if "selected_match_cols" not in st.session_state:
@@ -105,10 +100,6 @@ with c1:
 with c2:
     st.caption("Klik tombol untuk menjalankan ulang dengan kolom yang dipilih")
 
-# =============================================================================
-# MAIN CONTENT AREA
-# =============================================================================
-
 # Dashboard header
 st.set_page_config(page_title="Dashboard - Entity Resolution", page_icon="📊", layout="wide")
 page_header(
@@ -117,9 +108,6 @@ page_header(
     "dan berapa yang masih perlu diperiksa.",
 )
 render_sidebar("dashboard")
-# =============================================================================
-# Metrik Kunci
-# =============================================================================
 
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs"
 LOCK = OUTPUT_DIR / ".retraining"
@@ -136,9 +124,6 @@ if LOCK.exists():
     else:
         st.warning("Lock retrain basi (proses sudah mati). Bersihkan di halaman Pengaturan Sistem.")
 
-# ==============================
-# Metrik Kunci
-# =============================================================================
 
 eval_path = OUTPUT_DIR / "evaluation_report.json"
 report = json.loads(eval_path.read_text(encoding="utf-8")) if eval_path.exists() else {}
@@ -155,9 +140,8 @@ if pred_path.exists():
     prediction_stat = pred_path.stat()
     prediction_stamp = f"{scope}-{prediction_stat.st_mtime_ns}-{prediction_stat.st_size}"
     prediction_meta = read_meta(pred_path)
-    preds = pd.read_parquet(
-        pred_path,
-        columns=["decision", "match_probability", "record_id_l", "record_id_r"],
+    preds = read_pairs(
+        columns=["decision", "match_probability", "record_id_l", "record_id_r"]
     )
 
 # Hitung metrik kunci
@@ -170,12 +154,9 @@ candidate_pairs = int(decision_counts.sum())
 review_pairs = int(decision_counts.get("REVIEW", 0))
 predictions_available = pred_path.exists() and "decision" in preds
 
-entity_count = 0
-record_count = 0
-if ENTITY_MAP_PATH.exists():
-    entity_map = pd.read_parquet(ENTITY_MAP_PATH)
-    entity_count = int(entity_map["entity_id"].nunique()) if "entity_id" in entity_map.columns else 0
-    record_count = len(entity_map)
+entity_map = read_entity_map()
+entity_count = int(entity_map["entity_id"].nunique()) if not entity_map.empty else 0
+record_count = len(entity_map)
 
 live_entities = entity_count
 live_records = record_count
@@ -220,14 +201,14 @@ else:
 
 st.subheader("📊 Unduh / Simpan Hasil")
 st.caption(
-    "Pilih hasil pasangan atau master customer bersih. Unduh CSV tidak memerlukan database; "
+    "Pilih hasil pasangan atau master customer bersih. Unduh CSV tidak memerlukan database. "
     "penyimpanan database hanya memakai tabel tujuan yang Anda isi."
 )
 c_dl, c_db = st.columns(2)
 
 st.subheader("Master Customer Hasil Resolusi")
-if MASTER_PATH.exists():
-    master_export = pd.read_parquet(MASTER_PATH)
+master_export = read_master()
+if not master_export.empty:
     if "conflicted_fields" not in master_export.columns:
         master_export["conflicted_fields"] = [[] for _ in range(len(master_export))]
     master_export["resolution_status"] = master_export["conflicted_fields"].map(
@@ -244,13 +225,12 @@ if MASTER_PATH.exists():
     export_meta = current_run_info()
     for meta_key, meta_value in export_meta.items():
         master_export[meta_key] = meta_value
+    rename = {c: c[len("master_"):] for c in master_export.columns if c.startswith("master_")}
+    master_export = master_export.rename(columns=rename)
     st.caption(f"{len(master_export):,} entity/customer — satu baris per entity.")
-    clean_name = st.text_input("Nama file CSV", value="master_customer_hasil_resolusi.csv")
-    master_table = st.text_input(
-        "Nama tabel database tujuan",
-        value="splink_data.master_customer_bersih",
-        help="Ketik schema.table yang sudah ada. Tabel sumber tidak ditimpa.",
-    )
+    clean_name = "master_customer_hasil_resolusi.csv"
+    master_table = "splink_data.master_customer_bersih"
+    st.caption(f"Database tujuan: `{master_table}`")
     mc1, mc2 = st.columns(2)
     with mc1:
         st.download_button(
@@ -318,11 +298,8 @@ if not export_df.empty:
         )
     
     with c_db:
-        db_table = st.text_input(
-            "Nama tabel tujuan", 
-            value="splink_data.dedup_outputs",
-            help="Ketik schema.table yang sudah ada. Tabel sumber tidak pernah ditimpa."
-        )
+        db_table = "splink_data.dedup_outputs"
+        st.caption(f"Database tujuan: `{db_table}`")
         if st.button("Simpan ke database", disabled=export_df.empty):
             try:
                 rows = save_to_database(export_df, db_table)

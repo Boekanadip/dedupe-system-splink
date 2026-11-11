@@ -1,5 +1,5 @@
-"""Halaman "Kenapa?" untuk menjawab satu pertanyaan: kenapa sistem mengambil
-keputusan itu untuk sepasang record"""
+"""Alasan sistem mengambil
+keputusan"""
 from __future__ import annotations
 
 import sys
@@ -11,6 +11,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import MATCH_THRESHOLD, OUTPUT_DIR, REVIEW_THRESHOLD, predictions_path
+from src.data_access import read_processed
 from src.ui import (
     workflow_step,
     decision_label,
@@ -28,27 +29,47 @@ from src.ui import (
 )
 
 st.set_page_config(page_title="Kenapa - Entity Resolution", page_icon="🔍", layout="wide")
+
 page_header(
-    "Kenapa Sistem Bilang Begitu?",
-    "Pilih dua record, lalu lihat satu per satu apakah tiap data mereka "
-    "mendukung atau menolak anggapan bahwa mereka orang yang sama.",
+    "Alasan Sistem",
+    "Pilih dua record, lalu lihat satu per satu apakah tiap data saling "
+    "mendukung atau menolak anggapan bahwa mereka orang yang sama",
 )
 render_sidebar("explain")
 how_to_read()
 
 preds_path = predictions_path(full=True)
-if not preds_path.exists():
-    st.info("Belum ada data hasil pemeriksaan. Jalankan pipeline dulu dari halaman Upload.")
+preds = read_pairs()
+if preds.empty:
+    st.info("Belum ada data hasil pemeriksaan di database. Jalankan pipeline dulu dari halaman Upload.")
     st.stop()
-
-levels = model_levels()
 if not levels:
     st.warning(
         "Bobot per field belum bisa ditampilkan (model aktif sedang ditulis atau belum tersimpan). "
         "Tabel perbandingan di bawah tetap muncul, hanya saja kolom bobot masing-masing field kosong."
     )
 
-preds = pd.read_parquet(preds_path)
+preds = read_pairs()
+
+value_fields = (
+    "first_name_std", "last_name_std", "email_std", "phone_std",
+    "dob_std", "address_std", "city_std", "state_std", "country_std",
+)
+records = read_processed(columns=["record_id", *value_fields])
+if not records.empty and "record_id" in records.columns:
+    records["record_id"] = records["record_id"].astype(str)
+    for side in ("l", "r"):
+        key = f"record_id_{side}"
+        if key in preds.columns:
+            lookup = records.set_index("record_id")
+            for field in value_fields:
+                target = f"{field}_{side}"
+                if target not in preds.columns:
+                    preds[target] = preds[key].astype(str).map(lookup[field])
+                else:
+                    missing = preds[target].isna() | preds[target].astype(str).isin(["", "None", "nan"])
+                    preds.loc[missing, target] = preds.loc[missing, key].astype(str).map(lookup[field])
+
 st.caption(
     "Aturan penyimpulan: peluang **90% ke atas** digabung otomatis, "
     "**nyaris 0%** dianggap berbeda orang, sisanya menunggu keputusan manusia. "
@@ -82,7 +103,11 @@ if search:
         | pool["record_id_r"].str.lower().str.contains(s, na=False)
     ]
 
-pool = pool.sort_values("match_probability", ascending=False).reset_index(drop=True)
+pool = pool.sort_values(
+    ["match_probability", "record_id_l", "record_id_r"],
+    ascending=[False, True, True],
+    kind="mergesort",
+).reset_index(drop=True)
 
 if pool.empty:
     st.info("Tidak ada pasangan untuk pencarian ini.")
@@ -101,12 +126,20 @@ label_list = (
     + " · " + shown["match_probability"].map(format_probability)
 ).tolist()
 
-pick_idx = st.selectbox("Pilih pasangan", range(len(shown)), format_func=lambda i: label_list[i], key="explain_pair")
+selectbox_key = f"explain_pair_{band}_{search.strip().lower()}"
+pick_idx = st.selectbox(
+    "Pilih pasangan",
+    range(len(shown)),
+    format_func=lambda i: label_list[i],
+    key=selectbox_key,
+)
 row = shown.iloc[pick_idx]
+selected_left = row["record_id_l"]
+selected_right = row["record_id_r"]
 
 pair = preds[
-    (preds["record_id_l"] == row["record_id_l"])
-    & (preds["record_id_r"] == row["record_id_r"])
+    (preds["record_id_l"] == selected_left)
+    & (preds["record_id_r"] == selected_right)
 ]
 if pair.empty:
     st.warning("Pasangan ini tidak lagi ada di hasil prediksi terbaru.")
@@ -124,8 +157,8 @@ st.caption(verdict_plain(p.get("decision", "-")))
 
 st.subheader("Bukti satu per satu")
 st.caption(
-    "Urut dari yang paling kuat mendukung sampai yang paling menolak. "
-    "Klik kolom untuk melihat nilai aslinya."
+
+    "Urut dari yang paling kuat mendukung sampai yang paling menolak"
 )
 show_evidence(p, levels)
 
@@ -154,18 +187,21 @@ for field, gamma_col in {
         support += max(weight, 0.0)
         against += min(weight, 0.0)
 
-if levels:
-    c1, c2 = st.columns(2)
-    c1.metric("Total bukti mendukung", f"+{support:.0f}")
-    c2.metric("Total bukti menolak", f"{against:.0f}")
-    st.caption(
-        "Bukti positif berarti data yang sama sulitnya muncul kalau kebetulan orang "
-        "beda. Bukti negatif sebaliknya. Untuk kota, provinsi, dan negara, sistem "
-        "mengurangi bobot nama yang umum (misal \"Springfield\") karena nama "
-        "seperti itu banyak dipakai orang berbeda."
-    )
-
 if p.get("decision") == "REVIEW":
+    # Hanya tampilkan metrik bukti bila ada data gamma_*; jika tidak, skip agar
+    # tidak menampilkan nol yang menyesatkan.
+    if any(c in p for c in ["gamma_name", "gamma_contact", "gamma_location"]):
+        c1, c2 = st.columns(2)
+        c1.metric("Total bukti mendukung", f"+{support:.0f}")
+        c2.metric("Total bukti menolak", f"{against:.0f}")
+        st.caption(
+            "Bukti positif berarti data yang sama sulitnya muncul kalau kebetulan orang "
+            "beda. Bukti negatif sebaliknya. Untuk kota, provinsi, dan negara, sistem "
+            "mengurangi bobot nama yang umum (misal \"Springfield\") karena nama "
+            "seperti itu banyak dipakai orang berbeda."
+        )
+    else:
+        st.info("Data bukti tidak tersedia (gamma_*), angka di atas tidak dihitung.")
     st.info(
         "Pasangan ini menunggu keputusan manusia. Buka halaman **Pemeriksaan** "
         "untuk menilai sendiri — angka di sini tidak otomatis dipakai."
