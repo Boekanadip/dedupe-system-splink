@@ -3,7 +3,7 @@
 ## End-to-End Pipeline Diagram
 
 ```
-data/raw/crm_50000_customers_dirty_v.csv
+data/raw/<batch_NNNN>.csv (artefak lokal; tidak masuk GitHub)
           │
           ▼
 [Ingestion] ──► CSV parse ──► raw records (50K/108K)
@@ -58,7 +58,7 @@ data/raw/crm_50000_customers_dirty_v.csv
 
 | Artifact | Path | Description |
 |---|---|---|
-| `crm_standardized.parquet` | `data/processed/` | 108,427 records, all columns standardized |
+| `crm_standardized.parquet` | `data/processed/` | artefak lokal; jumlah record bergantung batch yang diproses |
 | `splink_predictions.parquet` | `outputs/` | Pair-level: match_probability, decision, business_rule, pair_id |
 | `splink_predictions_sample.parquet` | `outputs/` | 10K-row sample for inspection |
 | `entity_map.parquet` | `outputs/` | Mapped record_ids → entity_id (resolved entities) |

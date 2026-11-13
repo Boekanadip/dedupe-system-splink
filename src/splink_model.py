@@ -32,6 +32,22 @@ from .config import (
 )
 
 
+def build_core_identity_comparison() -> cl.CustomComparison:
+    """Build the name identity comparison used by the focused name test."""
+    levels = [
+        CustomLevel(
+            "(first_name_std_l IS NULL OR last_name_std_l IS NULL) "
+            "AND (first_name_std_r IS NULL OR last_name_std_r IS NULL)"
+        ).configure(is_null_level=True),
+        CustomLevel(
+            "phonetic_first_name_l = phonetic_first_name_r "
+            "AND phonetic_last_name_l = phonetic_last_name_r"
+        ),
+        ElseLevel(),
+    ]
+    return cl.CustomComparison(comparison_levels=levels, output_column_name="name")
+
+
 def build_name_comparison() -> cl.CustomComparison:
     both_null = (
         "(first_name_std_l IS NULL OR last_name_std_l IS NULL) "

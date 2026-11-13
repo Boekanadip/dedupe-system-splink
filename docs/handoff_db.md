@@ -1,7 +1,9 @@
 # Catatan Lanjutan — DB Input + Fase 2/3
 
-Diperbarui: 2026-10-13. Dokumen ini untuk melanjutkan pekerjaan di sesi berikutnya.
+Diperbarui: 2026-11-11. Catatan historis DB; status aktual dirangkum di `docs/current_state.md`.
 Baca bagian "Belum dikerjakan" dulu, lalu "Keputusan yang tertunda".
+
+> Catatan: angka, status uji, dan path artefak pada dokumen ini berasal dari sesi sebelumnya. Verifikasi ulang sebelum dipakai sebagai fakta kondisi saat ini.
 
 ---
 

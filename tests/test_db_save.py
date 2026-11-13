@@ -1,5 +1,11 @@
+import os
+
 import pandas as pd
 import psycopg2
+import pytest
+
+if not os.getenv("RUN_DB_WRITE_TEST"):
+    pytest.skip("DB write test opt-in: set RUN_DB_WRITE_TEST=1", allow_module_level=True)
 
 # Konek ke PostgreSQL container
 conn = psycopg2.connect(

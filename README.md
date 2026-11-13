@@ -113,16 +113,18 @@ Retrain dan perubahan pembobotan tidak dijalankan otomatis setiap kali CSV masuk
 app.py                 entrypoint Streamlit dan st.navigation
 pages/                 halaman Upload, Ringkasan, Pemeriksaan, Antrean, dan lainnya
 src/                   pipeline, standardisasi, Splink, clustering, evaluasi
-data/raw/              batch CSV sumber
-data/processed/        data terstandardisasi
-outputs/               prediksi, entity map, master, laporan
-data/labels/           label gold dan antrean review
+data/                 direktori kerja lokal; data aktual tidak masuk GitHub
+outputs/               direktori kerja lokal; hasil pipeline tidak masuk GitHub
+models/                direktori kerja lokal; model hasil training tidak masuk GitHub
+docs/                  dokumentasi teknis dan kondisi aktual
 scripts/                skrip operasional
-scripts/dev_checks/    skrip diagnosis/eksperimen lokal
+scripts/dev_checks/    eksperimen lokal; tidak masuk GitHub
 tests/                 pengujian
-Dockerfile*             konfigurasi container
-docker/                  schema dan migration database
+Dockerfile*            konfigurasi container
+docker/                schema dan migration database
 ```
+
+Data, model, output, log, dan snapshot eksperimen sengaja tidak disertakan dalam clone GitHub. Siapkan artefak lokal sebelum menjalankan pipeline penuh. Lihat `docs/current_state.md`.
 
 ## Verifikasi cepat
 
