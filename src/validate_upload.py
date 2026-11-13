@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +15,56 @@ REPORT_PATH = OUTPUT_DIR / "upload_validation_report.json"
 
 REQUIRED_COLUMNS = ["first_name", "last_name"]
 ONE_OF = [("email", "phone")]
+EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _shape_value(field: str, value: object) -> bool:
+    text = str(value).strip()
+    if field == "email":
+        return bool(EMAIL_SHAPE.match(text))
+    if field == "phone":
+        return bool(re.search(r"\d", text))
+    if field == "dob":
+        for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d"):
+            try:
+                datetime.strptime(text, fmt)
+                return True
+            except ValueError:
+                pass
+        return False
+    return True
+
+
+def shape_report(df: pd.DataFrame, date_evidence: dict | None = None) -> dict:
+    report = {}
+    for field in ("email", "phone", "dob"):
+        source_field = "phone_number" if field == "phone" and "phone" not in df.columns and "phone_number" in df.columns else field
+        if source_field not in df.columns:
+            continue
+        values = df[source_field]
+        blank = values.isna() | values.astype(str).str.strip().eq("")
+        non_blank_values = values[~blank]
+        bad = [v for v in non_blank_values if not _shape_value(field, v)]
+        report[field] = {"non_blank": len(non_blank_values), "blank": int(blank.sum()), "unshaped": len(bad), "samples": [str(v) for v in bad[:5]]}
+        if field == "dob" and date_evidence and not date_evidence.get(field, {}).get("applied_order"):
+            report[field]["measurable"] = False
+    if "customer_pk" in df.columns:
+        report["customer_pk"] = {"duplicates": int(df["customer_pk"].duplicated(keep=False).sum())}
+    return report
+
+
+def shape_findings(report: dict) -> tuple[list[str], list[str]]:
+    blocking, warnings = [], []
+    for field, values in report.items():
+        if field == "customer_pk" and values.get("duplicates", 0):
+            blocking.append(f"{field}: duplicated value(s)")
+        elif values.get("unshaped", 0):
+            if values.get("unshaped") == values.get("non_blank"):
+                blocking.append(f"{field} column does not parse as a valid email address in ANY row"
+                                if field == "email" else f"{field} column does not parse as a valid {field} value in ANY row")
+            else:
+                warnings.append(f"{field} values do not parse as a valid {field} value")
+    return blocking, warnings
 
 
 def blocking_source_columns(config_path: str | Path | None = None) -> set[str]:

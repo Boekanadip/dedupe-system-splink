@@ -4,10 +4,14 @@ from src.splink_model import train_and_predict, load_data
 
 df = load_data(full=False)
 gold = pd.read_csv('data/labels/gold_labels.csv')
+gold['pair_id'] = gold['record_id_l'].astype(str) + '_' + gold['record_id_r'].astype(str)
+gold['is_duplicate'] = (gold['label'] == 'match').astype(int)
 train_gold, test_gold = train_test_split(gold, test_size=0.2, random_state=42)
 print(f'Train gold: {len(train_gold):,} | Test gold: {len(test_gold):,}')
 
 pred_df, linker = train_and_predict(df, verbose=False)
+pred_df = pred_df.copy()
+pred_df['pair_id'] = pred_df['record_id_l'].astype(str) + '_' + pred_df['record_id_r'].astype(str)
 
 test_ids = set(test_gold['pair_id'])
 pred_test = pred_df[pred_df['pair_id'].isin(test_ids)]

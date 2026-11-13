@@ -28,11 +28,12 @@ for t in [0.80, 0.81, 0.82, 0.83, 0.84, 0.85]:
     review_df["predicted_match"] = review_df["match_probability"] >= t
     
     # Include already MATCH pairs
-    already_match = pred_df[pred_df["decision"] == "MATCH"]
-    all_matched = pd.concat([already_match, review_df[predicted_match=True]])
-    
+    already_match = pred_df[pred_df["decision"] == "MATCH"].copy()
+    already_match["predicted_match"] = True
+    all_matched = pd.concat([already_match, review_df[review_df["predicted_match"]]], ignore_index=True)
+
     tp = int((all_matched["gold_label"] == "match").sum())
-    fn_total = int((((~all_matched["predicted_match"] if 'predicted_match' in all_matched.columns else False)) & (all_matched["gold_label"] == "match")).sum())
+    fn_total = int(((~all_matched["predicted_match"]) & (all_matched["gold_label"] == "match")).sum())
     
     # Simpler: count total matched vs gold match
     total_matches_gold = int((pred_df["gold_label"] == "match").sum())

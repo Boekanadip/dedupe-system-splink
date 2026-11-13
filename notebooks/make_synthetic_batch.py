@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEST = PROJECT_ROOT / "data" / "raw" / "synthetic_200.csv"
+DEST = PROJECT_ROOT / "data" / "raw" / "synthetic_test.csv"
 TRUTH = PROJECT_ROOT / "data" / "raw" / "synthetic_200_truth.csv"
 
 REAL_RAW = PROJECT_ROOT / "data" / "raw" / "crm_50000_customers_dirty_v3.csv"
@@ -26,6 +26,14 @@ AMBIGUOUS_PAIRS = 5
 TOTAL = UNIQUE + OLD_DATA_PAIRS * 2 + MISSING_ROWS + (
     (DUP_EXACT_PAIRS + DUP_TYPO_PAIRS + EMAIL_SHARE_PAIRS + CONFLICT_PAIRS + CONFLICT_MAIDEN) * 2
 ) + AMBIGUOUS_PAIRS * 2
+
+# Ground truth entity_id assignment.
+# - Unique rows          → own entity_id_gt (0 .. UNIQUE-1)
+# - Duplicate/near-dup  → same entity_id_gt for the pair [-a] & [-b]
+# - Missing rows        → own entity_id_gt
+# - Carried-over        → same entity_id_gt as original
+entity_id_map: dict[str, int] = {}  # customer_id -> entity_id_gt
+entity_id_counter = UNIQUE  # mulai dari UNIQUE
 
 FIRST_NAMES = [
     "Balthazar", "Clementine", "Dieter", "Esperanza", "Fyodor", "Genoveva",
@@ -72,6 +80,7 @@ def build() -> pd.DataFrame:
     used_email: set[str] = set()
     used_phone: set[str] = set()
     rows: list[dict] = []
+    entity_id_counter = UNIQUE
 
     def new_email(first: str, last: str) -> str:
         for _ in range(500):
@@ -101,10 +110,10 @@ def build() -> pd.DataFrame:
     def fresh_customer_id() -> str:
         return f"SYN{next_id():05d}"
 
-    def base_row(device: str, note: str) -> dict:
+    def base_row(device: str, note: str, entity_id_gt: int | None = None) -> dict:
         first, last = rng.choice(FIRST_NAMES), rng.choice(LAST_NAMES)
         city, state = rng.choice(CITIES)
-        return {
+        row = {
             "customer_id": fresh_customer_id(),
             "first_name": first,
             "last_name": last,
@@ -121,6 +130,24 @@ def build() -> pd.DataFrame:
             "source": rng.choice(SOURCES),
             "_truth_note": note,
         }
+        if entity_id_gt is not None:
+            row["entity_id_gt"] = entity_id_gt
+        return row
+
+    def assign_entity_id_gt(note: str, base_gt: int | None = None) -> int:
+        """Kembalikan entity_id_gt untuk note ini.
+        - Jika note mengakhiri '-a' atau '-b' (pasangan duplicate), gunakan gt yang sama.
+        - Jika note unik, alokasi baru.
+        - Jika base_gt diberikan, gunakan base_gt (untuk carried-over).
+        """
+        key = note.rstrip("-ab")
+        if key in entity_id_map:
+            return entity_id_map[key]
+        nonlocal entity_id_counter
+        new_gt = entity_id_counter
+        entity_id_counter += 1
+        entity_id_map[key] = new_gt
+        return new_gt
 
     def clone(src: dict, device: str, note: str, mutate=None) -> dict:
         row = dict(src)
@@ -131,8 +158,8 @@ def build() -> pd.DataFrame:
             mutate(row)
         return row
 
-    for _ in range(UNIQUE):
-        rows.append(base_row(fresh_device("uni"), "unique"))
+    for i in range(UNIQUE):
+        rows.append(base_row(fresh_device("uni"), "unique", entity_id_gt=i))
 
     planted_old = 0
     if REAL_RAW.exists():
@@ -144,6 +171,8 @@ def build() -> pd.DataFrame:
             original = {c: src[c] for c in keep if c in real.columns}
             original["customer_id"] = fresh_customer_id()
             original["_truth_note"] = "carried-over-original"
+            original["entity_id_gt"] = entity_id_counter
+            entity_id_counter += 1
             rows.append(original)
             rows.append(clone(original, src["device_id(s)"], "carried-over-typo",
                               lambda r: r.__setitem__("first_name",
@@ -165,7 +194,8 @@ def build() -> pd.DataFrame:
         ("missing-all-contact", ("email", "phone_number")),
     ]
     for note, blanks in missing_specs:
-        row = base_row(fresh_device("mis"), note)
+        row = base_row(fresh_device("mis"), note, entity_id_counter)
+        entity_id_counter += 1
         for column in blanks:
             row[column] = None
         rows.append(row)
@@ -193,20 +223,26 @@ def build() -> pd.DataFrame:
     )
     for note, mutate in dup_plan:
         device = fresh_device("dup")
-        rows.append(base_row(device, f"{note}-a"))
+        entity_id_gt = entity_id_counter
+        entity_id_counter += 1
+        rows.append(base_row(device, f"{note}-a", entity_id_gt))
         rows.append(clone(rows[-1], device, f"{note}-b", mutate))
 
     for _ in range(EMAIL_SHARE_PAIRS):
         shared_email = new_email("household", "shared")
-        person_a = base_row(fresh_device("shr"), "email-shared-a")
-        person_b = base_row(fresh_device("shr"), "email-shared-b")
+        person_a = base_row(fresh_device("shr"), "email-shared-a", entity_id_counter)
+        entity_id_counter += 1
+        person_b = base_row(fresh_device("shr"), "email-shared-b", entity_id_counter)
+        entity_id_counter += 1
         person_a["email"] = person_b["email"] = shared_email
         rows.append(person_a)
         rows.append(person_b)
 
     for _ in range(AMBIGUOUS_PAIRS):
-        person_a = base_row(fresh_device("amb"), "ambiguous-a")
-        person_b = base_row(fresh_device("amb"), "ambiguous-b")
+        person_a = base_row(fresh_device("amb"), "ambiguous-a", entity_id_counter)
+        entity_id_counter += 1
+        person_b = base_row(fresh_device("amb"), "ambiguous-b", entity_id_counter)
+        entity_id_counter += 1
         for column in ("first_name", "last_name", "dob", "city", "state"):
             person_b[column] = person_a[column]
         rows.append(person_a)
@@ -218,8 +254,9 @@ def build() -> pd.DataFrame:
 def main() -> None:
     frame = build()
 
-    if len(frame) != TOTAL:
-        raise SystemExit(f"generator built {len(frame)} rows, expected {TOTAL}")
+    expected = TOTAL if REAL_RAW.exists() else TOTAL - OLD_DATA_PAIRS * 2
+    if len(frame) != expected:
+        raise SystemExit(f"generator built {len(frame)} rows, expected {expected}")
     if len(set(frame["customer_id"])) != len(frame):
         raise SystemExit("customer_id collision: the serial counter is wrong")
 
@@ -236,7 +273,7 @@ def main() -> None:
         )
 
     DEST.parent.mkdir(parents=True, exist_ok=True)
-    frame[["customer_id", "device_id(s)", "_truth_note"]].to_csv(TRUTH, index=False)
+    frame[["customer_id", "device_id(s)", "entity_id_gt", "_truth_note"]].to_csv(TRUTH, index=False)
     frame.drop(columns=["_truth_note"]).to_csv(DEST, sep=";", index=False, encoding="utf-8")
 
     print(f"Wrote {len(frame)} rows -> {DEST}")

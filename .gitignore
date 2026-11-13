@@ -101,4 +101,12 @@ data/synthetic/
 data/synthetic_review.parquet
 scripts/dev_checks/
 scripts/seed_customers_v2.sql
+_summary_experiment.md
+_canary_summary.txt
+canary_clean_after.txt
+canary_db_after.txt
+out_clean.txt
+out_db.txt
+score_production_audit.py
+dash_app.py
 

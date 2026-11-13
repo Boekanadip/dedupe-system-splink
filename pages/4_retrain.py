@@ -673,7 +673,7 @@ if preds_path.exists() and silver_path.exists():
 else:
     st.caption("Butuh predictions + silver_labels untuk sweep.")
 
-# ---- daftar periksa promosi model
+
 st.subheader("Cek Kelengkapan Sebelum Melatih Ulang")
 st.caption(
     "Melatih ulang model hanya berguna kalau datanya sudah bersih. "
@@ -701,12 +701,11 @@ for label, ok in checks:
     else:
         st.warning(f"Belum — {label}")
 
-# ---- pemulihan ke versi sebelumnya
 ROLLBACK_LOG = OUTPUT_DIR / "rollback_log.jsonl"
 st.subheader("Kembalikan ke Model Sebelumnya")
 st.caption(
     "Kalau model baru hasilnya lebih buruk, kembalikan sistem ke versi yang "
-    "lama. Hanya model aktif yang berubah — data hasil processing tidak disentuh. "
+    "lama. Hanya model aktif yang berubah"
     "Alasan wajib diisi, jadi pengguna berikutnya tahu kenapa versi ini dikembalikan."
 )
 if len(versions) >= 2:
@@ -728,7 +727,7 @@ if len(versions) >= 2:
     )
     if st.button("Kembalikan sekarang", disabled=not confirm_rollback):
         if not rollback_reason.strip():
-            st.error("Isi alasan rollback dulu — tanpa alasan, pengguna berikutnya tidak tahu kendalanya.")
+            st.error("Isi alasan rollback agar tahu kendala")
         else:
             entry = {
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -774,7 +773,7 @@ if ROLLBACK_LOG.exists():
             hide_index=True,
         )
 
-# ---- catatan model
+# catatan model
 MODEL_NOTES_PATH = OUTPUT_DIR / "model_notes.json"
 st.subheader("Model Notes")
 st.caption(
@@ -783,7 +782,6 @@ st.caption(
 )
 notes = json.loads(MODEL_NOTES_PATH.read_text(encoding="utf-8")) if MODEL_NOTES_PATH.exists() else {}
 
-# Pastikan setiap versi punya entry kosong
 for v in versions:
     if v["version"] not in notes:
         notes[v["version"]] = {"strengths": "", "weaknesses": "", "stability_notes": "", "last_updated": ""}
@@ -854,7 +852,7 @@ if history_path.exists():
         )
         st.caption(
             "Kolom **Anomali waktu** berarti durasi yang tercatat bukan waktu proses "
-            "sesungguhnya — biasanya selisih waktu saat menunggu persetujuan."
+            "sesungguhnya, biasanya selisih waktu saat menunggu persetujuan."
         )
     else:
         st.caption("Belum ada riwayat.")

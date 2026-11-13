@@ -80,12 +80,15 @@ def test_minimal_requirements():
             errors.append("No contact column (email/phone) found")
             
         if errors:
-            print(f"  ✗ Validation failed as expected: {errors}")
-            return True  # This is expected to fail
+            print(f"  ✓ Validation failed as expected: {errors}")
+            return True
         else:
             print("  ✗ Should have failed but didn't")
             return False
-    
+    except Exception as e:
+        print(f"  ✗ Unexpected validation error: {e}")
+        return False
+
     return True
 
 if __name__ == "__main__":
