@@ -1,5 +1,7 @@
 # Final Evaluation Report — Threshold 0.84 / 0.35 (Gold Labels)
 
+> **Catatan status (2026-11-17):** laporan ini adalah snapshot historis. `data/labels/gold_labels.csv` saat ini berisi **3.890 pasangan** (1.372 `match`, 2.518 `no_match`; 3.512 berskor). Tabel di bawah dihitung dari `outputs/gold_scored.parquet` lama (**3.215 pasangan**). Jalankan ulang `python -m src.threshold_eval --source gold` sebelum memakai angkanya sebagai metrik model aktif.
+
 ## Objective
 Mengukur recall, precision, dan F1 pada gold labels untuk kebijakan threshold baru:
 - **MATCH** jika `match_probability >= 0.84`
