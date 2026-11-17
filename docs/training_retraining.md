@@ -8,7 +8,7 @@
 1. **Load standardized data** from `data/processed/crm_standardized.parquet`
 2. **Build comparison levels** using `build_name_comparison()`, `build_contact_comparison()`, `build_location_comparison()`, `build_dob_comparison()` (see `docs/comparison_levels.md`)
 3. **Build Splink Linker** with SettingsCreator incorporating:
-   - 11 blocking rules (see `docs/blocking_rules.md`)
+   - 12 blocking rules (see `docs/blocking_rules.md`)
    - 4 comparison levels (name, contact, location, dob)
    - m-probabilities and u-probabilities estimated via EM
 4. **Run EM training** — converges in 5-8 iterations
@@ -28,17 +28,15 @@ linker, predictions = train_and_predict(df, verbose=False)
 **Procedure:**
 1. Load gold labels: `data/labels/gold_labels.csv`
 2. **Split 80/20 stratified** by label, `random_state=42`
-   - `gold_train`: 2,820 pairs (80%)
-   - `gold_test`: 705 pairs (20%)
 3. **Regenerate predictions** on full dataset
 4. **Map pair_id** to join predictions with gold test
 5. **Evaluate at thresholds**: 0.35, 0.50, 0.82, 0.84, 0.90
 6. **Report**: TP, FP, FN, TN, recall, precision, F1
 
-**Gold split sizes (full gold set):**
-- Scored pairs: 3,215 (851 matches, 2,364 non-matches; 378 without probability excluded)
-- 80/20 stratified split would yield: ~2,572 train, ~643 test
-- Threshold 0.84: recall 0.9976, precision 0.9350, F1 0.9653 (on scored pairs)
+**Gold set saat ini:**
+- `gold_labels.csv`: 3.890 pasangan (1.372 `match`, 2.518 `no_match`)
+- 3.512 pasangan memiliki `match_probability`; 378 pasangan tanpa skor
+- Snapshot historis di `outputs/gold_scored.parquet`: 3.215 pasangan. Angka split dan metrik di `docs/reports/final_eval_report.md` dihitung dari snapshot lama ini; regenerasi diperlukan sebelum dipakai sebagai metrik model aktif.
 
 ## 3. When to Retrain
 
@@ -53,16 +51,16 @@ linker, predictions = train_and_predict(df, verbose=False)
 ## 4. Model Versioning Scheme
 
 ```
-vYYYYMMDD_HHMMSS  (e.g., v20261027_074552)
-  → Stored in: outputs/models/latest.json
-  → Config snapshot: outputs/thresholds_override.json
-  → Metadata: outputs/version_gold_scores.json
+vYYYYMMDD_HHMMSS  (e.g., v20261116_122048)
+  → Stored in: models/<version>/ (model.json, metadata.json, thresholds.json, evaluation.json)
+  → Pointer: models/latest.json (hanya diperbarui oleh run non-`sample`)
+  → Threshold default: src/config.py; override opsional di outputs/thresholds_override.json
 ```
 
 **Promotion path:**
 1. Train on full data → evaluate on holdout gold
-2. If recall ≥ target AND precision stable → `cp latest.json models/vYYYYMMDD_HHMMSS.json`
-3. Update `MATCH_THRESHOLD` in `thresholds_override.json` if needed
+2. If recall ≥ target AND precision stable → model tersimpan otomatis di `models/vYYYYMMDD_HHMMSS/`
+3. Update `MATCH_THRESHOLD` hanya jika evaluasi mendukung
 4. Document changes in `docs/training_retraining.md`
 
 ## 5. Incremental / New Data
@@ -85,8 +83,9 @@ vYYYYMMDD_HHMMSS  (e.g., v20261027_074552)
 
 | Artifact | Path | Status |
 |---|---|---|
-| Model settings | `outputs/models/latest.json` | v20261027_fixed (post-fix) |
-| Threshold override | `outputs/thresholds_override.json` | match=0.84, review=0.35 |
-| Predictions (full) | `outputs/splink_predictions.parquet` | 627 pairs (sampled from 1.5M candidates) |
-| Predictions (sample) | `outputs/splink_predictions_sample.parquet` | 10K rows |
-| Evaluation report | `outputs/evaluation_report.json` | Not yet generated for v20261027_fixed |
+| Model pointer | `models/latest.json` | `v20261027_074552` (run `full` terakhir) |
+| Model sample terbaru | `models/v20261116_122048/` | scope `sample`, 10.000 input, 5.289 pasangan |
+| Threshold override | `outputs/thresholds_override.json` | Tidak ada; default match=0.84, review=0.35 di `src/config.py` |
+| Predictions | `outputs/splink_predictions.parquet` | 200 pasangan pada artefak saat ini |
+| Predictions (sample) | `outputs/splink_predictions_sample.parquet` | Ada |
+| Evaluation report | `outputs/evaluation_report.json` | Ada; scope `sample`, model `v20261116_122048` |
