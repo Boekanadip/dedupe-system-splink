@@ -1,6 +1,6 @@
 # Catatan Lanjutan — DB Input + Fase 2/3
 
-Diperbarui: 2026-11-11. Catatan historis DB; status aktual dirangkum di `docs/current_state.md`.
+Diperbarui: 2026-11-17. Catatan historis DB; status aktual dirangkum di `docs/current_state.md`.
 Baca bagian "Belum dikerjakan" dulu, lalu "Keputusan yang tertunda".
 
 > Catatan: angka, status uji, dan path artefak pada dokumen ini berasal dari sesi sebelumnya. Verifikasi ulang sebelum dipakai sebagai fakta kondisi saat ini.
@@ -56,27 +56,17 @@ python -m src.db_export --source ... --table ... --watermark
 
 ### P1. Bersihkan parquet dari baris sintetik ⚠️
 
-`data/processed/crm_standardized.parquet` terkontaminasi **2003 baris tes**
-(`rec_101856..rec_103858`, kolom `customer_pk` terisi). Akibatnya:
+`data/processed/crm_standardized.parquet` masih memuat **6.572 baris** dengan `customer_pk` terisi (setara batch 12–16: 2.000 + 3 + 1.566 + 2.003 + 1.000). Jumlah ini naik dari catatan lama 2.003 baris. Akibatnya:
 
 ```
-rows     101.855 → 103.858
-entities 93.659  → 95.659
-smoke test 43/43 → 42/43  (FAIL: incremental_candidate_prefilter_is_exact)
+rows                108.617
+baris customer_pk    6.572
+entity_map          108.541 entity, scope partial, 102.702 record belum di-score
 ```
 
-Root cause sudah diverifikasi dengan kontrol bersih:
+Kegagalan smoke test historis `incremental_candidate_prefilter_is_exact` belum dikonfirmasi ulang pada kondisi ini. Root cause lama yang terdokumentasi: perbedaan 0 MATCH edge pada corpus bersih vs 1 edge saat baris sintetik ikut masuk.
 
-```
-tanpa baris sintetik (101.855) : MATCH diff = 0  → lolos
-dengan baris sintetik (103.858): MATCH diff = 1  → gagal
-                                pasangan rec_102366 ↔ rec_103049
-```
-
-Cara membersihkan: buang baris yang `customer_pk` tidak null dari parquet,
-lalu jalankan ulang `python -m src.clustering --full` dan
-`python -m src.master_record` supaya entity/master ikut kembali. Backup dulu
-file-nya sebelum diubah.
+Cara membersihkan: buang baris yang `customer_pk` tidak null dari parquet, backup dulu, lalu jalankan ulang `python -m src.clustering` dan `python -m src.master_record` supaya entity/master ikut kembali.
 
 ### P2. Temuan nyata dari kegagalan test (pre-filter tidak persis setara)
 
@@ -131,27 +121,31 @@ Kalau demo ke atasan, dia tidak bisa klik tombol. Perlu halaman baru
 
 ## 4. Temuan dari inspeksi kode (belum ditangani)
 
-### 4.1 Angka review — README basi
+### 4.1 Angka review — klaim README lama sudah tidak ada
 
-README §15 menulis `REVIEW = 27`. Angka aktual yang diukur:
+README saat ini tidak lagi menulis `REVIEW = 27`, jadi klaim "README basi" itu sudah tidak berlaku. Angka yang terukur pada artefak sekarang:
 
 ```
-predictions  1.148.963
-MATCH          9.833
-REVIEW         4.585   ← bukan 27
-NON_MATCH  1.134.545
-review_queue     681   (386 sudah diperiksa, 295 pending)
+splink_predictions.parquet   200 pasangan (bukan prediksi penuh)
+MATCH                          67
+NON_MATCH                     133
+review_queue.csv              201 pasangan, semuanya pending
 ```
 
-### 4.2 Komposisi REVIEW — tiga jalur masuk
+Angka prediksi penuh historis (1.148.963 pasangan; 4.585 REVIEW) tidak dapat dikutip sebagai kondisi saat ini karena artefak full-nya sudah tidak ada. Jalankan ulang pipeline penuh jika butuh angka terkini.
 
-`decision` bukan murni threshold; ada override aturan bisnis:
+### 4.2 Komposisi REVIEW — mekanisme saat ini
 
-| Jalur | Mekanisme | Jumlah |
-|---|---|---|
-| Pita biasa | `0.35 ≤ P < 0.84` | ~14 (pada gold berskor) |
-| Override aturan 1 | `P ≥ 0.84` tapi email+nama+alamat identik & dob beda/kosong → dipaksa REVIEW | 15 |
-| Kebalikannya | 0 field identitas cocok → dipaksa NON_MATCH walau `P > 1e-8` | 112 |
+`decision` bukan murni threshold; ada aturan bisnis di `src/splink_model.py`:
+
+| Aturan | Mekanisme |
+|---|---|
+| `strong_agreement_email_name_address` | `email_std`, `first_name_std`, `last_name_std`, `address_std` sama dan `dob_std` sama |
+| `unverified_dob` | Empat field identitas sama tetapi `dob_std` beda/kosong → `decision` dipaksa `REVIEW` |
+| `no_field_agreement` | Tidak ada field di `ZERO_EVIDENCE_FIELDS` yang cocok |
+| `conflicting_email_fullname` | `email_std`, `first_name_std`, dan `last_name_std` ketiganya berbeda |
+
+`match_probability` dan threshold tetap sumber keputusan utama; hanya `unverified_dob` yang menimpa `decision` menjadi `REVIEW`. Distribusi angka per jalur di bawah adalah snapshot historis, bukan hasil terukur pada artefak sekarang.
 
 Distribusi skor di REVIEW:
 
