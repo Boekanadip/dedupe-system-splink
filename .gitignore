@@ -110,3 +110,6 @@ out_db.txt
 score_production_audit.py
 dash_app.py
 
+
+# Alat lokal (repo terpisah, bukan kode aplikasi)
+anti-slop/
