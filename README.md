@@ -30,7 +30,7 @@ streamlit run app.py
 Buka `http://localhost:8501`. Jika port tersebut terpakai:
 
 ```powershell
-streamlit run app.py --server.port 8502
+streamlit run app.py --server.port 8501
 ```
 
 Gunakan `app.py` sebagai entrypoint utama. File `pages/app_streamlit.py` adalah halaman Upload yang didaftarkan melalui `st.navigation`.
