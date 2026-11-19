@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -33,6 +34,8 @@ from src.ui import (
 QUEUE_PATH = LABELS_DIR / "review_queue.csv"
 PREDS_PATH = OUTPUT_DIR / "splink_predictions.parquet"
 EDITABLE = ["label", "reviewer", "reviewer_note"]
+SYSTEM_DECISIONS = {"MATCH", "NON_MATCH", "REVIEW"}
+HUMAN_LABELS = {"match", "no_match"}
 
 SECONDS_PER_PAIR = 30
 
@@ -80,8 +83,43 @@ if queue.empty and not QUEUE_PATH.exists():
 if queue.empty:
     st.info("Belum ada antrean.")
     st.stop()
-for col in EDITABLE:
-    queue[col] = queue[col].where(queue[col].notna(), "").astype(str)
+
+# Sinkronkan skor dan keputusan model dari artefak prediksi, hanya untuk pasangan antrean.
+try:
+    pred_meta = read_pairs(columns=["record_id_l", "record_id_r", "match_probability", "decision"])
+    if not pred_meta.empty:
+        pred_meta = pred_meta.rename(columns={"decision": "system_decision"})
+        queue = queue.drop(columns=["match_probability", "system_decision"], errors="ignore").merge(
+            pred_meta,
+            on=["record_id_l", "record_id_r"],
+            how="left",
+        )
+except Exception as exc:
+    st.warning(f"Skor prediksi terbaru belum dapat dimuat: {exc}")
+
+# Hitung jumlah field yang benar-benar sama, bukan nilai lama dari antrean.
+AGREEMENT_FIELDS = [
+    "first_name_std", "last_name_std", "email_std", "phone_std", "dob_std",
+    "address_std", "city_std", "state_std", "country_std",
+]
+for field in AGREEMENT_FIELDS:
+    left, right = f"{field}_l", f"{field}_r"
+    if left in queue.columns and right in queue.columns:
+        valid = queue[left].notna() & queue[right].notna() & queue[left].astype(str).ne("") & queue[right].astype(str).ne("")
+        queue[f"_agree_{field}"] = valid & queue[left].astype(str).eq(queue[right].astype(str))
+queue["agree_count"] = queue[[f"_agree_{field}" for field in AGREEMENT_FIELDS if f"_agree_{field}" in queue]].sum(axis=1).astype(int)
+
+for col, default in (("stratum", "prediction"), ("review_status", "pending"), ("label", ""), ("reviewer", ""), ("reviewer_note", ""), ("human_decision", ""), ("verification_status", "unverified")): 
+    if col not in queue.columns:
+        queue[col] = default
+    queue[col] = queue[col].where(queue[col].notna(), default).astype(str)
+if "system_decision" not in queue.columns:
+    queue["system_decision"] = "REVIEW"
+queue["system_decision"] = queue["system_decision"].fillna("REVIEW").astype(str).str.upper()
+queue["verification_status"] = queue["verification_status"].where(
+    queue["human_decision"].isin(HUMAN_LABELS) | queue["label"].isin(HUMAN_LABELS), "unverified"
+)
+queue.loc[queue["human_decision"].eq(""), "human_decision"] = queue.loc[queue["human_decision"].eq(""), "label"]
 hidden_gold_count = 0
 gold, _ = load_labels("gold")
 if gold is not None:
@@ -172,9 +210,10 @@ with tab_compare:
         "Buka **Asal** untuk menyaring asal pasangan, **Status** untuk menyaring "
         "yang sudah pernah diputuskan."
     )
-    f1, f2 = st.columns(2)
+    f1, f2, f3 = st.columns(3)
     strata = ["(semua)"] + sorted(queue["stratum"].unique().tolist())
     statuses = ["(semua)"] + sorted(queue["review_status"].unique().tolist())
+    model_decisions = ["(semua)", "MATCH", "NON_MATCH", "REVIEW"]
     stratum_filter = f1.selectbox(
         "Asal pasangan",
         strata,
@@ -182,10 +221,16 @@ with tab_compare:
         key="cmp_stratum",
     )
     status_filter = f2.selectbox(
-        "Status",
+        "Status verifikasi",
         statuses,
         format_func=lambda s: "(semua status)" if s == "(semua)" else review_status_label(s),
         key="cmp_status",
+    )
+    model_filter = f3.selectbox(
+        "Keputusan sistem",
+        model_decisions,
+        format_func=lambda s: "(semua keputusan)" if s == "(semua)" else s,
+        key="cmp_model_decision",
     )
 
     pool = queue
@@ -193,6 +238,8 @@ with tab_compare:
         pool = pool[pool["stratum"] == stratum_filter]
     if status_filter != "(semua)":
         pool = pool[pool["review_status"] == status_filter]
+    if model_filter != "(semua)":
+        pool = pool[pool["system_decision"] == model_filter]
     st.caption(f"Menampilkan {len(pool):,} dari {len(queue):,} pasangan.")
 
     if pool.empty:
@@ -401,7 +448,10 @@ st.caption(
     "mengukur seberapa tepat sistem, dan bahan pelatihan model berikutnya. "
     "Sistem tidak pernah memakai file ini untuk memutuskan secara diam-diam."
 )
-if st.button("Simpan ke daftar utama"):
+unverified_count = int((queue["verification_status"] != "verified").sum())
+if unverified_count:
+    st.warning(f"Belum dapat disimpan. Masih ada {unverified_count:,} pasangan yang belum diverifikasi.")
+if st.button("Simpan ke daftar utama", disabled=unverified_count > 0):
     result = subprocess.run(
         [sys.executable, "-m", "src.labels", "--promote"],
         cwd=PROJECT_ROOT, text=True, capture_output=True,

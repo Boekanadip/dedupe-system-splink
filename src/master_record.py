@@ -102,7 +102,7 @@ def main() -> None:
     if not active_path(PROCESSED_DATA_PATH).exists():
         raise FileNotFoundError("Run python -m src.standardize first.")
     if not active_path(ENTITY_MAP_PATH).exists():
-        raise FileNotFoundError("Run python -m src.clustering --full first.")
+        raise FileNotFoundError("Run python -m src.clustering first.")
 
     records = pd.read_parquet(active_path(PROCESSED_DATA_PATH))
     entity_map = pd.read_parquet(active_path(ENTITY_MAP_PATH))
@@ -114,13 +114,13 @@ def main() -> None:
         )
 
 
-    meta = read_meta(ENTITY_MAP_PATH)
-    if meta and meta.get("scope") != SCOPE_FULL:
-        raise SystemExit(
-            f"{ENTITY_MAP_PATH.name} was built with scope={meta.get('scope')} "
-            f"({meta.get('unscored_records', '?')} records never scored).\n"
-            "  Building master records from it would emit those as distinct customers.\n"
-            f"  Run: python -m src.clustering --full"
+    meta = read_meta(ENTITY_MAP_PATH) or {}
+    scope = meta.get("scope", SCOPE_FULL)
+    if scope != SCOPE_FULL:
+        print(
+            f"WARNING: entity_map scope={scope} "
+            f"({meta.get('unscored_records', '?')} records never scored). "
+            "Master records are partial/sample-scoped; unscored records remain singletons."
         )
 
     missing = [c for c in MASTER_FIELDS + LINEAGE_FIELDS if c not in frame.columns]
@@ -158,7 +158,7 @@ def main() -> None:
     write_meta(
         MASTER_PATH,
         artifact="master_customers",
-        scope=SCOPE_FULL,
+        scope=scope,
         entities=len(master),
         records=int(master["record_count"].sum()),
         source_entity_map_scope=meta.get("scope"),

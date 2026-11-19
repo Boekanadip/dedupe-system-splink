@@ -134,6 +134,11 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--skip-blocking-benchmark",
+        action="store_true",
+        help="Lewati langkah blocking_benchmark untuk menghemat waktu saat aturan/data tidak berubah.",
+    )
+    parser.add_argument(
         "--step-timeout",
         type=float,
         default=1800.0,
@@ -153,6 +158,8 @@ def main() -> None:
 
     steps = []
     for name, module_args in STEPS:
+        if name == "blocking_benchmark" and args.skip_blocking_benchmark:
+            continue
         if name == "clustering" and args.force:
             steps.append((name, [*module_args, *flag, "--force"]))
         elif name == "splink_model" and args.reuse_model:

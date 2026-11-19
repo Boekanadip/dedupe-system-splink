@@ -80,10 +80,8 @@ available_cols = sorted(
 if "selected_match_cols" not in st.session_state:
     st.session_state.selected_match_cols = available_cols[:4] if available_cols else []
 
-# Tampilkan kolom yang tersedia
-st.caption("Kolom standar yang tersedia:")
-for col in valid_columns:
-    st.caption(f"• {col}")
+# Tampilkan kolom yang tersedia (horizontal dengan titik pemisah)
+st.caption("Kolom standar yang tersedia: " + " • ".join(valid_columns))
 
 # Pilihan kolom pengguna
 selected_cols = st.session_state.selected_match_cols

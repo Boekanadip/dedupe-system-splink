@@ -1,31 +1,37 @@
 # Blocking Rules — CRM Entity Resolution (Splink)
 
-## Overview
+## Sumber aktif
+- Aturan prediksi/training dimuat via `src.config.load_benchmark_rules()`.
+- Jika `config/blocking_rules.json` ada: pakai isi file itu.
+- Jika tidak ada (kondisi repo saat ini): fallback `DEFAULT_BENCHMARK_RULES` di `src/config.py`.
 
-Blocking reduces O(n²) pair comparisons by grouping records that are likely to match on at least one field. The system uses **11 blocking rules** derived from domain knowledge and empirical evaluation.
-
-| Rule Name | Columns | Rationale |
+## Default blocking rules saat ini (12, unik per kombinasi kolom)
+| Rule Name | Columns | Tujuan singkat |
 |---|---|---|
-| `email_exact` | `email_std` | Exact email match is strongest single-field signal |
-| `phone_exact` | `phone_std` | Exact phone match (after standardisation) |
-| `name_exact` | `first_name_std`, `last_name_std` | Full name agreement |
-| `city_dob` | `city_std`, `dob_std` | City + DOB together provide locality evidence |
-| `dob_exact` | `dob_std` | Exact DOB is strong match indicator |
-| `address_city` | `address_std`, `city_std` | Partial address overlap |
-| `phone_prefix` | `phone_pre7` | 7-digit phone prefix match (last 7 digits only) |
-| `name_prefix` | `last_name_std_pre3`, `first_name_std_pre3` | 3-letter prefix of both names |
-| `name_prefix_state` | `last_name_std_pre3`, `state_std` | Name prefix + state combined |
-| `email_domain_name` | `email_domain_pre4`, `last_name_std_pre3`, `first_name_std_pre3` | Shared email domain + name prefix |
-| `city_state_dob_year` | `city_std`, `state_std`, `dob_year_std` | Geographic + temporal clustering |
+| `email_exact` | `email_std` | Kecocokan email persis |
+| `phone_exact` | `phone_std` | Kecocokan telepon persis |
+| `name_exact` | `first_name_std`, `last_name_std` | Nama lengkap sama |
+| `city_dob` | `city_std`, `dob_std` | Kota + DOB |
+| `dob_exact` | `dob_std` | DOB persis |
+| `address_city` | `address_std`, `city_std` | Alamat + kota |
+| `phone_prefix` | `phone_pre7` | Prefix telepon (7 digit) |
+| `name_prefix` | `last_name_std_pre3`, `first_name_std_pre3` | Prefix nama depan/belakang |
+| `city_state_dob_year` | `city_std`, `state_std`, `dob_year_std` | Kota + state + tahun lahir |
+| `city_state_dob` | `city_std`, `state_std`, `dob_std` | Kota + state + DOB |
+| `phone_last4` | `phone_last4`, `dob_year_std` | 4 digit akhir telepon + tahun lahir |
+| `name_fuzzy_last4` | `last_name_std_pre3`, `phone_last4` | Prefix nama belakang + 4 digit telepon |
 
-## Blocking Strategy
+## Hasil eksperimen (40k processed, gold+device-truth, 2026-11-16)
+| Konfigurasi | Kandidat | Coverage gold (in-scope) | Coverage truth | Catatan |
+|---|---:|---:|---:|---|
+| 15 aturan (sebelum pangkas redundan) | 175,832 | 100% | 100% | baseline sesudah hapus `email_domain` |
+| Tanpa `email_domain_name` | 175,832 | 100% | 100% | 0 marginal (redundan) |
+| Tanpa `name_prefix_state` | 86,699 | 100% | 100% | -51% kandidat, 0 marginal |
+| 12 aturan (aktif sekarang) | 86,699 | 100% | 100% | dipangkas berdasarkan bukti di atas |
+| Core 5 (`email_exact,phone_exact,name_exact,dob_exact,city_state_dob`) | 56,230 | 100% | 100% | opsi lebih agresif; perlu validasi data lain |
 
-- **Primary blocking**: `phone_prefix` + `email_domain_name` + `name_prefix_state` — these rules capture the most common duplicate patterns in CRM data.
-- **Secondary blocking**: `name_exact`, `city_dob`, `dob_exact` — activate only when primary blocks are sparse.
-- **No brute-force all-pairs**: The blocking rules ensure < 5% of total pairs are evaluated (observed: ~1.5M pairs from 108K records vs. ~5.8B all-pairs).
-
-## Empirical Performance
-
-- Blocking recall ceiling: **1.00** (100% of true matches are captured by at least one block) ✅
-- Pairs evaluated per run: ~1.5M (vs. 5.8B all-pairs) — ~74% reduction
-- Block size: median ~20 records per block; 95th percentile ~80
+## Catatan
+- Kandidat = **union** semua aturan (deduplikasi pasangan). Aturan dengan overlap sinyal tetap menambah biaya hitung blok; perlu benchmark (jumlah kandidat, coverage/recall, runtime, ukuran blok) sebelum menambah/menghapus.
+- Jalur fixed: prediksi memakai union `BENCHMARK_RULES`; training EM memakai subset aturan yang tidak menyentuh field inti identitas (`src/splink_model.py`).
+- `DETERMINISTIC_RULES` terpisah (`email_std`, `phone_pre7`) dipakai untuk estimasi parameter awal (lambda), bukan daftar prediksi.
+- Angka performa/recall/ukuran blok bersifat **tidak terverifikasi di dokumen ini**; ukur dengan `python -m src.blocking_benchmark` pada data aktual.

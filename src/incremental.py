@@ -744,8 +744,14 @@ def main() -> None:
         STAGING_DIR.mkdir(parents=True, exist_ok=True)
         staging = build_staging_rows(state)
         active = model_lifecycle.latest()
+        if active is None:
+            raise SystemExit("Tidak ada model aktif. Latih model sebelum stage.")
+        active_version = active.name
         staging["approved"] = True
-        staging["model_version"] = active.name if active else None
+        staging["model_version"] = active_version
+        # Cegah proposal baru mewarisi versi model lama.
+        if staging["model_version"].ne(active_version).any():
+            raise SystemExit("Proposal tidak konsisten dengan model aktif; staging dibatalkan.")
         staging.to_parquet(staging_path(batch), index=False)
         state["new_preds"].to_parquet(staged_preds_path(batch), index=False)
         counts = staging["action"].value_counts().to_dict()

@@ -53,6 +53,12 @@ master = master.rename(
     )}
 )
 
+# Fallback parquet tidak punya kolom agregat DB; samakan supaya pencarian dan
+# lineage tidak error saat DB kosong.
+for col in ("record_ids", "customer_ids", "sources"):
+    if col not in master.columns:
+        master[col] = [[] for _ in range(len(master))]
+
 AUDIT_PATH = LABELS_DIR / "master_corrections.csv"
 
 FLAGS_PATH_ALL = LABELS_DIR / "membership_flags.csv"
@@ -187,6 +193,38 @@ with st.expander("Lineage (audit) — asal-usul entity ini"):
         "sumber data": list(entity.get("sources", [])),
     })
 
+# Nilai master di DB bisa NULL (pipeline lama). Isi dari record anggota supaya
+# form tidak kosong. Hanya untuk tampilan; tidak menulis ke DB.
+member_ids = entity.get("record_ids", entity.get("source_records", []))
+if isinstance(member_ids, str):
+    member_ids = [member_ids]
+member_keys = {str(i) for i in member_ids}
+members = (
+    records[records["record_id"].astype(str).isin(member_keys)].copy()
+    if member_keys else records.iloc[0:0].copy()
+)
+MASTER_FROM_MEMBER = {
+    "master_first_name_std": "first_name_std",
+    "master_last_name_std": "last_name_std",
+    "master_email_std": "email_std",
+    "master_phone_std": "phone_std",
+    "master_dob_std": "dob_std",
+    "master_address_std": "address_std",
+    "master_city_std": "city_std",
+    "master_state_std": "state_std",
+    "master_country_std": "country_std",
+}
+for master_field, member_field in MASTER_FROM_MEMBER.items():
+    current_value = entity.get(master_field)
+    if not (pd.isna(current_value) or str(current_value).strip() == ""):
+        continue
+    if member_field not in members.columns:
+        continue
+    values = members[member_field].dropna().astype(str)
+    values = values[values.str.strip() != ""]
+    if not values.empty:
+        entity[master_field] = values.iloc[0]
+
 # ---- koreksi nilai master
 st.subheader("Nilai master (bisa dikoreksi)")
 st.caption("Perbaiki nilai yang salah di sini. Sistem memakai nilai pertama sebagai default.")
@@ -269,14 +307,15 @@ if submitted:
 
 # ---- record anggota
 st.subheader("Record anggota")
-member_ids = entity.get("record_ids", entity.get("source_records", []))
-if isinstance(member_ids, str):
-    member_ids = [member_ids]
-members = records[records["record_id"].isin(member_ids)]
 st.caption(f"{len(members):,} record penyusun entity ini:")
+MEMBER_COLS = [
+    "record_id", "customer_id", "first_name_std", "last_name_std",
+    "email_std", "phone_std", "dob_std", "city_std", "source",
+]
+if "source" not in members.columns:
+    members = members.assign(source="")
 st.dataframe(
-    members[["record_id", "customer_id", "first_name_std", "last_name_std",
-             "email_std", "phone_std", "dob_std", "city_std", "source"]],
+    members[[c for c in MEMBER_COLS if c in members.columns]],
     width="stretch",
     height=300,
     column_config={

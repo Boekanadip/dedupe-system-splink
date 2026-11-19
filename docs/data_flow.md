@@ -21,17 +21,19 @@ data/raw/<batch_NNNN>.csv (artefak lokal; tidak masuk GitHub)
 │       │           ├─ dob_std (YYYY-MM-DD)
 │       │           ├─ city_std
 │       │           ├─ state_std
-│       │           ├─ email_domain_pre4
-│       │           └─ phone_pre7 (last 7 digits)
-│       │           ├─ last_name_std_pre3 (last 3 chars)
-│       │           └─ first_name_std_pre3 (first 3 chars)
+│       │           ├─ email_domain_pre4 (4 karakter pertama domain)
+│       │           ├─ phone_pre7 (7 digit pertama)
+│       │           ├─ phone_last4 (4 digit terakhir)
+│       │           ├─ dob_year_std (4 digit tahun)
+│       │           ├─ last_name_std_pre3 (3 karakter pertama)
+│       │           └─ first_name_std_pre3 (3 karakter pertama)
 │                 │
                  ▼
           │
           ▼
-[Blocking] ──► 11 blocking rules ──► candidate pairs (~1.5M from 5.8B)
-          │                       (phone_prefix, email_domain_name,
-          │                        name_prefix, city_dob, etc.)
+[Blocking] ──► 12 blocking rules ──► union 86.699 kandidat pada
+          │                       eksperimen 40k (blocking_benchmark.csv);
+          │                       angka penuh bergantung data yang diproses
           │
           ▼
 [EM Training] ──► m-prob & u-prob estimation ──►
@@ -39,11 +41,14 @@ data/raw/<batch_NNNN>.csv (artefak lokal; tidak masuk GitHub)
           ▼
 [Prediction] ──► match_probability per pair ──►
           │           decision: MATCH / REVIEW / NON_MATCH
-          │           forced rules: 9.1K MATCH, 702K NON_MATCH
+          │           business_rule: strong_agreement_email_name_address,
+          │                          unverified_dob, no_field_agreement,
+          │                          conflicting_email_fullname
           ▼
 [Thresholding] ──► MATCH_THRESHOLD (0.84) ──►
           │           REVIEW_THRESHOLD (0.35)
-          │           recall@0.84: 0.9976 / precision 0.9350 (target ≥0.95)
+          │           hasil terukur ada di outputs/evaluation_report.json,
+          │           bukan angka tetap di dokumen ini
           ▼
 [Outputs] ──► splink_predictions.parquet
           │           master_customers.parquet
@@ -63,8 +68,8 @@ data/raw/<batch_NNNN>.csv (artefak lokal; tidak masuk GitHub)
 | `splink_predictions_sample.parquet` | `outputs/` | 10K-row sample for inspection |
 | `entity_map.parquet` | `outputs/` | Mapped record_ids → entity_id (resolved entities) |
 | `master_customers.parquet` | `outputs/` | Deduplicated customer table (one row per entity) |
-| `gold_labels.csv` | `data/labels/` | 3,593 labeled pairs (1,099 match, 2,494 non-match) |
-| `thresholds_override.json` | `outputs/` | MATCH_THRESHOLD=0.84, REVIEW_THRESHOLD=0.35 |
+| `gold_labels.csv` | `data/labels/` | 3.890 pasangan berlabel (1.372 `match`, 2.518 `no_match`) |
+| `thresholds_override.json` | `outputs/` | Opsional; default `MATCH=0.84`, `REVIEW=0.35` ada di `src/config.py` |
 
 ## Data Integrity Rules (per AGENTS.md)
 
@@ -92,11 +97,14 @@ data/raw/<batch_NNNN>.csv (artefak lokal; tidak masuk GitHub)
 | `first_name` → `first_name_std` | `lower()`, strip leading/trailing whitespace, remove non-alphabetic characters (keep hyphens, apostrophes), collapse internal whitespace |
 | `last_name` → `last_name_std` | Same as first_name |
 | `email` → `email_std` | `lower()`, strip whitespace, validate `@` present, remove trailing dots |
-| `phone_number` → `phone_std` | Keep digits only (`re.sub(r'\\D', '', value)`), format as plain digit string (e.g., `6277945711`), strip leading zeros if present |
+| `phone_number` → `phone_std` | Ambil digit saja; buang ekstensi `xNNN`; buang prefix internasional `00` lalu satu `0` domestik di depan |
 | `dob` → `dob_std` | Parse to `datetime`, format as `YYYY-MM-DD`, handle `None`/empty → `NULL` |
 | `city` → `city_std` | `lower()`, strip whitespace |
 | `state` → `state_std` | `upper()`, 2-letter country code (US states only in this dataset) |
 | `email_domain_pre4` | Extracted from `email_std`: split at `@`, take first 4 chars of domain (e.g., `gmail.com` → `gmai`, `yahoo.com` → `yaho`) |
-| `phone_pre7` | Last 7 digits of `phone_std` (e.g., `6277945711` → `7945711`; if < 7 digits, pad with leading zeros) |
-| `last_name_std_pre3` | Last 3 characters of `last_name_std` (e.g., `saunders` → `und`, `smith` → `ith`) |
+| `phone_pre7` | First 7 digits of `phone_std` (e.g., `6277945711` → `6277945`) |
+| `phone_last4` | Last 4 digits of `phone_std` (e.g., `6277945711` → `5711`) |
+| `dob_year_std` | First 4 characters of `dob_std` (tahun lahir) |
+| `last_name_std_pre3` | First 3 characters of `last_name_std` (e.g., `saunders` → `sau`, `smith` → `smi`) |
 | `first_name_std_pre3` | First 3 characters of `first_name_std` (e.g., `john` → `joh`, `ali` → `ali`) |
+| `phonetic_last_name`, `phonetic_first_name` | Soundex dari nama terstandardisasi; dipakai level perbandingan nama |

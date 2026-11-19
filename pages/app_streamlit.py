@@ -26,6 +26,34 @@ BATCH_REPORT = OUTPUT_DIR / "batch_linkage_report.json"
 
 st.set_page_config(page_title="Upload - Entity Resolution", page_icon="📤", layout="wide")
 
+# Daftarkan semua halaman lewat st.navigation. render_sidebar di src/ui.py
+# memanggil st.switch_page(page); itu hanya menerima Page object yang sudah
+# terdaftar, bukan string path. Path relatif terhadap entrypoint (pages/).
+PAGE_DEFS = [
+    ("upload", "app_streamlit.py", "Upload", "📤"),
+    ("review", "1_review.py", "Review", "🔎"),
+    ("master", "2_master.py", "Master", "👥"),
+    ("dashboard", "3_dashboard.py", "Dashboard", "📊"),
+    ("retrain", "4_retrain.py", "Retrain", "⚙️"),
+    ("queue", "5_queue.py", "Queue", "📋"),
+    ("batch", "6_batch.py", "Batch", "📦"),
+    ("gaps", "7_gaps.py", "Gaps", "🕳️"),
+    ("explain", "8_explain.py", "Explain", "🔍"),
+    ("history", "9_history.py", "History", "📜"),
+]
+page_objects = {
+    key: st.Page(path, title=title, icon=icon, default=(key == "upload"))
+    for key, path, title, icon in PAGE_DEFS
+}
+st.session_state["registered_pages"] = page_objects
+
+pg = st.navigation(list(page_objects.values()), position="hidden")
+# Entrypoint adalah file ini. Saat halaman lain dipilih, jalankan lewat router.
+# Saat halaman upload aktif (url_path kosong), lanjutkan kode upload di bawah.
+if pg.url_path:
+    pg.run()
+    st.stop()
+
 page_header(
     "Upload Data",
     "Tambahkan data customer baru",
@@ -304,7 +332,7 @@ with tab_csv:
                 f"bulan>12 di {ev['month_gt_12']:,} → {ev['detected_order']}."
             )
         # ---- 4 Daftar + jalankan
-        st.subheader("4 · Daftarkan dan analisis")
+        st.subheader("5 · Daftarkan dan analisis")
         registered = next(
             (b for b in registry.load()["batches"] if b["sha256"] == data["digest"]), None
         )

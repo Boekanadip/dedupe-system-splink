@@ -158,6 +158,9 @@ def load_data(include_disputed: bool) -> tuple[pd.DataFrame, pd.DataFrame, dict]
         left, right = scored[f"{field}_l"], scored[f"{field}_r"]
         scored["agree_name"] &= left.notna() & right.notna() & left.eq(right)
     if not include_disputed:
+        # Pasangan disputed sudah dikeluarkan dari `scored`, jadi jangan dihitung
+        # lagi sebagai "unscored" — itu menggandakan total (gold != scored+unscored+disputed).
+        missing = missing[~missing["is_disputed"]]
         scored = scored[~scored["is_disputed"]]
     if scored.empty:
         raise ValueError("No labelled pair was scored by the current Splink model")

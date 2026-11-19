@@ -81,6 +81,7 @@ def optional_source_columns() -> set[str]:
         COLUMN_MAP[c] for c in REQUIRED_COLUMNS
     } - {COLUMN_MAP[c] for c, _ in ONE_OF}
 
+
 DELIMITERS = {";": ";", ":": ":"}
 
 
@@ -134,6 +135,7 @@ def date_format_evidence(df: pd.DataFrame) -> dict:
         }
     return out
 
+
 def validate(df: pd.DataFrame, enforce_schema: bool = True) -> dict:
     available = set(df.columns)
     blocking: list[str] = []
@@ -154,7 +156,9 @@ def validate(df: pd.DataFrame, enforce_schema: bool = True) -> dict:
     needed = blocking_source_columns()
     missing_keys = sorted(needed - available)
     if missing_keys:
-        schema_warnings.append(
+        # Kolom pembentuk blocking adalah kontrak data, bukan sekadar saran:
+        # tanpa kolom ini aturan kandidat tidak bisa dijalankan sesuai konfigurasi.
+        blocking.append(
             "Kolom dari blocking default belum tersedia: " + ", ".join(missing_keys)
         )
 
@@ -204,6 +208,7 @@ def _has_list_values(series: pd.Series, sample: int = 50) -> bool:
         if isinstance(value, (list, tuple, set, np.ndarray)):
             return True
     return False
+
 
 def validate_file(path: Path) -> tuple[dict, pd.DataFrame]:
     frame, source_info = read_csv_any(Path(path))

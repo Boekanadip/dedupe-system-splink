@@ -206,51 +206,40 @@ def field_label(field: str) -> str:
     return FIELD_LABEL.get(field, field.replace("_", " ").title())
 
 
-# Comparison level names (from Splink)
-LEVEL_LABELS = {
-    # Name levels
-    0: ("exact", "persis sama", "mendukung"),
-    1: ("fuzzy", "hampir sama", "mendukung"),
-    2: ("phonetic", "sama fonetik", "mendukung"),
-    3: ("initials", "huruf depan sama", "mendukung"),
-    4: ("common", "nama umum", "menolak"),
-    5: ("null", "salah satu kosong", "netral"),
-    6: ("different", "beda", "menolak"),
-    # Contact levels
-    0: ("exact", "persis sama", "mendukung"),
-    1: ("fuzzy", "hampir sama", "mendukung"),
-    2: ("domain_only", "hanya domain", "netral"),
-    3: ("null", "salah satu kosong", "netral"),
-    4: ("different", "beda", "menolak"),
-    # Location levels
-    0: ("exact", "persis sama", "mendukung"),
-    1: ("fuzzy", "hampir sama", "mendukung"),
-    2: ("same_state", "provinsi sama", "mendukung"),
-    3: ("same_country", "negara sama", "mendukung"),
-    4: ("null", "salah satu kosong", "netral"),
-    5: ("different", "beda", "menolak"),
-    # DOB levels
-    0: ("exact", "persis sama", "mendukung"),
-    1: ("year_only", "hanya tahun", "mendukung"),
-    2: ("partial", "sebagian sama", "netral"),
-    3: ("null", "salah satu kosong", "netral"),
-    4: ("different", "beda", "menolak"),
+# ponytail: mapping level ini mengikuti urutan level pada build_*_comparison().
+# Kalau urutan level model berubah, mapping ini harus ikut berubah.
+GAMMA_LEVELS: dict[str, dict[int, tuple[str, str, str]]] = {
+    "gamma_name": {
+        -1: ("null", "kedua nama kosong", "netral"),
+        0: ("different", "nama beda", "menolak"),
+        1: ("phonetic", "nama fonetik sama", "mendukung"),
+        2: ("fuzzy", "nama hampir sama", "mendukung"),
+        3: ("exact", "nama persis sama", "mendukung"),
+    },
+    "gamma_contact": {
+        -1: ("null", "kontak kosong", "netral"),
+        0: ("different", "kontak beda", "menolak"),
+        1: ("phone_fuzzy", "telepon hampir sama", "mendukung"),
+        2: ("email_fuzzy", "email hampir sama", "mendukung"),
+        3: ("one_exact", "email atau telepon sama", "mendukung"),
+        4: ("both_exact", "email dan telepon sama", "mendukung"),
+    },
+    "gamma_location": {
+        -1: ("null", "lokasi kosong", "netral"),
+        0: ("different", "lokasi beda", "menolak"),
+        1: ("street", "alamat sama", "mendukung"),
+        2: ("state", "provinsi sama", "mendukung"),
+        3: ("city", "kota sama", "mendukung"),
+        4: ("street_state", "alamat dan provinsi sama", "mendukung"),
+        5: ("full", "alamat, kota, dan provinsi sama", "mendukung"),
+    },
+    "gamma_dob": {
+        -1: ("null", "tanggal lahir kosong", "netral"),
+        0: ("different", "tanggal lahir beda", "menolak"),
+        1: ("year", "tahun lahir sama", "mendukung"),
+        2: ("exact", "tanggal lahir persis sama", "mendukung"),
+    },
 }
-
-
-def similarity_text(label: str | None, code: int | None) -> str:
-    """Convert comparison level to human-readable text."""
-    if label is None:
-        return "tidak ada data"
-    
-    # For gamma_name, gamma_contact, gamma_location, gamma_dob
-    if code is not None and code >= 0:
-        level_info = LEVEL_LABELS.get(code)
-        if level_info:
-            return level_info[1]
-        return f"level perbandingan L{code}"
-
-    return str(label) if label else "tidak ada data"
 
 
 def format_score(weight: float | None) -> str:
@@ -293,7 +282,15 @@ def model_levels() -> dict:
 
     with open(settings_path) as f:
         settings = json.load(f)
-    return settings.get("comparison_levels", {})
+    comparison_levels = settings.get("comparison_levels", {})
+    # JSON round-trip converts integer keys to strings;
+    # convert gamma code sub-keys back to int so assertions work
+    for name in comparison_levels:
+        inner = comparison_levels[name]
+        if isinstance(inner, dict):
+            comparison_levels[name] = {int(k) if isinstance(k, str) and k.lstrip('-').isdigit() else k: v
+                                       for k, v in inner.items()}
+    return comparison_levels
 
 
 def label_label(label: str | None) -> str:
@@ -373,19 +370,17 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
 
     rows = []
     gamma_fields = {
-        "core_identity": "gamma_name",
         "first_name": "gamma_name",
         "last_name": "gamma_name",
         "email": "gamma_contact",
         "phone": "gamma_contact",
-        "dob": "gamma_contact",
+        "dob": "gamma_dob",
         "address": "gamma_location",
         "city": "gamma_location",
         "state": "gamma_location",
         "country": "gamma_location",
     }
     source_fields = {
-        "core_identity": None,
         "first_name": "first_name_std",
         "last_name": "last_name_std",
         "email": "email_std",
@@ -396,32 +391,34 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
         "state": "state_std",
         "country": "country_std",
     }
-    for field in ("core_identity", *FIELD_LABEL):
+    for field in (field for field in FIELD_LABEL if field != "core_identity"):
         gamma_col = gamma_fields.get(field, f"gamma_{field}")
         code = row.get(gamma_col)
         code = None if code is None or _is_blank(code) else int(code)
         
-        # Default dari settings.json jika ada
-        default = levels.get(gamma_col, {}).get(code, (None, 0.0, 0.0)) if code is not None else (None, 0.0, 0.0)
-        
+        # Gunakan mapping GAMMA_LEVELS untuk deskripsi tingkat banding
+        level_info = GAMMA_LEVELS.get(gamma_col, {}).get(code) if code is not None else None
+
+        # Ambil bobot dari settings.json jika struktur valid (3 elemen label/m/u)
+        weight = None
+        setting = levels.get(gamma_col, {}).get(code) if code is not None else None
+        if isinstance(setting, (list, tuple)) and len(setting) == 3:
+            _label, m, u = setting
+            if m > 0 and u > 0:
+                weight = math.log2(m / u)
+
+        # Arah mendukung/menolak dari mapping; fallback jika mapping kosong
+        label = None
         fallback_direction = None
-        # Fallback: settings.json tidak tersedia. Tampilkan kategori gamma,
-        # tanpa mengarang bobot statistik model.
-        if code is not None and code >= 0 and default == (None, 0.0, 0.0):
-            fallback = LEVEL_LABELS.get(code)
-            if fallback:
-                label = fallback[0]
-                fallback_direction = fallback[2]
-            else:
-                label = None
-            m, u = 0.0, 0.0
+        if level_info:
+            label = level_info[0]
+            fallback_direction = level_info[2]
         else:
-            label, m, u = default
-        
-        weight = math.log2(m / u) if m > 0 and u > 0 else None
-        source_field = source_fields.get(field)
-        left = row.get(f"{source_field}_l") if source_field else row.get("first_name_std_l")
-        right = row.get(f"{source_field}_r") if source_field else row.get("first_name_std_r")
+            # Kode di luar mapping: jangan mengarang arah. Bobot tetap dipakai
+            # kalau tersedia dari settings.json.
+            fallback_direction = None
+
+        # Buat kolom evidence
         evidence = (
             "tidak ada data"
             if code == -1
@@ -429,19 +426,42 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
             else f"{fallback_direction} (bobot belum tersedia)" if fallback_direction
             else "tidak ada data"
         )
-        # Gamma description
-        gamma_desc = similarity_text(label, code)
-        
+        # Deskripsi "Seberapa mirip" menggunakan level_info
+        gamma_desc = level_info[1] if level_info else (
+            "tidak ada data" if code == -1 else f"level perbandingan L{code}"
+        )
+        # Simpan arah untuk ringkasan "menolak/mendukung"
+        arah = level_info[2] if level_info else ""
+
+        source_field = source_fields.get(field)
+        left = row.get(f"{source_field}_l") if source_field else row.get("first_name_std_l")
+        right = row.get(f"{source_field}_r") if source_field else row.get("first_name_std_r")
+        evidence_raw = evidence
+        # Gamma contact adalah level gabungan email + telepon. Jangan salin
+        # label gabungan ke kedua baris: bukti tiap field harus mencerminkan nilainya.
+        if field in ("email", "phone") and code is not None and code >= 0:
+            same = not _is_blank(left) and not _is_blank(right) and str(left) == str(right)
+            if same:
+                arah, gamma_desc = "mendukung", f"{field_label(field)} sama"
+            elif code == 0:
+                arah, gamma_desc = "menolak", f"{field_label(field)} beda"
+            elif field == "email" and code in (2, 3):
+                arah, gamma_desc = "mendukung", "email hampir sama"
+            else:
+                arah, gamma_desc = "menolak", f"{field_label(field)} beda"
+            fallback_direction = arah
+            evidence_raw = f"{arah} (bobot belum tersedia)" if weight is None else format_score(weight)
+
         rows.append(
             {
                 "informasi": field_label(field),
                 "record A": "tidak diisi" if _is_blank(left) else str(left),
                 "record B": "tidak diisi" if _is_blank(right) else str(right),
                 "perbandingan": field_agreement(left, right),
-                "gamma level": f"L{code}" if code is not None and code >= 0 else "-",
                 "seberapa mirip": gamma_desc,
-                "bukti": evidence,
+                "bukti": evidence_raw,
                 "_bobot": weight if weight is not None else float("-inf"),
+                "_arah": arah,
             }
         )
     return pd.DataFrame(rows).sort_values("_bobot", ascending=False).drop(columns="_bobot")
@@ -450,20 +470,26 @@ def pair_evidence_frame(row: dict, levels: dict) -> "Any":
 def show_evidence(row: dict, levels: dict) -> None:
     """Bagian "Kenapa?" yang sama persis di halaman review dan explain."""
     frame = pair_evidence_frame(row, levels)
+    # Gunakan kolom _arah (arah mendukung/menolak) untuk menghitung ringkasan
+    # agar tidak bergantung pada format teks evidence yang bisa berubah.
+    support = frame.loc[frame["_arah"] == "mendukung"]
+    against = frame.loc[frame["_arah"] == "menolak"]
+    # pilih kolom yang boleh tampil; tidak bergantung pada ada/tidaknya _bobot
+    display_cols = [
+        c for c in frame.columns if c not in {"_arah", "_bobot", "bukti"}
+    ]
+    display_frame = frame[display_cols]
+
     st.dataframe(
-        frame,
+        display_frame,
         width="stretch",
         hide_index=True,
         height=460,
         column_config={
             "informasi": st.column_config.TextColumn("Informasi", width="small"),
             "seberapa mirip": st.column_config.TextColumn("Seberapa mirip", width="medium"),
-            "bukti": st.column_config.TextColumn("Bukti", width="small"),
         },
     )
-
-    support = frame.loc[frame["bukti"].str.contains("mendukung|∞", na=False), "bukti"]
-    against = frame.loc[frame["bukti"].str.contains("menolak|-∞", na=False), "bukti"]
 
     # Peringatan konflik: naive Bayes overconfident, jadi pasangan dengan >= 1
     # field yang menolak tetap bisa mendapat peluang "sangat tinggi". Tanpa
@@ -475,7 +501,7 @@ def show_evidence(row: dict, levels: dict) -> None:
     except (TypeError, ValueError):
         high = False
     if high and not against.empty:
-        fields = ", ".join(frame.loc[frame["bukti"].str.contains("menolak"), "informasi"])
+        fields = ", ".join(against["informasi"])
         st.warning(
             f"**Ada {len(against)} field yang menolak** ({fields}) meski peluang "
             "tertinggi. Model kadang terlalu yakin karena menghitung bukti serupa "

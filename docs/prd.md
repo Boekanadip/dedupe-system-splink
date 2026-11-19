@@ -304,7 +304,7 @@ The development system is successful when it demonstrates:
 
 ---
 
-# 7. Implementation and Test Status (2026-10-14)
+# 7. Implementation and Test Status (2026-11-17)
 
 This is an observed development snapshot, not a production certification.
 Evidence is from the local working copy and its generated artifacts; data
@@ -315,12 +315,13 @@ and outputs are ignored by Git and are not supplied by a clean clone.
 | CSV upload and batch registration | implemented | `app.py`, `src/validate_upload.py`, `src/registry.py` |
 | Standardization and probabilistic linkage | implemented | `src/standardize.py`, `src/splink_model.py`, `src/incremental.py` |
 | Review, feedback, entity/master, and model lifecycle | implemented | `pages/`, `src/labels.py`, `src/feedback.py`, `src/clustering.py`, `src/master_record.py`, `src/model_lifecycle.py` |
-| Database ingestion | verified for this test with PostgreSQL; local DuckDB is also used by the pipeline | `src/db_source.py`, `src/db_export.py`, `src/job_run.py`; other scanner backends are not verified |
-| PostgreSQL Docker integration | passed for 75 synthetic new rows | `outputs/job_run_summary.json`: status `succeeded`, incremental stage took 6.6 s (job total 6.82 s), 75 staged records |
-| Synthetic duplicate check | passed for two selected pairs | `outputs/staging/batch_0018.csv.predictions.parquet`: exact duplicate and near-duplicate each scored `MATCH`, probability 1.0; this is not a quality metric |
-| Human gate | pending by design | The 75 staged proposals have not been applied to entity/master artifacts |
-| Local standardized dataset | 103,858 records | `data/processed/crm_standardized.parquet`; a local artifact, not part of the repository |
-| Smoke test | 43/44 checks passed | `tests/test_smoke.py`; `incremental_candidate_prefilter_is_exact` reported one MATCH edge difference between candidate prefilter and full scoring |
+| Database ingestion | verified previously with PostgreSQL; local DuckDB is also used by the pipeline | `src/db_source.py`, `src/db_export.py`, `src/job_run.py`; other scanner backends are not verified |
+| PostgreSQL Docker integration | tidak diverifikasi ulang pada audit ini | `outputs/job_run_summary.json` tidak ada pada working copy sehingga angka 75 baris / 6,6 s tidak dapat dikutip sebagai kondisi saat ini |
+| Synthetic duplicate check | tidak diverifikasi ulang | Artefak `outputs/staging/batch_0018.csv.predictions.parquet` tidak ada |
+| Human gate | pending by design | Keputusan manusia tetap diperlukan untuk pasangan `REVIEW` |
+| Local standardized dataset | 108.617 records | `data/processed/crm_standardized.parquet` + `.meta.json`; artefak lokal, bukan bagian repository |
+| Entity/master artifacts | scope `partial` | `outputs/entity_map.parquet`: 108.541 entity, 78 match edge, 102.702 record belum di-score. Master mewarisi scope `partial`. |
+| Smoke test | status historis 43/44; belum dijalankan ulang | `tests/test_smoke.py`; kegagalan historis `incremental_candidate_prefilter_is_exact` belum dikonfirmasi ulang |
 | Production scale, independent accuracy, and deployment | not verified | Synthetic DB test and local development data do not establish these properties |
 
 Known limitations and follow-up:

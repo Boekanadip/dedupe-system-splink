@@ -16,19 +16,19 @@ FN analysis shows 12 pairs below threshold 0.9 had contact agreement but low ove
 
 ---
 
-## Location Field (`location`)
+## Location Field (`location`) — `build_location_comparison` (fixed, `src/splink_model.py`)
 
-| Level | Condition | m-probability | Purpose |
-|---|---|---|---|
-| `alamat lengkap (4 field)` | address + city + state all match | **0.40** | Very strong: full address agreement |
-| `street cocok` | Street address matches | **0.20** | Strong: street-level agreement |
-| `city cocok` | City matches | **0.25** | Moderate: city-level agreement |
-| `state cocok` | State matches | **0.30** | Moderate-high: state agreement |
-| `3 dari 4 field cocok` | 3 of 4 address fields match | **0.15** | Weak-moderate |
-| Else | No location agreement | **0.10** (↓ from 0.15) | Default |
+| Level (label) | Kondisi | m-probability |
+|---|---|---|
+| `lokasi kosong` | address & city kosong di salah satu sisi (null level) | — (null) |
+| `alamat lengkap (3 field)` | address + city + state sama | **0.40** |
+| `street cocok` | address sama | **0.20** |
+| `city cocok` | city sama | **0.25** |
+| `state cocok` | state sama | **0.30** |
+| `2 dari 3 field cocok` | dua dari {address, city, state} sama | **0.15** |
+| Else | tidak ada kecocokan lokasi di atas | **0.10** |
 
-**Why decrease Else from 0.15 → 0.10?**
-Lowering the Else m-probability makes the model *more conservative* — pairs with no location agreement receive less default penalty, which indirectly increases overall match weights for pairs that do have partial agreement. This helps recover FN pairs where location is partially agreed but other fields dominate.
+Catatan: level dievaluasi berurutan; nilai m-probability adalah konfigurasi di kode (bukan hasil evaluasi yang diverifikasi di dokumen ini). Mode dinamis (`build_dynamic_settings_from_columns`) memakai struktur/label lokasi berbeda.
 
 ---
 

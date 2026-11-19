@@ -104,13 +104,9 @@ def save_to_database(df: pd.DataFrame, table_name: str = "splink_data.dedup_outp
     else:
         insert = f"INSERT INTO {qualified} ({col_names}) VALUES %s"
 
-    conn = psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", 5432)),
-        dbname=os.getenv("POSTGRES_DB", "crm"),
-        user=os.getenv("POSTGRES_USER", "crm_user"),
-        password=os.getenv("POSTGRES_PASSWORD", "crm_password_2026"),
-    )
+    from .db import get_connection
+    conn_context = get_connection()
+    conn = conn_context.__enter__()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -130,7 +126,7 @@ def save_to_database(df: pd.DataFrame, table_name: str = "splink_data.dedup_outp
         conn.commit()
         return len(df)
     finally:
-        conn.close()
+        conn_context.__exit__(None, None, None)
 
 
 def _as_date(value):
@@ -223,13 +219,9 @@ def save_snapshot(
         );
     '''
 
-    conn = psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", 5432)),
-        dbname=os.getenv("POSTGRES_DB", "crm"),
-        user=os.getenv("POSTGRES_USER", "crm_user"),
-        password=os.getenv("POSTGRES_PASSWORD", "crm_password_2026"),
-    )
+    from .db import get_connection
+    conn_context = get_connection()
+    conn = conn_context.__enter__()
     try:
         with conn.cursor() as cur:
             cur.execute(create)
@@ -244,4 +236,4 @@ def save_snapshot(
             )
         return len(rows)
     finally:
-        conn.close()
+        conn_context.__exit__(None, None, None)

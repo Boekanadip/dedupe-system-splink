@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import COLUMN_MAP, OUTPUT_DIR, RAW_DATA_PATH
+from .config import COLUMN_MAP, DEVICE_ID_ALIASES, OUTPUT_DIR, RAW_DATA_PATH
 
 
 def load_raw(path: Path = RAW_DATA_PATH) -> pd.DataFrame:
@@ -119,18 +119,34 @@ def duplicate_id_report(df: pd.DataFrame, customer_id: str) -> dict:
     }
 
 
+def _resolve_source(df: pd.DataFrame, canonical: str) -> str | None:
+    source = COLUMN_MAP.get(canonical)
+    if source and source in df.columns:
+        return source
+    aliases = {
+        "phone": ["phone", "phone_number"],
+        "device_ids": list(DEVICE_ID_ALIASES) if 'DEVICE_ID_ALIASES' in globals() else ["device_id"],
+    }
+    for alt in aliases.get(canonical, []):
+        if alt in df.columns:
+            return alt
+    return source
+
+
 def identifier_coverage(df: pd.DataFrame) -> dict:
     def null_count(canonical: str) -> int:
-        source = COLUMN_MAP[canonical]
-        return int(df[source].isna().sum()) if source in df.columns else -1
+        source = _resolve_source(df, canonical)
+        return int(df[source].isna().sum()) if source and source in df.columns else -1
 
-    email, phone, dob = null_count("email"), null_count("phone"), null_count("dob")
-    both_missing = int(
-        (
-            df[COLUMN_MAP["email"]].isna()
-            & df[COLUMN_MAP["phone"]].isna()
-        ).sum()
-    )
+    email = null_count("email")
+    phone = null_count("phone")
+    dob = null_count("dob")
+    email_src = _resolve_source(df, "email")
+    phone_src = _resolve_source(df, "phone")
+    if email_src in df.columns and phone_src in df.columns:
+        both_missing = int((df[email_src].isna() & df[phone_src].isna()).sum())
+    else:
+        both_missing = -1
     return {
         "records": len(df),
         "missing_email": email,
@@ -138,8 +154,8 @@ def identifier_coverage(df: pd.DataFrame) -> dict:
         "missing_dob": dob,
         "missing_both_email_and_phone": both_missing,
         "pct_unlinkable_by_current_rules": round(both_missing / len(df) * 100, 4)
-        if len(df)
-        else 0.0,
+        if len(df) and both_missing >= 0
+        else None,
         "note": (
             "Exact-equi-join rules cannot link a record whose email AND phone are "
             "both absent. This is a recall ceiling, not a duplicate count."
@@ -148,20 +164,19 @@ def identifier_coverage(df: pd.DataFrame) -> dict:
 
 
 def build_profile(df: pd.DataFrame) -> dict:
-    customer_id = COLUMN_MAP["customer_id"]
+    customer_id = _resolve_source(df, "customer_id") or COLUMN_MAP["customer_id"]
     return {
         "shape": {"rows": len(df), "columns": len(df.columns)},
         "columns": list(df.columns),
         "column_profile": profile_column(df).to_dict(orient="records"),
         "duplicate_rows": int(df.duplicated().sum()),
         "duplicate_customer_id": duplicate_id_report(df, customer_id),
-        "name_anomalies_first": name_anomalies(df, COLUMN_MAP["first_name"]),
-        "name_anomalies_last": name_anomalies(df, COLUMN_MAP["last_name"]),
-        "phone_anomalies": phone_anomalies(df, COLUMN_MAP["phone"]),
+        "name_anomalies_first": name_anomalies(df, _resolve_source(df, "first_name") or COLUMN_MAP["first_name"]),
+        "name_anomalies_last": name_anomalies(df, _resolve_source(df, "last_name") or COLUMN_MAP["last_name"]),
+        "phone_anomalies": phone_anomalies(df, _resolve_source(df, "phone") or COLUMN_MAP["phone"]),
         "identifier_coverage": identifier_coverage(df),
         "top_values": {
-            # Langkah 7 profiling data: nama, telepon, email, alamat, dan ID device.
-            canonical: top_values(df, source).to_dict(orient="records")
+            canonical: top_values(df, _resolve_source(df, canonical) or source).to_dict(orient="records")
             for canonical, source in COLUMN_MAP.items()
             if canonical in ("first_name", "last_name", "email", "phone", "address", "device_ids")
         },

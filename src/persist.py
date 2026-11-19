@@ -166,12 +166,17 @@ def persist_pairs(df: pd.DataFrame, run_id: str, scope: str) -> int:
         left = frame.loc[swap, "record_id_l"].copy()
         frame.loc[swap, "record_id_l"] = frame.loc[swap, "record_id_r"]
         frame.loc[swap, "record_id_r"] = left
-        for col in PAIR_SCORE_COLUMNS:
-            mirrored = f"{col}_l"
-            if mirrored in frame.columns:
-                tmp = frame.loc[swap, f"{col}_l"].copy()
-                frame.loc[swap, f"{col}_l"] = frame.loc[swap, f"{col}_r"]
-                frame.loc[swap, f"{col}_r"] = tmp
+        # ID diurutkan secara kanonik; seluruh evidence sisi kiri/kanan wajib
+        # ikut berpindah agar nilai tetap milik record yang benar.
+        for col in list(frame.columns):
+            if not col.endswith("_l"):
+                continue
+            right_col = f"{col[:-2]}_r"
+            if right_col not in frame.columns:
+                continue
+            tmp = frame.loc[swap, col].copy()
+            frame.loc[swap, col] = frame.loc[swap, right_col]
+            frame.loc[swap, right_col] = tmp
 
     keep = ["record_id_l", "record_id_r", *PAIR_SCORE_COLUMNS]
     frame = frame[[c for c in keep if c in frame.columns]].copy()
