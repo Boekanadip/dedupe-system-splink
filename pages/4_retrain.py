@@ -416,7 +416,7 @@ if flags_path.exists():
         "Laporan ini masuk dari halaman **Daftar Customer** ketika ada yang "
         "menyebut sekelompok customer ini salah digabung atau salah dipecah. "
         "Laporan berbeda dari label pasangan; pilih tindak lanjut koreksi di "
-        "halaman Daftar Customer. Status selesai hanya dicatat setelah split/merge diterapkan."
+        "halaman Daftar Customer"
     )
     issue_label = {
         "wrong_merge": "Salah digabung",
@@ -455,9 +455,9 @@ if flags_path.exists():
     )
     with st.expander("Apa arti jenis laporan?"):
         st.markdown(
-            "- **wrong_merge** — beberapa customer sebenarnya berbeda orang, tapi "
+            "- **wrong_merge** adalah beberapa customer sebenarnya berbeda orang, tapi "
             "sistem menggabungkannya jadi satu.\n"
-            "- **wrong_split** — satu orang sebenarnya terpecah jadi beberapa "
+            "- **wrong_split** adalah satu orang sebenarnya terpecah jadi beberapa "
             "customer di sistem."
         )
     if st.button("Simpan tindak lanjut"):

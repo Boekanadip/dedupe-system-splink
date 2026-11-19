@@ -84,9 +84,16 @@ def normalize_date(value, dayfirst: bool) -> str | None:
 
     if pd.isna(value):
         return None
+    # Nilai dari batch yang menyimpan dob sebagai datetime sudah final; jangan
+    # dibuang hanya karena ada komponen jam ("1958-11-28 00:00:00").
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
     text = str(value).strip()
     if not text:
         return None
+    text = re.sub(r"[ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?$", "", text).strip()
 
     parts = NUMERIC_DATE.match(text)
     if parts:
@@ -303,6 +310,10 @@ def standardize(
     # memakai `phone` atau `phone_number`; pipeline selalu menghasilkan phone_std.
     phone_source = next((c for c in (COLUMN_MAP["phone"], "phone", "phone_number") if c in df), None)
     if phone_source is not None:
+        # Pastikan tipe konsisten (hindari mixed float/object saat simpan parquet)
+        if df[phone_source].dtype != object and not pd.api.types.is_string_dtype(df[phone_source]):
+            df[phone_source] = df[phone_source].astype("object")
+        df[phone_source] = df[phone_source].where(df[phone_source].notna(), None)
         df["phone_std"] = df[phone_source].map(normalize_phone)
     else:
         # Kolom opsional: tetap hadir agar blocking/model tidak gagal saat sumber
@@ -325,6 +336,30 @@ def standardize(
         df["device_ids_std"] = df[source].map(normalize_device_ids)
 
     out = add_blocking_keys(df)
+    # Coerce kolom object campuran agar parquet stabil (hindari mixed float/object di parquet)
+    for col in out.columns:
+        if col == "record_id":
+            continue
+        if out[col].dtype == object:
+            try:
+                if out[col].map(lambda x: isinstance(x, float)).any():
+                    out[col] = out[col].map(
+                        lambda x: None
+                        if isinstance(x, float) and pd.isna(x)
+                        else (
+                            str(x)
+                            if isinstance(x, (int, float)) and not isinstance(x, bool) and pd.notna(x)
+                            else x
+                        )
+                    )
+            except Exception:
+                pass
+    # Pastikan record_id selalu terisi (kunci identitas pipeline)
+    if "record_id" in out.columns and out["record_id"].isna().any():
+        mask = out["record_id"].isna()
+        out.loc[mask, "record_id"] = [f"rec_{i+1:06d}" for i in out.index[mask]]
+    if "record_id" in out.columns:
+        out["record_id"] = out["record_id"].astype(str)
     if evidence is not None:
         evidence.update(date_evidence)
     return out

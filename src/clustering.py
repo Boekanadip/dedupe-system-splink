@@ -60,10 +60,12 @@ def guard_against_scope_downgrade(full: bool, force: bool) -> None:
 
 
 def connected_components(
-    record_ids: list[str], edges: pd.DataFrame
+    record_ids: list, edges: pd.DataFrame
 ) -> dict[str, str]:
 
-    parent = {rid: rid for rid in record_ids}
+    # Normalisasi ID ke string agar sort/union stabil meski ada nilai non-string/null.
+    norm = [str(rid) if rid is not None else "__missing__" for rid in record_ids]
+    parent = {rid: rid for rid in norm}
 
     def find(node: str) -> str:
         while parent[node] != node:
@@ -72,23 +74,27 @@ def connected_components(
         return node
 
     def union(a: str, b: str) -> None:
+        a = str(a) if a is not None else "__missing__"
+        b = str(b) if b is not None else "__missing__"
+        if a not in parent or b not in parent:
+            return
         root_a, root_b = find(a), find(b)
         if root_a != root_b:
-            # Pertahankan akar yang lebih kecil secara leksikografis sebagai wakil.
             low, high = sorted((root_a, root_b))
             parent[high] = low
 
-    for left, right in zip(edges["record_id_l"], edges["record_id_r"]):
-        union(left, right)
+    if not edges.empty:
+        for left, right in zip(edges["record_id_l"], edges["record_id_r"]):
+            union(left, right)
 
     groups: dict[str, list[str]] = {}
-    for rid in record_ids:
+    for rid in norm:
         groups.setdefault(find(rid), []).append(rid)
 
     entity_ids = {
         rid: f"ent_{i:06d}"
-        for i, root in enumerate(sorted(groups, key=lambda r: min(groups[r])), start=1)
-        for rid in groups[root]
+        for i, root in enumerate(sorted(groups, key=lambda r: str(min(groups[r]))), start=1)
+        for rid in sorted(groups[root])
     }
     return entity_ids
 

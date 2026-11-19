@@ -145,12 +145,12 @@ def pin_comparison_level(comparison, output_column_name: str, level_index: int, 
 def _normalize_fixed_m(comparisons):
     for i, comp in enumerate(comparisons):
         levels = comp.create_comparison_levels()
-        total = sum((lv.m_probability or 0) for lv in levels)
+        total = sum((getattr(lv, "m_probability", None) or 0) for lv in levels)
         if total > 0 and total != 1:
             comparisons[i] = cl.CustomComparison(
                 comparison_levels=[
                     lv.configure(
-                        m_probability=(lv.m_probability or 0) / total,
+                        m_probability=(getattr(lv, "m_probability", None) or 0) / total,
                         fix_m_probability=True,
                     )
                     for lv in levels
@@ -246,19 +246,19 @@ def build_location_comparison() -> cl.CustomComparison:
     state_match = (
         "state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r"
     )
-    three_of_four = (
+    two_fields = (
         "(address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r "
         "AND city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r)"
-        "OR (address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r "
+        " OR (address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r "
         "AND state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r)"
-        "OR (address_std_l IS NOT NULL AND address_std_r IS NOT NULL AND address_std_l = address_std_r "
+        " OR (city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r "
         "AND state_std_l IS NOT NULL AND state_std_r IS NOT NULL AND state_std_l = state_std_r)"
     )
     levels = [
         CustomLevel(location_null, label_for_charts="lokasi kosong").configure(
             is_null_level=True
         ),
-        CustomLevel(full_match, label_for_charts="alamat lengkap (4 field)").configure(
+        CustomLevel(full_match, label_for_charts="alamat lengkap (3 field)").configure(
             m_probability=0.40
         ),
         CustomLevel(street_match, label_for_charts="street cocok").configure(
@@ -270,7 +270,7 @@ def build_location_comparison() -> cl.CustomComparison:
         CustomLevel(state_match, label_for_charts="state cocok").configure(
             m_probability=0.30
         ),
-        CustomLevel(three_of_four, label_for_charts="3 dari 4 field cocok").configure(
+        CustomLevel(two_fields, label_for_charts="2 dari 3 field cocok").configure(
             m_probability=0.15
         ),
         ElseLevel().configure(m_probability=0.10),
@@ -490,46 +490,50 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
         ]
         comparisons.append(cl.CustomComparison(comparison_levels=levels, output_column_name="dob"))
     
-    
-    # Email blocking jika email_std dipilih
-    if "email_std" in selected_columns:
-        blocking_rules.append(block_on("email_std"))
-    
-    # Phone blocking jika phone_std dipilih
-    if "phone_std" in selected_columns:
-        blocking_rules.append(block_on("phone_std"))
-    
-    # City blocking jika city_std dipilih
-    if "city_std" in selected_columns:
-        blocking_rules.append(block_on("city_std"))
-    
-    # DOB blocking jika dob_std dipilih
-    if "dob_std" in selected_columns:
-        blocking_rules.append(block_on("dob_std"))
+    # --- BLOCKING RULES ---
+    # Prioritas: pakai union aturan benchmark yang kolomnya tersedia (paritas recall lebih baik),
+    # fallback ke blok minimal dari kolom terpilih.
+    selected_set = set(selected_columns)
+    blocking_rules = []
+    for _name, cols in load_benchmark_rules():
+        if all(c in selected_set for c in cols):
+            blocking_rules.append(block_on(*cols))
 
-    # Blocking tambahan untuk kandidat ambigu; tidak menggantikan exact blocks.
-    if "last_name_std" in selected_columns and "dob_year_std" in selected_columns:
-        blocking_rules.append(block_on("last_name_std", "dob_year_std"))
-    if "first_name_std" in selected_columns and "city_std" in selected_columns:
-        blocking_rules.append(block_on("first_name_std", "city_std"))
-    
-    # Default blocking jika hanya name yang dipilih (pakai last_name_std)
-    if not blocking_rules and has_name:
-        blocking_rules.append(block_on("last_name_std"))
-    
-    # Default blocking jika hanya address yang dipilih (pakai city_std)
-    if not blocking_rules and has_location:
-        blocking_rules.append(block_on("city_std"))
-    
-    if not blocking_rules and has_dob:
-        if "dob_year_std" in selected_columns:
-            blocking_rules.append(block_on("dob_year_std"))
-        elif "dob_std" in selected_columns:
-            blocking_rules.append(block_on("dob_std"))
-    
-    # Fallback terakhir: gunakan last_name_std sebagai blocking (hampir pasti ada)
     if not blocking_rules:
-        blocking_rules.append(block_on("last_name_std"))
+        if "email_std" in selected_columns:
+            blocking_rules.append(block_on("email_std"))
+        if "phone_std" in selected_columns:
+            blocking_rules.append(block_on("phone_std"))
+        if "city_std" in selected_columns:
+            blocking_rules.append(block_on("city_std"))
+        if "dob_std" in selected_columns:
+            blocking_rules.append(block_on("dob_std"))
+        if "last_name_std" in selected_columns and "dob_year_std" in selected_columns:
+            blocking_rules.append(block_on("last_name_std", "dob_year_std"))
+        if "first_name_std" in selected_columns and "city_std" in selected_columns:
+            blocking_rules.append(block_on("first_name_std", "city_std"))
+        if not blocking_rules and has_name:
+            blocking_rules.append(block_on("last_name_std"))
+        if not blocking_rules and has_location:
+            blocking_rules.append(block_on("city_std"))
+        if not blocking_rules and has_dob:
+            if "dob_year_std" in selected_columns:
+                blocking_rules.append(block_on("dob_year_std"))
+            elif "dob_std" in selected_columns:
+                blocking_rules.append(block_on("dob_std"))
+        if not blocking_rules:
+            blocking_rules.append(block_on("last_name_std"))
+
+    # Deduplikasi rule blocking identik
+    seen_blocks = set()
+    uniq_blocks = []
+    for br in blocking_rules:
+        key = repr(br)
+        if key in seen_blocks:
+            continue
+        seen_blocks.add(key)
+        uniq_blocks.append(br)
+    blocking_rules = uniq_blocks
     
     # Normalisasi m_probability agar jumlah per komparasi = 1
     comparisons = _normalize_fixed_m(comparisons)
@@ -608,8 +612,13 @@ def apply_business_rules(pred_df: pd.DataFrame, verbose: bool = False) -> pd.Dat
         left, right = out[f"{col}_l"], out[f"{col}_r"]
         keys_same &= left.notna() & right.notna() & left.eq(right)
 
-    force_match = keys_same
-    force_review = pd.Series(False, index=out.index)
+    dob_l = out.get("dob_std_l")
+    dob_r = out.get("dob_std_r")
+    if dob_l is not None and dob_r is not None:
+        dob_both = dob_l.notna() & dob_r.notna() & (dob_l == dob_r)
+    else:
+        dob_both = pd.Series(False, index=out.index)
+    unverified_dob = keys_same & ~dob_both
 
     any_agree = pd.Series(False, index=out.index)
     for col in ZERO_EVIDENCE_FIELDS:
@@ -620,28 +629,22 @@ def apply_business_rules(pred_df: pd.DataFrame, verbose: bool = False) -> pd.Dat
     force_non = ~any_agree
 
     out["business_rule"] = None
-    out.loc[force_match, "business_rule"] = "strong_agreement_email_name_address"
-    out.loc[force_non & ~force_non_by_email_fullname, "business_rule"] = "no_field_agreement"
+    out.loc[keys_same & dob_both, "business_rule"] = "strong_agreement_email_name_address"
+    out.loc[unverified_dob, "business_rule"] = "unverified_dob"
+    out.loc[force_non & ~force_non_by_email_fullname & ~unverified_dob, "business_rule"] = "no_field_agreement"
     out.loc[force_non_by_email_fullname, "business_rule"] = "conflicting_email_fullname"
 
-    # match_probability dan threshold yang sudah dihitung model.
+    out.loc[unverified_dob, "decision"] = "REVIEW"
+
+    # match_probability dan threshold tetap sumber decision utama; unverified_dob override ke REVIEW.
     if verbose:
+        strong_count = int((keys_same & dob_both).sum())
         print(
-            f"Business-rule evidence: strong={int(force_match.sum()):,}, "
+            f"Business-rule evidence: strong={strong_count:,}, "
+            f"unverified_dob={int(unverified_dob.sum()):,}, "
             f"no_agreement={int(force_non.sum()):,}, "
-            f"conflict_email_fullname={int(force_non_by_email_fullname.sum()):,}; "
-            "decision tidak ditimpa"
+            f"conflict_email_fullname={int(force_non_by_email_fullname.sum()):,}"
         )
-    # Jika nama+email+alamat sama persis tapi DOB beda/kosong, jadikan REVIEW
-    # demi manusia bisa memeriksa kapanDOBnya tidak konsisten.
-    dob_l = out.get("dob_std_l")
-    dob_r = out.get("dob_std_r")
-    if dob_l is not None and dob_r is not None:
-        dob_both = dob_l.notna() & dob_r.notna() & (dob_l == dob_r)
-        unverified = keys_same & ~dob_both
-        already = out["business_rule"].isna()
-        out.loc[unverified & already, "business_rule"] = "unverified_dob"
-        out.loc[unverified & already, "decision"] = "REVIEW"
     return out
 
 
@@ -662,28 +665,40 @@ def _fuzzy_match_candidates(
             values = new_df[col].dropna().astype(str)
             values = values[values.str.len() > 0]
             if not values.empty:
-                candidate_mask |= existing_df[col].astype(str).isin(values)
+                candidate_mask |= existing_df[col].astype(str).isin(set(values))
 
     # Fuzzy match untuk nama dan kota (ketemu duplikat beda email)
     fuzzy_fields = ["first_name_std", "last_name_std", "city_std"]
     for col in fuzzy_fields:
         if col in columns and col in new_df.columns and col in existing_df.columns:
-            new_values = new_df[col].dropna().astype(str)
-            new_values = new_values[new_values.str.len() > 1]
-            existing_values = existing_df[col].dropna().astype(str)
-            existing_unique = existing_values.unique().tolist()
-
-            for _, nv in new_values.items():
-                if pd.isna(nv) or len(str(nv)) < 2:
-                    continue
-                matches = process.extract(
-                    str(nv), existing_unique,
-                    scorer=fuzz.ratio,
-                    score_cutoff=threshold,
-                )
-                if matches:
-                    similar_values = [m[0] for m in matches]
+            new_vals = new_df[col].dropna().astype(str)
+            new_vals = new_vals[new_vals.str.len() > 1].unique().tolist()
+            if not new_vals:
+                continue
+            ex_series = existing_df[col].dropna().astype(str)
+            ex_unique = ex_series[ex_series.str.len() > 1].unique().tolist()
+            if not ex_unique:
+                continue
+            # Batch: cdist lebih cepat daripada loop extract per nilai
+            try:
+                scores = process.cdist(new_vals, ex_unique, scorer=fuzz.ratio, score_cutoff=threshold)
+                hit_idx = set()
+                for i in range(len(new_vals)):
+                    row = scores[i]
+                    # rapidfuzz returns 0 for below cutoff in cdist
+                    for j, sc in enumerate(row):
+                        if sc >= threshold:
+                            hit_idx.add(j)
+                if hit_idx:
+                    similar_values = {ex_unique[j] for j in hit_idx}
                     candidate_mask |= existing_df[col].astype(str).isin(similar_values)
+            except Exception:
+                # Fallback aman bila cdist tidak tersedia/format berbeda
+                for nv in new_vals:
+                    matches = process.extract(nv, ex_unique, scorer=fuzz.ratio, score_cutoff=threshold)
+                    if matches:
+                        similar_values = [m[0] for m in matches]
+                        candidate_mask |= existing_df[col].astype(str).isin(similar_values)
 
     return candidate_mask
 
@@ -767,7 +782,7 @@ def train_and_predict(
         preds = add_decision(linker.inference.predict().as_pandas_dataframe())
         return apply_business_rules(preds, verbose=verbose), linker
 
-    # Batas DuckDB: mencegah konsumsi RAM >80% di laptop 16GB
+    # Batas DuckDB: mencegah konsumsi RAM >80% di laptop
     import duckdb
     duckdb.execute("SET memory_limit='6GB'")
     duckdb.execute("SET threads=4")
@@ -798,7 +813,7 @@ def train_and_predict(
         pred_df = add_decision(linker.inference.predict().as_pandas_dataframe())
         return apply_business_rules(pred_df, verbose=verbose), linker
     
-    # Latih parameter pada data training terpisah; scoring tetap pada kandidat df.
+    # Latih parameter pada data training terpisah
     train_frame = training_df if training_df is not None else df
     if full_u_estimation:
         total_pairs = len(train_frame) * (len(train_frame) - 1) // 2

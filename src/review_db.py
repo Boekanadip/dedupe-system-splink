@@ -54,14 +54,9 @@ def _mirror_decision(frame: pd.DataFrame) -> None:
 
 
 def _connect():
-    import psycopg2
-    return psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", 5432)),
-        dbname=os.getenv("POSTGRES_DB", "crm"),
-        user=os.getenv("POSTGRES_USER", "crm_user"),
-        password=os.getenv("POSTGRES_PASSWORD", "crm_password_2026"),
-    )
+    # Gunakan konfigurasi DB yang sama dengan seluruh aplikasi.
+    from .db import get_connection
+    return get_connection()
 
 
 def ensure_table() -> None:
@@ -73,6 +68,10 @@ def ensure_table() -> None:
                 record_id_r VARCHAR(255) NOT NULL,
                 stratum VARCHAR(100) NOT NULL DEFAULT 'manual_review',
                 match_probability DOUBLE PRECISION,
+                system_decision VARCHAR(20),
+                human_decision VARCHAR(20),
+                verification_status VARCHAR(20) NOT NULL DEFAULT 'unverified',
+                verified_at TIMESTAMPTZ,
                 evidence JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                 label VARCHAR(20),
                 review_status VARCHAR(20) NOT NULL DEFAULT 'pending'
@@ -85,6 +84,13 @@ def ensure_table() -> None:
                 UNIQUE(record_id_l, record_id_r)
             )
         """)
+        for column, definition in {
+            "system_decision": "VARCHAR(20)",
+            "human_decision": "VARCHAR(20)",
+            "verification_status": "VARCHAR(20) NOT NULL DEFAULT 'unverified'",
+            "verified_at": "TIMESTAMPTZ",
+        }.items():
+            cur.execute(f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS {column} {definition}")
         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_review_records_status ON {TABLE}(review_status)")
         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_review_records_probability ON {TABLE}(match_probability)")
 
@@ -99,7 +105,7 @@ def _row_to_dict(row, columns):
 def load_queue() -> pd.DataFrame:
     ensure_table()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT review_id, record_id_l, record_id_r, stratum, match_probability, evidence, label, review_status, reviewer, reviewer_note, updated_at FROM {TABLE} ORDER BY match_probability DESC NULLS LAST, review_id")
+        cur.execute(f"SELECT review_id, record_id_l, record_id_r, stratum, match_probability, system_decision, human_decision, verification_status, verified_at, evidence, label, review_status, reviewer, reviewer_note, updated_at FROM {TABLE} ORDER BY match_probability DESC NULLS LAST, review_id")
         rows = cur.fetchall()
         columns = [d[0] for d in cur.description]
     df = pd.DataFrame([_row_to_dict(row, columns) for row in rows])
@@ -115,6 +121,9 @@ AGREE_COLS = ["agree_email", "agree_phone", "agree_dob", "agree_name", "agree_ci
 
 def upsert_queue(frame: pd.DataFrame) -> int:
     if frame.empty:
+        return 0
+    if os.getenv("SKIP_REVIEW_DB") == "1":
+        _mirror_csv(frame)
         return 0
     ensure_table()
     frame = frame.copy()
@@ -171,13 +180,19 @@ def update_decisions(frame: pd.DataFrame) -> int:
     count = 0
     with _connect() as conn, conn.cursor() as cur:
         for row in frame.to_dict("records"):
-            label = row.get("label") or None
+            label = row.get("label") or row.get("human_decision") or None
             status = "reviewed" if label else "pending"
-            cur.execute(f"""UPDATE {TABLE} SET label=%s, reviewer=%s, reviewer_note=%s,
-                review_status=%s, reviewed_at=%s, updated_at=CURRENT_TIMESTAMP
+            verified = bool(label)
+            cur.execute(f"""UPDATE {TABLE} SET label=%s, human_decision=%s,
+                reviewer=%s, reviewer_note=%s, review_status=%s,
+                verification_status=%s, verified_at=%s, reviewed_at=%s,
+                updated_at=CURRENT_TIMESTAMP
                 WHERE record_id_l=%s AND record_id_r=%s""",
-                (label, row.get("reviewer") or None, row.get("reviewer_note") or None,
-                 status, datetime.now(timezone.utc) if label else None,
+                (label, label, row.get("reviewer") or None,
+                 row.get("reviewer_note") or None, status,
+                 "verified" if verified else "unverified",
+                 datetime.now(timezone.utc) if verified else None,
+                 datetime.now(timezone.utc) if verified else None,
                  str(row["record_id_l"]), str(row["record_id_r"])))
             count += cur.rowcount
     _mirror_decision(frame)

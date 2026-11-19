@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import LABELS_DIR, OUTPUT_DIR
 from src.data_access import read_pairs, read_processed
+from src.labels import agree_fields, attach_evidence
 from src.review_db import load_queue as load_db_queue, upsert_queue
 from src.ui import (
     format_probability,
@@ -33,6 +34,10 @@ page_header(
 )
 render_sidebar("queue")
 how_to_read()
+
+if "msg" in st.session_state:
+    st.info(st.session_state["msg"])
+    del st.session_state["msg"]
 
 QUEUE_PATH = LABELS_DIR / "review_queue.csv"
 PREDS_PATH = OUTPUT_DIR / "splink_predictions.parquet"
@@ -112,3 +117,35 @@ st.caption(
     "data asli apa pun."
 )
 BULK_ADD_CAP = 5000
+
+candidates = filtered[~filtered["sudah_di_antrean"]].copy()
+capped = len(candidates) > BULK_ADD_CAP
+if capped:
+    candidates = candidates.head(BULK_ADD_CAP)
+
+if candidates.empty:
+    st.success("Semua pasangan yang tampil sudah masuk antrean.")
+else:
+    st.caption(
+        f"{len(candidates):,} pasangan belum masuk antrean"
+        + (" (dibatasi 5.000)." if capped else ".")
+    )
+    if st.button("Masukkan ke antrean", type="primary"):
+        records = read_processed()
+        records["record_id"] = records["record_id"].astype(str)
+        new = candidates[["record_id_l", "record_id_r", "match_probability"]].copy()
+        new["record_id_l"] = new["record_id_l"].astype(str)
+        new["record_id_r"] = new["record_id_r"].astype(str)
+        new = agree_fields(records, new)
+        new = attach_evidence(records, new)
+        new["stratum"] = "review_gap"
+        new["label"] = None
+        new["review_status"] = "pending"
+        new["reviewer"] = None
+        new["reviewer_note"] = None
+        try:
+            added = upsert_queue(new)
+            st.session_state["msg"] = f"Berhasil memasukkan {added:,} pasangan."
+        except Exception as exc:
+            st.session_state["msg"] = f"Gagal memasukkan: {exc}"
+        st.rerun()

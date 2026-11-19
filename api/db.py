@@ -6,9 +6,9 @@ from contextlib import contextmanager
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Load .env file
+# Load .env file (force reload)
 env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=env_path, override=True)
 
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")

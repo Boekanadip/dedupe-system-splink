@@ -49,7 +49,28 @@ selected = st.selectbox("Pilih batch", [f.name for f in staged_only])
 if not selected:
     st.stop()
 batch_file = selected.replace(".parquet", "")
-staging = pd.read_parquet(STAGING_DIR / selected)
+staging_path = STAGING_DIR / selected
+staging = pd.read_parquet(staging_path)
+
+# Proposal lama tidak boleh ditinjau atau diterapkan.
+if "model_version" in staging.columns:
+    from src import model_lifecycle
+    active_model = model_lifecycle.latest()
+    active_version = active_model.name if active_model else None
+    staged_versions = staging["model_version"].dropna().astype(str).unique()
+    if active_version is None:
+        st.error("Tidak ada model aktif. Latih model sebelum memproses batch.")
+        st.stop()
+    if len(staged_versions) != 1 or staged_versions[0] != active_version:
+        code, log = run(["--reject", "--batch", batch_file])
+        if code != 0:
+            st.error(f"Proposal lama gagal ditolak otomatis:\n{log[-1500:]}")
+        else:
+            st.warning(
+                f"Proposal lama ({', '.join(staged_versions) or 'tanpa versi'}) telah ditolak otomatis. "
+                f"Model aktif: {active_version}. Stage ulang batch ini."
+            )
+        st.stop()
 
 # ---- jawaban tanggal yang dipakai batch ini
 try:

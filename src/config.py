@@ -256,7 +256,7 @@ COLUMN_MAP = {
     "first_name": "first_name",
     "last_name": "last_name",
     "email": "email",
-    "phone": "phone",  # canonical input; standardize() also accepts phone_number
+    "phone": "phone_number",
     "gender": "gender",
     "dob": "dob",
     "signup_date": "signup_date",
@@ -305,6 +305,9 @@ RANDOM_SEED = 42
 SMOKE_SAMPLE_SIZE = 10000
 
 # Default blocking rules (fallback when no config file).
+# Unik berdasarkan kombinasi kolom (union deduplikasi kandidat; hindari hitung ulang blok identik).
+# Eksperimen (40k processed, gold+device-truth): email_domain_name & name_prefix_state
+# redundan (0 marginal coverage) tapi menambah kandidat; dipangkas → 175,832 → 86,699 (-51%), coverage tetap 100%.
 DEFAULT_BENCHMARK_RULES: list[tuple[str, list[str]]] = [
     ("email_exact", ["email_std"]),
     ("phone_exact", ["phone_std"]),
@@ -314,16 +317,9 @@ DEFAULT_BENCHMARK_RULES: list[tuple[str, list[str]]] = [
     ("address_city", ["address_std", "city_std"]),
     ("phone_prefix", ["phone_pre7"]),
     ("name_prefix", ["last_name_std_pre3", "first_name_std_pre3"]),
-    ("name_prefix_state", ["last_name_std_pre3", "state_std"]),
-    ("email_domain_name", ["email_domain_pre4", "last_name_std_pre3", "first_name_std_pre3"]),
     ("city_state_dob_year", ["city_std", "state_std", "dob_year_std"]),
-    # Tambahan blocking rules baru untuk kurangi candidate pairs
-    ("email_domain", ["email_domain_pre4", "first_name_std_pre3"]),
     ("city_state_dob", ["city_std", "state_std", "dob_std"]),
-    ("phone_last4", ["phone_last4", "dob_year_std"]),  # 4 digit telepon + tahun lahir
-    # Blocking rules untuk fuzzy match
-    ("email_domain_fuzzy", ["email_domain_pre4", "first_name_std_pre3"]),
-    ("city_state_dob_fuzzy", ["city_std", "state_std", "dob_std"]),
+    ("phone_last4", ["phone_last4", "dob_year_std"]),
     ("name_fuzzy_last4", ["last_name_std_pre3", "phone_last4"]),
 ]
 
@@ -339,12 +335,24 @@ def load_benchmark_rules(config_path: str | Path | None = None) -> list[tuple[st
     from pathlib import Path
     import json
 
+    retired = {"email_local_name"}
     path = Path(config_path) if config_path else PROJECT_ROOT / "config" / "blocking_rules.json"
     if not path.exists():
         return DEFAULT_BENCHMARK_RULES
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return [(item["name"], item["columns"]) for item in data]
+        rules = [(item["name"], item["columns"]) for item in data]
+        out: list[tuple[str, list[str]]] = []
+        seen: set[tuple[str, ...]] = set()
+        for name, cols in rules:
+            if name in retired:
+                continue
+            key = tuple(cols)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((name, cols))
+        return out
     except (json.JSONDecodeError, KeyError, TypeError, OSError):
         return DEFAULT_BENCHMARK_RULES
 
