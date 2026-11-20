@@ -18,23 +18,25 @@ from src.export import csv_bytes, save_to_database
 from src.splink_model import (build_dynamic_settings_from_columns, 
                              infer_selected_columns_from_df, 
                              add_decision_dynamic,
-                             apply_business_rules)
-from src.config import (MATCH_THRESHOLD, REVIEW_THRESHOLD, 
-                        LAMBDA_RECALL_ASSUMPTION, DETERMINISTIC_RULES)
-
-try:
-    from src.config import MATCH_THRESHOLD, REVIEW_THRESHOLD
-except Exception:  # config may import heavy deps in some deployments
-    MATCH_THRESHOLD, REVIEW_THRESHOLD = 0.84, 0.35
+                             add_decision,
+                             apply_business_rules,
+                             DETERMINISTIC_RULES)
+from src.config import MATCH_THRESHOLD, REVIEW_THRESHOLD, LAMBDA_RECALL_ASSUMPTION
 
 app = FastAPI(title="CRM Entity Resolution API")
 
-# Enable CORS for UI
+# CORS — batasi ke origin UI yang dikenal (bukan wildcard)
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:8501,http://localhost:8050,http://127.0.0.1:8501,http://127.0.0.1:8050",
+    ).split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -84,8 +86,8 @@ def pair_detail(id1: str, id2: str):
 
 @app.post("/api/run-dedup")
 def run_dedup(
-    selected_columns: list[str] = [],
-    scope: str = Query("sample", regex="^(sample|full)$"),
+    selected_columns: list[str] | None = None,
+    scope: str = Query("sample", pattern="^(sample|full)$"),
 ):
     """
     Run deduplication with user-selected columns.
@@ -105,7 +107,7 @@ def run_dedup(
     """
     import pandas as pd
     from src.config import PROCESSED_DATA_PATH, OUTPUT_DIR, PREDICTIONS_PATH
-    from src import load_data  # helper sederhana
+    from src.load_data import load_data
     
     # --- Validasi dan persiapan kolom ---
     # Muat data untuk melihat kolom yang tersedia
@@ -117,6 +119,8 @@ def run_dedup(
     # Dapatkan daftar kolom standar yang valid
     valid_cols = infer_selected_columns_from_df(df_raw)
     
+    selected_columns = list(selected_columns or [])
+
     # Validasi: jika selected_columns kosong, gunakan semua yang valid
     if not selected_columns:
         selected_columns = valid_cols
@@ -156,34 +160,18 @@ def run_dedup(
     # Kita gunakan konfigurasi yang baru dibangun, tapi linker akan estimate params-nya
     linker = Linker(sdf, config["comparisons"], blocking_rules=config["blocking_rules"])
     
-    # Estimasi parameter menggunakan EM standar pada konfigurasi baru
-    # Ini akan mengambil waktu tergantung jumlah pasangan dan kolom yang dipilih
+    # Estimasi parameter (EM) — gagal → kembalikan error jelas, jangan pakai placeholder
     try:
         linker.training.estimate_u_using_random_sampling(max_pairs=100000, seed=42)
-        
-        # Estimasi m-probability untuk deterministic rules dan custom comparisons
-        # Lakukan pada rules yang sudah dibangun
-        for name, rule in []:  # placeholder - diisi oleh rules dari config
-            pass
-        
-        # Estimasi parameter untuk blocking rules
         linker.training.estimate_probability_two_random_records_match(
             DETERMINISTIC_RULES, recall=LAMBDA_RECALL_ASSUMPTION
         )
-        
     except Exception as e:
-        # Jika gagal estimates (misal data terlalu sedikit), fallback ke konfigurasi default
-        import traceback
-        traceback.print_exc()
-        # Fallback: gunakan settings creator dari konfigurasi lama
-        from splink import SettingsCreator
-        default_settings = SettingsCreator(
-            link_type="dedupe_only",
-            unique_id_column_name="record_id",
-            comparisons=[...],  # comparisons default
-            blocking_rules_to_generate_predictions=[block_on("email_std"), block_on("phone_pre7")],
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal estimasi parameter Splink: {type(e).__name__}: {e}. "
+                   "Coba kurangi jumlah kolom atau gunakan scope=sample.",
         )
-        linker = Linker(sdf, default_settings)
     
     # Prediksi dan tambahkan decision
     pred_df = add_decision(linker.inference.predict().as_pandas_dataframe())
@@ -227,12 +215,20 @@ def run_dedup(
 @app.get("/health")
 def health():
     """Health check endpoint."""
+    model_version = None
+    if MODEL_PATH.exists():
+        try:
+            import json
+            model_version = json.loads(MODEL_PATH.read_text()).get("version")
+        except Exception:
+            pass
     return {
         "status": "healthy",
         "timestamp": pd.Timestamp.utcnow().isoformat(),
         "predictions_loaded": _predictions_df is not None,
         "predictions_count": len(_predictions_df) if _predictions_df is not None else 0,
-        "model_path_exists": MODEL_PATH.exists()
+        "model_path_exists": MODEL_PATH.exists(),
+        "model_version": model_version,
     }
 
 
@@ -282,30 +278,6 @@ def pairs(status: str = Query(None), page: int = Query(1, ge=1), per_page: int =
     })
 
 
-@app.get("/api/pair/{id1}/{id2}")
-def pair_detail(id1: str, id2: str):
-    """Get detail for specific pair."""
-    df = get_predictions()
-    if df is None:
-        raise HTTPException(status_code=404, detail="No predictions found")
-    
-    mask = (
-        (df["record_id_l"] == id1) & (df["record_id_r"] == id2) |
-        (df["record_id_l"] == id2) & (df["record_id_r"] == id1)
-    )
-    row = df[mask]
-    if row.empty:
-        raise HTTPException(status_code=404, detail="Pair not found")
-    
-    row = row.iloc[0]
-    return JSONResponse({
-        "record_id_l": row["record_id_l"],
-        "record_id_r": row["record_id_r"],
-        "match_probability": float(row["match_probability"]),
-        "decision": row["decision"]
-    })
-
-
 @app.get("/api/search")
 def search(q: str = Query("", min_length=1)):
     """Search record by ID."""
@@ -338,9 +310,14 @@ async def batch_predict(file: UploadFile = File(...)):
     Batch predict from CSV/Parquet file.
     Returns match predictions for all pairs in the file.
     """
+    # Batasi ukuran file (maks 10MB)
+    MAX_FILE_SIZE = 10 * 1024 * 1024
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File terlalu besar. Maksimal 10MB.")
+
     # Save uploaded file
     with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
     
@@ -353,11 +330,13 @@ async def batch_predict(file: UploadFile = File(...)):
         else:
             raise HTTPException(status_code=400, detail="Only CSV or Parquet files supported")
         
-        # Basic validation - check for required columns
+        # Validasi schema input
         required_cols = ['record_id', 'first_name', 'last_name']
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             raise HTTPException(status_code=400, detail=f"Missing required columns: {missing}")
+        if df.empty:
+            raise HTTPException(status_code=400, detail="File tidak memiliki baris data")
         
         # Return summary (actual prediction would require model loading)
         return JSONResponse({
@@ -367,6 +346,8 @@ async def batch_predict(file: UploadFile = File(...)):
             "message": "Data received. Run scripts/batch_predict.py for full pipeline."
         })
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -397,12 +378,23 @@ def model_info():
     with open(MODEL_PATH) as f:
         model_data = json.load(f)
     
+    # models/latest.json memakai key "version" & "created_at"; model run
+    # menyimpan threshold di models/<version>/thresholds.json
+    version = model_data.get("version") or model_data.get("model_version")
+    thresholds_path = Path(model_data.get("path", "")) / "thresholds.json"
+    thresholds = {}
+    if thresholds_path.exists():
+        try:
+            thresholds = json.loads(thresholds_path.read_text())
+        except Exception:
+            pass
+
     return JSONResponse({
-        "model_version": model_data.get("model_version"),
-        "trained_at": model_data.get("trained_at"),
-        "threshold_match": model_data.get("threshold_match", 0.84),
-        "threshold_review": model_data.get("threshold_review", 0.35),
-        "threshold_non_match": model_data.get("threshold_non_match", 0.35),
+        "model_version": version,
+        "created_at": model_data.get("created_at"),
+        "trained_at": model_data.get("trained_at") or model_data.get("created_at"),
+        "threshold_match": thresholds.get("match_threshold", model_data.get("threshold_match", 0.84)),
+        "threshold_review": thresholds.get("review_threshold", model_data.get("threshold_review", 0.35)),
         "status": "loaded"
     })
 
