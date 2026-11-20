@@ -24,7 +24,6 @@ DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST
 
 @contextmanager
 def get_connection():
-    """Get database connection with context manager."""
     conn = psycopg2.connect(DATABASE_URL)
     try:
         yield conn
@@ -33,7 +32,6 @@ def get_connection():
 
 @contextmanager
 def get_cursor():
-    """Get cursor with context manager."""
     with get_connection() as conn:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         try:
@@ -47,7 +45,6 @@ def get_cursor():
 
 
 def get_match_stats():
-    """Get match statistics from database."""
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
@@ -59,7 +56,6 @@ def get_match_stats():
 
 
 def get_review_queue_stats():
-    """Get review queue statistics."""
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
