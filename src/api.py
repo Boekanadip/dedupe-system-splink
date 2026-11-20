@@ -21,7 +21,11 @@ from .config import MASTER_PATH, PROJECT_ROOT
 from .health import ALERTS, build_health
 
 API_KEY = os.getenv("DEDUP_API_KEY", "dev-api-key-ganti-ini")
-DEV_MODE = API_KEY.startswith("dev-api-key")
+_dev_flag = os.getenv("DEDUP_API_DEV_MODE")
+if _dev_flag is not None:
+    DEV_MODE = _dev_flag.strip().lower() in {"1", "true", "yes", "on"}
+else:
+    DEV_MODE = API_KEY.startswith("dev-api-key")
 if DEV_MODE:
     print("[WARNING] DEDUP_API_KEY belum diset — API berjalan mode dev (tanpa auth).")
 
@@ -48,6 +52,16 @@ def _query_master(column: str, value: str) -> pd.DataFrame:
     if not MASTER_PATH.exists():
         return pd.DataFrame()
     con = duckdb.connect()
+    # Hindari error kolom saat parquet sudah tidak punya kolom tersebut;
+    # endpoint dapat return 404 sebagai catatan tidak ditemukan.
+    try:
+        cols = con.execute(f"DESCRIBE SELECT * FROM {MASTER_PATH}").fetchall()
+        col_names = {c[0] for c in cols}
+        if column not in col_names:
+            return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+    con.close()
     try:
         return con.execute(
             f"SELECT * FROM read_parquet('{MASTER_PATH}') WHERE {column} = ?",
@@ -63,14 +77,27 @@ def _row_dict(df: pd.DataFrame) -> dict:
 
 def _prometheus_text() -> str:
     h = build_health()
-    registry = CollectorRegistry()
+    families: dict[str, GaugeMetricFamily] = {}
 
     def gauge(name: str, value, help_: str, labels: dict | None = None) -> None:
         if value is None:
             return
-        m = GaugeMetricFamily(name, help_, labels=labels or {})
-        m.add_metric(labels or [], value)
-        registry.register(m)
+        labels = labels or {}
+        family = families.get(name)
+        if family is None:
+            family = GaugeMetricFamily(name, help_, labels=list(labels) or None)
+            families[name] = family
+        family.add_metric([str(v) for v in labels.values()], float(value))
+
+    # Satu collector untuk semua family; GaugeMetricFamily sendiri tidak
+    # hashable di prometheus_client 0.26 sehingga tidak bisa didaftarkan
+    # langsung ke registry.
+    class _Collector:
+        def collect(self):
+            return iter(families.values())
+
+    registry = CollectorRegistry()
+    registry.register(_Collector())
 
     model = h["model_output"]
     gauge("dedup_review_queue_pending", model.get("review_queue_pending"),
@@ -169,9 +196,10 @@ def review_queue(request: Request) -> Response:
 
 
 # ------------------------------------- POST /review/{pair_id}/label
-def review_label(request: Request, pair_id: str) -> Response:
+def review_label(request: Request) -> Response:
     if not _authed(request):
         return _unauth()
+    pair_id = request.path_params["pair_id"]
     left, _, right = pair_id.partition("__")
     if not right:
         return JSONResponse({"detail": "pair_id format: record_l__record_r"},
@@ -227,19 +255,19 @@ def _review_label_write(request: Request, left: str, right: str) -> Response:
 
 
 # ------------------------------------------------ /entities, /records
-def entity(request: Request, eid: str) -> Response:
+def entity(request: Request) -> Response:
     if not _authed(request):
         return _unauth()
-    df = _query_master("entity_id", eid)
+    df = _query_master("entity_id", request.path_params["eid"])
     if df.empty:
         return JSONResponse({"detail": "entity tidak ditemukan"}, status_code=404)
     return JSONResponse(_row_dict(df))
 
 
-def record_detail(request: Request, rid: str) -> Response:
+def record_detail(request: Request) -> Response:
     if not _authed(request):
         return _unauth()
-    df = _query_master("record_id", rid)
+    df = _query_master("record_id", request.path_params["rid"])
     if df.empty:
         return JSONResponse({"detail": "record tidak ditemukan"}, status_code=404)
     return JSONResponse(_row_dict(df))
@@ -267,9 +295,10 @@ async def ingest(request: Request) -> Response:
     return await _run_subprocess(cmd, timeout)
 
 
-async def ingest_apply(request: Request, batch: str) -> Response:
+async def ingest_apply(request: Request) -> Response:
     if not _authed(request):
         return _unauth()
+    batch = request.path_params["batch"]
     body = await request.json() if request.headers.get(
         "content-type", "").startswith("application/json") else {}
     timeout = int(body.get("timeout", 600))
