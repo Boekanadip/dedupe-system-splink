@@ -43,7 +43,7 @@ def main():
         (OUTPUT / "meta_sync.json").write_text(json.dumps(out, indent=2, ensure_ascii=False))
         print("=> Dis ekspor ke outputs/meta_sync.json")
     else:
-        print("✅ Meta sudah konsisten")
+        print("Meta sudah konsisten")
 
 
 if __name__ == "__main__":
