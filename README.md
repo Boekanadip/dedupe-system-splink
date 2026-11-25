@@ -35,10 +35,10 @@ streamlit run app.py --server.port 8501
 
 Gunakan `app.py` sebagai entrypoint utama. File `pages/app_streamlit.py` adalah halaman Upload yang didaftarkan melalui `st.navigation`.
 
-## Cara memakai aplikasi
+## Cara memakai dashboard
 
-1. Buka **Upload**.
-2. Pilih **File CSV**.
+1. Buka **Upload**/**connect database**
+2. Pilih **File CSV**
 3. Upload file customer.
 4. Periksa jumlah baris, kolom, delimiter, encoding, nilai kosong, dan duplikat persis.
 5. Pilih kolom pembanding: nama, email, telepon, alamat, kota, provinsi, negara, dan tanggal lahir sesuai data yang tersedia.
