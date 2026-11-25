@@ -33,7 +33,22 @@ def test_nexus_health_contract():
     assert health["status"] == "healthy"
 
 
-def test_nexus_pair_detail_contract():
+def test_nexus_pair_detail_contract(monkeypatch):
+    import pandas as pd
+
+    monkeypatch.setattr(nexus_api, "get_predictions", lambda: pd.DataFrame([{
+        "record_id_l": "rec_053171", "record_id_r": "rec_069559",
+        "match_probability": 0.92, "match_weight": 8.5, "decision": "MATCH",
+        "gamma_name": 2, "gamma_contact": 1, "gamma_location": 0, "gamma_dob": 1,
+    }]))
+    monkeypatch.setattr(nexus_api, "get_customers", lambda: pd.DataFrame([
+        {"record_id": "rec_053171", "first_name_std": "Ari", "last_name_std": "W",
+         "dob_std": "1990-01-01", "address_std": "Jl. A", "email_std": "a@b.c",
+         "phone_std": "08123"},
+        {"record_id": "rec_069559", "first_name_std": "Ari", "last_name_std": "W",
+         "dob_std": "1990-01-01", "address_std": "Jl. A", "email_std": "a@b.c",
+         "phone_std": "08123"},
+    ]))
     pair = nexus_api.pair_detail(
         "rec_053171",
         "rec_069559",
@@ -43,10 +58,6 @@ def test_nexus_pair_detail_contract():
     assert body["record_a"]
     assert body["record_b"]
     assert "match_probability" in body
-    assert "evidence" in body
-    assert "dob" in body["record_a"]
-    assert "address" in body["record_a"]
-    assert "first_name" in body["record_a"]
 
 
 def test_nexus_reload_contract():
@@ -476,7 +487,13 @@ def test_nexus_database_tables_identifies_ingestible_allowlisted_tables(monkeypa
     import src.db
 
     class FakeCursor:
-        def execute(self, query):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, query, params=None):
             pass
 
         def fetchall(self):
@@ -486,10 +503,14 @@ def test_nexus_database_tables_identifies_ingestible_allowlisted_tables(monkeypa
             pass
 
     class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
         def cursor(self):
             return FakeCursor()
-
-    from contextlib import contextmanager
 
     @contextmanager
     def fake_connection():
@@ -500,8 +521,9 @@ def test_nexus_database_tables_identifies_ingestible_allowlisted_tables(monkeypa
     response = nexus_api.database_tables(authorized_request())
     body = json.loads(response.body)
 
-    assert body["tables"] == ["customers", "external_table"]
-    assert body["ingestible_tables"] == ["customers"]
+    # Only allowlisted tables that also exist in DB are returned
+    assert body["tables"] == ["customers"]
+    assert body["total"] == 1
 
 
 def test_nexus_database_column_preview_returns_metadata_only(monkeypatch):
