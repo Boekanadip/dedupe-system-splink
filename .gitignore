@@ -136,6 +136,21 @@ score_production_audit.py
 dash_app.py
 
 
+# Node dependencies and build output
+node_modules/
+dist/
+
+# Installed agent skills (tooling, not application source)
+skills/
+data/skills/
+skills-lock.json
+package.json
+package-lock.json
+
+# Runtime registries
+data/dataset_registry.json
+data/job_registry.json
+
 # Alat lokal (repo terpisah, bukan kode aplikasi)
 .adal/
 .agents/

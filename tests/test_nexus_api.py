@@ -282,8 +282,8 @@ def test_nexus_create_job_does_not_run_repository_data_for_uploaded_dataset(monk
             {"dataset_id": "DS-TEST", "table": "crm_customers"},
         )
 
-    assert error.value.status_code == 501
-    assert "cannot safely process uploaded or ingested datasets" in error.value.detail
+    assert error.value.status_code == 404
+    assert "Dataset file not found on disk" in error.value.detail
     assert not job_registry_path.exists()
 
 
@@ -548,22 +548,23 @@ def test_nexus_database_column_preview_returns_metadata_only(monkeypatch):
     assert cursor.commands[1][1] == ("splink_data", "customers")
 
 
-def test_nexus_csv_upload_uses_validated_backend_dataset_contract(monkeypatch, tmp_path):
+def test_nexus_csv_upload_rejects_dataset_missing_active_model_columns(monkeypatch, tmp_path):
     upload_dir = tmp_path / "uploads"
     registry_path = tmp_path / "dataset_registry.json"
     monkeypatch.setattr(nexus_api, "DATASET_UPLOAD_DIR", upload_dir)
     monkeypatch.setattr(nexus_api, "DATASET_REGISTRY_PATH", registry_path)
-
     upload = nexus_api.UploadFile(
         io.BytesIO(b"record_id,first_name,last_name\nr1,Ari,Wijaya\n"),
         filename="customers.csv",
     )
-    response = asyncio.run(nexus_api.upload_dataset(authorized_request(), upload))
-    body = json.loads(response.body)
 
-    assert body["dataset"]["status"] == "Validated"
-    assert body["dataset"]["rows"] == 1
-    assert len(json.loads(registry_path.read_text(encoding="utf-8"))["datasets"]) == 1
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(nexus_api.upload_dataset(authorized_request(), upload))
+
+    assert error.value.status_code == 422
+    assert "active model" in error.value.detail
+    assert not registry_path.exists()
+    assert not list(upload_dir.glob("*"))
 
 
 def test_nexus_csv_upload_rejects_duplicate_record_ids(monkeypatch, tmp_path):

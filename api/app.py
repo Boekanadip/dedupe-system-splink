@@ -1338,25 +1338,46 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
     target.write_bytes(content)
     try:
         frame = pd.read_parquet(target) if suffix == ".parquet" else pd.read_csv(target)
+
+        validate_dataset_frame(frame)
+
+        # Check active model columns for uploaded datasets only.
+        # DB ingest datasets bypass this endpoint entirely.
+        from src.standardize import standardize
+        model_file = None
+        if MODEL_PATH.exists():
+            try:
+                pointer = json.loads(MODEL_PATH.read_text(encoding="utf-8"))
+                model_file = Path(pointer.get("path", "")) / "model.json"
+            except (OSError, ValueError):
+                model_file = None
+        if model_file and model_file.exists():
+            model = json.loads(model_file.read_text(encoding="utf-8"))
+            model_text = json.dumps(model.get("comparisons", []) + model.get("blocking_rules_to_generate_predictions", []))
+            required = set(__import__("re").findall(r"\b[a-z_]+_std\b", model_text))
+            unavailable = required - set(standardize(frame).columns)
+            if unavailable:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Dataset cannot run active model; missing standardized columns: {', '.join(sorted(unavailable))}",
+                )
+
+        dataset = {
+            "id": dataset_id,
+            "name": file.filename,
+            "filename": target.name,
+            "rows": len(frame),
+            "columns": len(frame.columns),
+            "status": "Validated",
+            "updated": datetime.now(timezone.utc).isoformat(),
+        }
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        raise
     except Exception as exc:
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=f"Invalid dataset file: {exc}")
 
-    try:
-        validate_dataset_frame(frame)
-    except HTTPException:
-        target.unlink(missing_ok=True)
-        raise
-
-    dataset = {
-        "id": dataset_id,
-        "name": file.filename,
-        "filename": target.name,
-        "rows": len(frame),
-        "columns": len(frame.columns),
-        "status": "Validated",
-        "updated": datetime.now(timezone.utc).isoformat(),
-    }
     try:
         register_dataset(dataset)
     except HTTPException:
@@ -1401,28 +1422,15 @@ def create_job(request: Request, data: dict):
 
         std_df = standardize(df_raw)
 
-        # Load trained Splink model from latest.json
-        model_settings = None
-        if MODEL_PATH.exists():
-            try:
-                import json
-                latest_meta = json.loads(MODEL_PATH.read_text(encoding="utf-8"))
-                model_file = Path(latest_meta.get("path", "")) / "model.json"
-                if model_file.exists():
-                    model_settings = json.loads(model_file.read_text(encoding="utf-8"))
-            except Exception:
-                model_settings = None
-
-        if model_settings is None:
-            from src.splink_model import build_dynamic_settings_from_columns, infer_selected_columns_from_df
-            from splink import SettingsCreator
-            valid_cols = infer_selected_columns_from_df(std_df)
-            config = build_dynamic_settings_from_columns(valid_cols)
-            model_settings = SettingsCreator(
-                link_type="dedupe_only",
-                comparisons=config["comparisons"],
-                blocking_rules_to_generate_predictions=config["blocking_rules"],
-            )
+        from splink import SettingsCreator
+        valid_cols = infer_selected_columns_from_df(std_df)
+        config = build_dynamic_settings_from_columns(valid_cols)
+        model_settings = SettingsCreator(
+            link_type="dedupe_only",
+            unique_id_column_name="record_id",
+            comparisons=config["comparisons"],
+            blocking_rules_to_generate_predictions=config["blocking_rules"],
+        )
 
         db_api = DuckDBAPI()
         sdf = db_api.register(std_df, table_name="input_data")
@@ -1431,16 +1439,31 @@ def create_job(request: Request, data: dict):
         pred_df = add_decision(linker.inference.predict().as_pandas_dataframe())
         pred_df = apply_business_rules(pred_df, verbose=False)
 
-        # Save predictions & customers so review queue and pair details load immediately
+        # Results and metadata must describe the same run. Write both together.
+        duration = round(time.perf_counter() - started, 2)
+        run_meta = {
+            "artifact": "splink_predictions",
+            "scope": "job",
+            "source": dataset_id,
+            "job_id": job_id,
+            "input_rows": len(df_raw),
+            "pairs_scored": len(pred_df),
+            "selected_columns": valid_cols,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "runtime_seconds": duration,
+        }
+
         PREDICTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
         pred_df.to_parquet(PREDICTIONS_PATH, index=False)
+        from src.config import write_meta
+        write_meta(PREDICTIONS_PATH, **run_meta)
         _predictions_df = pred_df
 
         PROCESSED_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
         std_df.to_parquet(PROCESSED_DATA_PATH, index=False)
+        write_meta(PROCESSED_DATA_PATH, **run_meta)
         _customers_df = std_df
 
-        duration = round(time.perf_counter() - started, 2)
         job_record = {
             "id": job_id,
             "dataset_id": dataset_id,
@@ -1448,8 +1471,9 @@ def create_job(request: Request, data: dict):
             "status": "Completed",
             "records_count": len(df_raw),
             "pairs_scored": len(pred_df),
+            "selected_columns": valid_cols,
             "duration": f"{duration}s",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": run_meta["created_at"],
         }
 
         # Update job registry

@@ -329,15 +329,11 @@ def build_settings():
 
 
 def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
-    
-    # Validasi: pastikan semua kolom yang dipilih ada di daftar valid
-    valid_columns = {
-        "first_name_std", "last_name_std",
-        "email_std", "phone_std",
-        "address_std", "city_std", "state_std", "country_std",
-        "dob_std", "dob_year_std"
-    }
-    
+    valid_columns = get_valid_comparison_columns()
+    selected_columns = list(dict.fromkeys(selected_columns))
+    if not selected_columns:
+        raise ValueError("Pilih setidaknya satu kolom standar untuk pencocokan.")
+
     invalid = [c for c in selected_columns if c not in valid_columns]
     if invalid:
         raise ValueError(
@@ -453,6 +449,18 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
             "city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r "
             "AND (state_std_l IS NULL OR state_std_r IS NULL OR state_std_l <> state_std_r)"
         )
+        if "city_std" not in selected_columns:
+            location_null = "address_std_l IS NULL OR address_std_r IS NULL"
+            full_match = full_match.replace("city_std_l IS NOT NULL AND city_std_r IS NOT NULL AND city_std_l = city_std_r ", "")
+            city_state = "1 = 0"
+            city_only = "1 = 0"
+        # Comparisons reference optional columns; use null expressions when absent.
+        for optional in ("address_std", "city_std", "state_std"):
+            if optional not in selected_columns:
+                location_null = location_null.replace(f"{optional}_l", "NULL").replace(f"{optional}_r", "NULL")
+                full_match = full_match.replace(f"{optional}_l", "NULL").replace(f"{optional}_r", "NULL")
+                city_state = city_state.replace(f"{optional}_l", "NULL").replace(f"{optional}_r", "NULL")
+                city_only = city_only.replace(f"{optional}_l", "NULL").replace(f"{optional}_r", "NULL")
         
         levels = [
             CustomLevel(location_null, label_for_charts="lokasi kosong").configure(is_null_level=True),
@@ -480,7 +488,17 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
             "AND dob_year_std_l IS NOT NULL AND dob_year_std_r IS NOT NULL "
             "AND ABS(CAST(dob_year_std_l AS INTEGER) - CAST(dob_year_std_r AS INTEGER)) <= 1"
         )
-        
+        if "dob_std" not in selected_columns:
+            dob_null = "dob_year_std_l IS NULL OR dob_year_std_r IS NULL"
+            match_exact = "1 = 0"
+            dob_year_month = "1 = 0"
+            dob_year_close = (
+                "dob_year_std_l IS NOT NULL AND dob_year_std_r IS NOT NULL "
+                "AND dob_year_std_l = dob_year_std_r"
+            )
+        if "dob_year_std" not in selected_columns:
+            dob_year_close = "1 = 0"
+
         levels = [
             CustomLevel(dob_null, label_for_charts="dob kosong").configure(is_null_level=True),
             CustomLevel(match_exact, label_for_charts="tanggal lahir persis").configure(m_probability=0.70),
@@ -512,9 +530,9 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
             blocking_rules.append(block_on("last_name_std", "dob_year_std"))
         if "first_name_std" in selected_columns and "city_std" in selected_columns:
             blocking_rules.append(block_on("first_name_std", "city_std"))
-        if not blocking_rules and has_name:
+        if not blocking_rules and "last_name_std" in selected_columns:
             blocking_rules.append(block_on("last_name_std"))
-        if not blocking_rules and has_location:
+        if not blocking_rules and "city_std" in selected_columns:
             blocking_rules.append(block_on("city_std"))
         if not blocking_rules and has_dob:
             if "dob_year_std" in selected_columns:
@@ -522,7 +540,7 @@ def build_dynamic_settings_from_columns(selected_columns: list[str]) -> dict:
             elif "dob_std" in selected_columns:
                 blocking_rules.append(block_on("dob_std"))
         if not blocking_rules:
-            blocking_rules.append(block_on("last_name_std"))
+            blocking_rules.append(block_on(selected_columns[0]))
 
     # Deduplikasi rule blocking identik
     seen_blocks = set()
@@ -560,7 +578,7 @@ def infer_selected_columns_from_df(df: pd.DataFrame, preferred: list[str] | None
     valid = get_valid_comparison_columns()
     # Cari interseksi antara kolom di df dan valid columns
     available = [c for c in df.columns if c in valid]
-    
+
     if preferred:
         # Filter preferred yang benar-benar ada
         filtered = [c for c in preferred if c in available]
