@@ -1,4 +1,5 @@
 """FastAPI application for CRM entity resolution predictions."""
+import json
 import os
 import subprocess
 import sys
@@ -1832,7 +1833,7 @@ def model_info():
 
 
 @app.get("/api/model/versions")
-def model_versions():
+def model_versions(request: Request):
     """Daftar semua versi model yang tersimpan di models/<version>/."""
     require_api_key(request)
     from src.model_lifecycle import list_versions
@@ -1840,7 +1841,7 @@ def model_versions():
 
 
 @app.post("/api/model/retrain")
-def model_retrain(payload: dict = None):
+def model_retrain(request: Request, payload: dict = None):
     """Jalankan retraining pipeline (src.run_all) sebagai proses background."""
     require_api_key(request)
     payload = payload or {}
@@ -1902,10 +1903,19 @@ def model_rollback(payload: dict, request: Request):
         except Exception:
             pass
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Gunakan created_at dari metadata versi asli, jangan overwriten dengan waktu sekarang
+    new_created_at = datetime.now(timezone.utc).isoformat()
+    if meta_file.exists():
+        try:
+            vmeta = json.loads(meta_file.read_text(encoding="utf-8"))
+            if vmeta.get("created_at"):
+                new_created_at = vmeta["created_at"]
+        except Exception:
+            pass
     MODEL_PATH.write_text(json.dumps({
         "version": version,
         "path": str(target),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": new_created_at,
         "rolled_back_from": previous_version,
     }, indent=2), encoding="utf-8")
     return JSONResponse({
