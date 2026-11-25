@@ -144,6 +144,32 @@ export const dedupApi = {
       method: 'POST',
       body: JSON.stringify({ table, limit }),
     }),
+
+  getActivityFeed: (limit = 15) =>
+    apiRequest(`/api/activity?limit=${encodeURIComponent(limit)}`),
+
+  getModelVersions: () => apiRequest('/api/model/versions'),
+
+  startRetrain: (payload = {}) =>
+    apiRequest('/api/model/retrain', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  rollbackModel: (version) =>
+    apiRequest('/api/model/rollback', {
+      method: 'POST',
+      body: JSON.stringify({ version }),
+    }),
+
+  getSupabaseEntities: (limit = 50) =>
+    apiRequest(`/api/supabase/entities?limit=${encodeURIComponent(limit)}`),
+
+  getSupabaseEntityMembers: (entityId) =>
+    apiRequest(`/api/supabase/entities/${encodeURIComponent(entityId)}/members`),
+
+  getSupabaseConflicts: () =>
+    apiRequest('/api/supabase/conflicts'),
 }
 
 /** Backend pair row -> shape used by the existing review table. */

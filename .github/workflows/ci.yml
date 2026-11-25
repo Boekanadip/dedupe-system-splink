@@ -16,7 +16,7 @@ jobs:
         env:
           POSTGRES_DB: crm
           POSTGRES_USER: crm_user
-          POSTGRES_PASSWORD: crm_password_2026
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -45,7 +45,7 @@ jobs:
           POSTGRES_PORT: 5432
           POSTGRES_DB: crm
           POSTGRES_USER: crm_user
-          POSTGRES_PASSWORD: crm_password_2026
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           pytest tests/ -v --cov=src --cov=api --cov=ui --cov-report=xml
           

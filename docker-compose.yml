@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: crm
       POSTGRES_USER: crm_user
-      POSTGRES_PASSWORD: crm_password_2026
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     ports:
       - "5432:5432"
     volumes:
@@ -35,7 +35,8 @@ services:
       - POSTGRES_PORT=5432
       - POSTGRES_DB=crm
       - POSTGRES_USER=crm_user
-      - POSTGRES_PASSWORD=crm_password_2026
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      - DEDUP_API_KEY=${DEDUP_API_KEY:?DEDUP_API_KEY must be set}
       - API_URL=http://localhost:8000
     depends_on:
       crm-pg:

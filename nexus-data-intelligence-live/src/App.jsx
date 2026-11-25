@@ -20,6 +20,7 @@ const navigation = [
   { group: 'OPERATIONS', items: [
     { id: 'processing', label: 'Processing', icon: Workflow },
     { id: 'review', label: 'Review queue', icon: ListChecks },
+    { id: 'entities', label: 'Entity management', icon: Layers3 },
     { id: 'history', label: 'Run history', icon: History },
   ]},
   { group: 'INTELLIGENCE', items: [
@@ -38,6 +39,7 @@ const pageMeta = {
   datasets: ['Datasets', 'Explore imported data, schemas, and validation status.'],
   processing: ['Processing workspace', 'Configure a reusable pipeline and submit a processing run.'],
   review: ['Review queue', 'Resolve uncertain record pairs with a traceable human decision.'],
+  entities: ['Entity management', 'Explore resolved customer entities, cluster memberships, and identity conflicts.'],
   history: ['Run history', 'Track processing runs, outcomes, and output destinations.'],
   models: ['Model registry', 'Manage processing engines independently from the platform UI.'],
   analytics: ['Evaluation', 'Monitor data quality, linkage outcomes, and model evaluation.'],
@@ -55,8 +57,6 @@ const modelSeed = [
   { id: 'MDL-0001', name: 'Splink CRM Linkage', family: 'Probabilistic record linkage', version: 'Repository integration', runtime: 'Python · DuckDB', status: 'Adapter pending', description: 'First planned engine integration based on the dedupe-system-splink repository.' },
   { id: 'MDL-0002', name: 'Future model slot', family: 'Classification / scoring', version: 'Not registered', runtime: 'Adapter interface', status: 'Planned', description: 'Reserved integration slot. No model is connected.' },
 ]
-
-const activityFeed = []
 
 const formatDate = (format, timeZone) => {
   const parts = new Intl.DateTimeFormat('en', {
@@ -168,6 +168,9 @@ function App() {
   const [runFilter, setRunFilter] = useState('All')
   const [sourceTab, setSourceTab] = useState('files')
   const [models, setModels] = useState(modelSeed)
+  const [modelVersions, setModelVersions] = useState([])
+  const [modelInfo, setModelInfo] = useState(null)
+  const [retrainStatus, setRetrainStatus] = useState(null) // 'running' | null
   const [jobDataset, setJobDataset] = useState('')
   const [jobEngine, setJobEngine] = useState('MDL-0001')
   const [jobName, setJobName] = useState('Customer deduplication · Q4')
@@ -216,6 +219,14 @@ function App() {
   const [supabaseColumnPreview, setSupabaseColumnPreview] = useState(null)
   const [supabaseDataPreview, setSupabaseDataPreview] = useState(null)
   const [supabaseIngestingTable, setSupabaseIngestingTable] = useState('')
+  const [activityFeed, setActivityFeed] = useState([])
+  const [entities, setEntities] = useState([])
+  const [selectedEntity, setSelectedEntity] = useState(null)
+  const [entityMembers, setEntityMembers] = useState([])
+  const [entityMembersLoading, setEntityMembersLoading] = useState(false)
+  const [conflicts, setConflicts] = useState([])
+  const [entityTab, setEntityTab] = useState('clusters')
+  const [entitiesLoading, setEntitiesLoading] = useState(false)
   const [workspaceSettings, setWorkspaceSettings] = useState({
     workspace_name: 'HyperData Intelligence',
     timezone: 'Asia/Jakarta',
@@ -362,6 +373,9 @@ function App() {
       dedupApi.getReviewSummary()
         .then(setReviewSummary)
         .catch(() => setReviewSummary(null));
+      dedupApi.getActivityFeed()
+        .then(res => setActivityFeed(res.activities || []))
+        .catch(() => setActivityFeed([]));
       Promise.all([
         dedupApi.getDatabaseStatus(),
         dedupApi.getDatabaseTables(),
@@ -410,6 +424,57 @@ function App() {
     if (reviewTab !== 'history') return
     loadReviewHistory(1, false)
   }, [reviewTab])
+  const loadEntities = async () => {
+    setEntitiesLoading(true)
+    try {
+      const [entitiesRes, conflictsRes] = await Promise.all([
+        dedupApi.getSupabaseEntities().catch(() => ({ entities: [] })),
+        dedupApi.getSupabaseConflicts().catch(() => ({ conflicts: [] })),
+      ])
+      const ents = entitiesRes.entities || []
+      setEntities(ents)
+      setConflicts(conflictsRes.conflicts || [])
+      if (ents.length) {
+        selectEntity(ents[0])
+      }
+    } catch (e) {
+      flash(`Failed to load entities: ${e.message || e}`)
+    } finally {
+      setEntitiesLoading(false)
+    }
+  }
+  const selectEntity = async (entity) => {
+    setSelectedEntity(entity)
+    setEntityMembersLoading(true)
+    try {
+      const res = await dedupApi.getSupabaseEntityMembers(entity.entity_id)
+      setEntityMembers(res.members || [])
+    } catch (e) {
+      setEntityMembers([])
+    } finally {
+      setEntityMembersLoading(false)
+    }
+  }
+  useEffect(() => {
+    if (activePage === 'entities' && liveState === 'live') {
+      loadEntities()
+    }
+  }, [activePage, liveState])
+  const loadModelData = async () => {
+    try {
+      const [versionsRes, infoRes] = await Promise.all([
+        dedupApi.getModelVersions().catch(() => []),
+        dedupApi.getModelInfo().catch(() => null),
+      ])
+      setModelVersions(Array.isArray(versionsRes) ? versionsRes : [])
+      setModelInfo(infoRes || null)
+    } catch (e) {
+      flash(`Failed to load model data: ${e.message || e}`)
+    }
+  }
+  useEffect(() => {
+    if (activePage === 'models') loadModelData()
+  }, [activePage])
   useEffect(() => {
     const query = globalSearch.trim()
     if (!query) {
@@ -617,7 +682,12 @@ function App() {
       if (!response?.job?.id) {
         throw new Error('The backend did not confirm that a processing job was created.')
       }
-      flash(`Job ${response.job.id} was queued.`)
+      flash(`Processing run ${response.job.id} completed! Scored ${response.job.pairs_scored || 0} pairs in ${response.job.duration || '—'}.`)
+      await loadRuns(1, false)
+      await loadReviewQueue(1, false)
+      try {
+        setLiveStats(await dedupApi.getStats())
+      } catch (err) {}
     } catch (error) {
       flash(`Gagal menjalankan dedup: ${error.message || error}`)
     } finally {
@@ -855,7 +925,11 @@ function App() {
         </Card>
         <Card className="activity-card">
           <div className="card-header"><div><h3>Workspace activity</h3><p>Audit-backed events</p></div></div>
-          <div className="activity-list">{activityFeed.length ? activityFeed.map((item, index) => { const Icon = item.icon; return <div className="activity-item" key={index}><span className={`activity-symbol ${item.tone}`}><Icon size={15}/></span><div><b>{item.title}</b><p>{item.detail}</p></div><small>{item.time}</small></div> }) : <div className="empty-state small-empty"><SearchX size={20}/><b>No activity events</b><span>An audit event feed is not available from the backend yet.</span></div>}</div>
+          <div className="activity-list">{activityFeed.length ? activityFeed.map((item, index) => {
+            const Icon = item.icon || (item.type === 'review' ? ListChecks : (item.type === 'dataset' ? Table2 : Workflow))
+            const formattedTime = item.time ? new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'
+            return <div className="activity-item" key={index}><span className={`activity-symbol ${item.tone}`}><Icon size={15}/></span><div><b>{item.title}</b><p>{item.detail}</p></div><small>{formattedTime}</small></div>
+          }) : <div className="empty-state small-empty"><SearchX size={20}/><b>No activity events</b><span>No audit events recorded yet.</span></div>}</div>
         </Card>
       </div>
       <div className="bottom-grid"><Card className="quick-card"><div className="card-header"><div><h3>Quick actions</h3><p>Start a common data task</p></div></div><div className="quick-actions"><button onClick={() => navigate('sources')}><span className="quick-icon blue"><CloudUpload size={18}/></span><b>Import data</b><small>Upload a file or connect a source</small><ArrowRight size={16}/></button><button onClick={() => navigate('processing')}><span className="quick-icon violet"><Play size={18}/></span><b>New processing run</b><small>Configure and execute a pipeline</small><ArrowRight size={16}/></button><button onClick={() => navigate('review')}><span className="quick-icon amber"><ListChecks size={18}/></span><b>Review matches</b><small>Resolve uncertain record pairs</small><ArrowRight size={16}/></button></div></Card><Card className="engine-card"><div className="engine-head"><span className="engine-icon"><BrainCircuit size={19}/></span><span className="engine-state"><i/> Integration planned</span></div><h3>Splink CRM Linkage</h3><p>First processing engine planned from the existing deduplication repository.</p><div className="engine-meta"><span>Runtime <b>Python · DuckDB</b></span><span>Adapter <b>Pending</b></span></div><button className="text-link" onClick={() => navigate('models')}>View model registry <ArrowRight size={14}/></button></Card></div>
@@ -1251,9 +1325,9 @@ function App() {
     return <>
       <PageHeader title={meta[0]} subtitle={meta[1]} actions={<div className="draft-label"><span/> Backend dataset required</div>} />
       <div className="processing-layout"><div className="processing-main"><Card className="config-card"><div className="section-title"><div><span className="section-kicker">01 / INPUT</span><h3>Choose your data</h3><p>Select a dataset uploaded and validated by FastAPI.</p></div><span className="step-status">Required</span></div><div className="form-grid"><Field label="Backend dataset" hint="Seed datasets are not executable."><select value={selectedBackendDatasetId} onChange={event=>setSelectedBackendDatasetId(event.target.value)}><option value="">Select an uploaded dataset</option>{backendDatasets.map(item=><option key={item.id} value={item.id}>{item.name} · {item.rows} rows · {item.status}</option>)}</select></Field><Field label="Run name"><input value={jobName} onChange={event=>setJobName(event.target.value)} placeholder="Give this run a name"/></Field></div><div className="selected-source"><span className="file-type-icon"><FileSpreadsheet size={17}/></span><div><b>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.name || 'No backend dataset selected'}</b><small>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.rows || '—'} records · {backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.columns || '—'} columns · Backend dataset</small></div><StatusPill value={selectedBackendDatasetId?'Validated':'Required'}/></div></Card>
-      <Card className="config-card"><div className="section-title"><div><span className="section-kicker">02 / ENGINE</span><h3>Select a processing engine</h3><p>Model-specific settings are isolated from the shared platform workflow.</p></div><button className="text-link" onClick={()=>navigate('models')}>Manage registry <ArrowRight size={14}/></button></div><div className="engine-select-list">{models.map(model=><button key={model.id} className={cx('engine-select',jobEngine===model.id&&'selected')} onClick={()=>setJobEngine(model.id)}><span className="engine-select-icon"><BrainCircuit size={18}/></span><span className="engine-select-text"><b>{model.name}</b><small>{model.family} · {model.runtime}</small></span><span className="engine-select-state"><StatusPill value={model.status}/>{jobEngine===model.id&&<CheckCircle2 size={17}/>}</span></button>)}</div><div className="info-banner compact"><CircleAlert size={16}/><div><b>Dataset execution is not connected</b><p>Uploads and database imports are validated, but the current pipeline reads its configured database source. The API blocks this request to prevent processing a different dataset.</p></div></div></Card>
+      <Card className="config-card"><div className="section-title"><div><span className="section-kicker">02 / ENGINE</span><h3>Select a processing engine</h3><p>Model-specific settings are isolated from the shared platform workflow.</p></div><button className="text-link" onClick={()=>navigate('models')}>Manage registry <ArrowRight size={14}/></button></div><div className="engine-select-list">{models.map(model=><button key={model.id} className={cx('engine-select',jobEngine===model.id&&'selected')} onClick={()=>setJobEngine(model.id)}><span className="engine-select-icon"><BrainCircuit size={18}/></span><span className="engine-select-text"><b>{model.name}</b><small>{model.family} · {model.runtime}</small></span><span className="engine-select-state"><StatusPill value={model.status}/>{jobEngine===model.id&&<CheckCircle2 size={17}/>}</span></button>)}</div><div className="info-banner compact"><Sparkles size={16}/><div><b>Engine Ready</b><p>Selected dataset (uploaded file or Supabase ingestion) will be standardized and linked using Splink with DuckDB engine.</p></div></div></Card>
       <Card className="config-card"><div className="section-title"><div><span className="section-kicker">03 / PIPELINE</span><h3>Processing stages</h3><p>Stages reflect the current deduplication workflow and can be configured per engine.</p></div><button className="text-link" onClick={()=>flash('Pipeline stage configuration is not connected yet.')}>Configure stages <SlidersHorizontal size={14}/></button></div><div className="pipeline-list">{steps.map((step,index)=><div className="pipeline-row" key={step}><span className="pipeline-number">{String(index+1).padStart(2,'0')}</span><div><b>{step}</b><small>{descriptions[index]}</small></div><span className="pipeline-state">Unavailable</span></div>)}</div></Card></div>
-      <aside className="processing-side"><Card className="run-summary"><div className="card-header"><div><h3>Run summary</h3><p>Review configuration before execution</p></div><span className="summary-icon"><Workflow size={18}/></span></div><div className="summary-pair"><span>Run name</span><b>{jobName || 'Untitled run'}</b></div><div className="summary-pair"><span>Dataset</span><b>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.name || 'No backend dataset'}</b></div><div className="summary-pair"><span>Processing engine</span><b>{models.find(item=>item.id===jobEngine)?.name || '—'}</b></div><div className="summary-pair"><span>Output destination</span><b>{outputTable}</b></div><div className="summary-divider"/><div className="run-warning"><ShieldCheck size={16}/><span>Processing remains disabled until the pipeline can consume the selected backend dataset.</span></div><Button variant="primary" className="run-button" icon={jobRunning?RefreshCw:Play} disabled={jobRunning || !selectedBackendDatasetId} onClick={runPipeline}>{jobRunning?'Checking backend…':'Run pipeline'}</Button><Button className="run-button" icon={Save} onClick={()=>flash('Draft saved only in local browser state.')}>Save as draft</Button><small className="demo-note">{selectedBackendDatasetId?'Selected dataset · execution adapter unavailable':'Upload a backend dataset before running'}</small></Card><Card className="progress-card"><div className="card-header"><div><h3>Execution progress</h3><p>{jobRunning?'Checking backend availability':'No processing job created'}</p></div><Gauge size={18} className="muted-icon"/></div><div className="progress-track"><span style={{width:'0%'}}/></div><div className="progress-meta"><b>0%</b><span>Unavailable</span></div><div className="terminal-box"><div><i/><i/><i/><span>RUN LOG</span></div><code>{jobRunning?'[fastapi] Checking dataset execution support…':'No job has been created; dataset execution is unavailable.'}</code></div></Card></aside></div>
+      <aside className="processing-side"><Card className="run-summary"><div className="card-header"><div><h3>Run summary</h3><p>Review configuration before execution</p></div><span className="summary-icon"><Workflow size={18}/></span></div><div className="summary-pair"><span>Run name</span><b>{jobName || 'Untitled run'}</b></div><div className="summary-pair"><span>Dataset</span><b>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.name || 'No backend dataset'}</b></div><div className="summary-pair"><span>Processing engine</span><b>{models.find(item=>item.id===jobEngine)?.name || '—'}</b></div><div className="summary-pair"><span>Output destination</span><b>{outputTable}</b></div><div className="summary-divider"/><div className="run-warning"><Sparkles size={16}/><span>Ready to process. Results will be saved to predictions parquet and review queue.</span></div><Button variant="primary" className="run-button" icon={jobRunning?RefreshCw:Play} disabled={jobRunning || !selectedBackendDatasetId} onClick={runPipeline}>{jobRunning?'Running Splink engine…':'Run pipeline'}</Button><Button className="run-button" icon={Save} onClick={()=>flash('Draft saved only in local browser state.')}>Save as draft</Button><small className="demo-note">{selectedBackendDatasetId?'Backend dataset ready to execute':'Upload or ingest a dataset before running'}</small></Card><Card className="progress-card"><div className="card-header"><div><h3>Execution progress</h3><p>{jobRunning?'Checking backend availability':'No processing job created'}</p></div><Gauge size={18} className="muted-icon"/></div><div className="progress-track"><span style={{width:'0%'}}/></div><div className="progress-meta"><b>0%</b><span>Unavailable</span></div><div className="terminal-box"><div><i/><i/><i/><span>RUN LOG</span></div><code>{jobRunning?'[fastapi] Checking dataset execution support…':'No job has been created; dataset execution is unavailable.'}</code></div></Card></aside></div>
     </>
   }
 
@@ -1413,6 +1487,167 @@ function App() {
     </>
   )
 
+  const renderEntities = () => (
+    <>
+      <PageHeader
+        title={meta[0]}
+        subtitle={meta[1]}
+        actions={
+          <Button icon={RefreshCw} disabled={entitiesLoading} onClick={loadEntities}>
+            {entitiesLoading ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        }
+      />
+      <div className="review-kpis">
+        <div><span className="kpi-dot blue"/><div><b>{entities.length.toLocaleString()}</b><small>Resolved entities</small></div></div>
+        <div><span className="kpi-dot mint"/><div><b>{entities.reduce((acc, cur) => acc + (Number(cur.member_count) || 0), 0)}</b><small>Total clustered records</small></div></div>
+        <div><span className="kpi-dot amber"/><div><b>{conflicts.length.toLocaleString()}</b><small>Documented conflicts</small></div></div>
+      </div>
+      <div className="review-workspace">
+        <Card className="review-list-card">
+          <div className="review-tabs">
+            <button className={entityTab === 'clusters' ? 'selected' : ''} onClick={() => setEntityTab('clusters')}>
+              Resolved entities <span>{entities.length}</span>
+            </button>
+            <button className={entityTab === 'conflicts' ? 'selected' : ''} onClick={() => setEntityTab('conflicts')}>
+              Conflicts <span>{conflicts.length}</span>
+            </button>
+          </div>
+          {entityTab === 'clusters' ? (
+            <div className="pair-list">
+              {entities.map(ent => (
+                <button
+                  type="button"
+                  key={ent.entity_id}
+                  className={cx('pair-item', selectedEntity?.entity_id === ent.entity_id && 'active')}
+                  onClick={() => selectEntity(ent)}
+                >
+                  <div className="pair-item-top">
+                    <b>{ent.entity_id}</b>
+                    <StatusPill value={ent.entity_status || 'ACTIVE'} />
+                  </div>
+                  <div className="pair-names">
+                    <span>{[ent.first_name, ent.last_name].filter(Boolean).join(' ') || ent.master_record_id}</span>
+                  </div>
+                  <p>{ent.city ? `${ent.city} · ` : ''}{ent.email || ent.phone_number || 'Master identity profile'}</p>
+                  <div className="pair-item-bottom">
+                    <small>{ent.member_count} member records</small>
+                    <small>{ent.updated_at ? new Date(ent.updated_at).toLocaleDateString() : '—'}</small>
+                  </div>
+                </button>
+              ))}
+              {entities.length === 0 && (
+                <div className="empty-state small-empty">
+                  <SearchX size={22}/>
+                  <b>No entities found</b>
+                  <span>Supabase entity_map has no recorded entities.</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="pair-list">
+              {conflicts.map(conf => (
+                <div className="pair-item" key={conf.conflict_id}>
+                  <div className="pair-item-top">
+                    <b>{conf.conflict_type}</b>
+                    <StatusPill value={conf.status} />
+                  </div>
+                  <div className="pair-names">
+                    <span>{conf.record_id_l}</span>
+                    <ArrowRight size={13} />
+                    <span>{conf.record_id_r}</span>
+                  </div>
+                  <p>{conf.description}</p>
+                  <div className="pair-item-bottom">
+                    <small>Entity: {conf.entity_id || 'Unassigned'}</small>
+                    <small>{conf.created_at ? new Date(conf.created_at).toLocaleDateString() : '—'}</small>
+                  </div>
+                </div>
+              ))}
+              {conflicts.length === 0 && (
+                <div className="empty-state small-empty">
+                  <CheckCircle2 size={22}/>
+                  <b>No conflicts recorded</b>
+                  <span>All customer identities reconciled without conflicts.</span>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+
+        <Card className="review-detail-card">
+          <div className="review-detail-head">
+            <div>
+              <span className="section-kicker">ENTITY REPRESENTATION</span>
+              <h3>{selectedEntity?.entity_id || 'Select an entity'}</h3>
+              <p>Master golden customer profile and source records membership.</p>
+            </div>
+            {selectedEntity && <StatusPill value={selectedEntity.entity_status || 'ACTIVE'} />}
+          </div>
+
+          {selectedEntity && (
+            <>
+              <div className="record-card" style={{ marginBottom: '14px' }}>
+                <span className="record-label">MASTER GOLDEN CUSTOMER</span>
+                <h4>{selectedEntity.master_record_id || selectedEntity.entity_id}</h4>
+                <div><small>Full name</small><b>{[selectedEntity.first_name, selectedEntity.last_name].filter(Boolean).join(' ') || '—'}</b></div>
+                <div><small>Email</small><b>{selectedEntity.email || '—'}</b></div>
+                <div><small>Phone</small><b>{selectedEntity.phone_number || '—'}</b></div>
+                <div><small>City</small><b>{selectedEntity.city || '—'}</b></div>
+              </div>
+
+              <div className="card-header" style={{ padding: '0 0 8px 0' }}>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: '13px' }}>Cluster Memberships ({entityMembers.length})</h4>
+                  <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>Records linked to this master entity identity</p>
+                </div>
+              </div>
+
+              {entityMembersLoading && (
+                <div className="empty-state small-empty"><span>Loading member records…</span></div>
+              )}
+
+              {!entityMembersLoading && (
+                <div className="table-scroll-mini" style={{ maxHeight: '280px' }}>
+                  <table className="mini-data-table">
+                    <thead>
+                      <tr>
+                        <th>Record ID</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Phone</th>
+                        <th>Address</th>
+                        <th>Source</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {entityMembers.map(mem => (
+                        <tr key={mem.record_id}>
+                          <td><b>{mem.record_id}</b></td>
+                          <td>{[mem.first_name, mem.last_name].filter(Boolean).join(' ') || '—'}</td>
+                          <td>{mem.email || '—'}</td>
+                          <td>{mem.phone_number || '—'}</td>
+                          <td>{[mem.address, mem.city].filter(Boolean).join(', ') || '—'}</td>
+                          <td><span className="status-pill neutral">{mem.membership_source || 'linkage'}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+
+          {!selectedEntity && (
+            <div className="empty-state small-empty">
+              <span>Choose an entity cluster from the left panel to inspect its master customer record and source memberships.</span>
+            </div>
+          )}
+        </Card>
+      </div>
+    </>
+  )
+
   const renderHistory = () => (
     <>
       <PageHeader
@@ -1498,12 +1733,65 @@ function App() {
     </>
   );
 
-  const renderModels = () => <>
-    <PageHeader title={meta[0]} subtitle={meta[1]} actions={<Button variant="primary" icon={Plus} onClick={()=>setShowModelModal(true)}>Register model</Button>} />
-    <div className="info-banner"><BrainCircuit size={18}/><div><b>Model-independent by design</b><p>The platform talks to engines through adapters. Each adapter defines metadata, accepted inputs, execution settings, outputs, and status.</p></div></div>
-    <div className="model-grid">{models.map((model,index)=><Card className="model-card" key={model.id}><div className="model-card-top"><span className="model-art"><BrainCircuit size={22}/></span><StatusPill value={model.status}/></div><div className="model-id">{model.id}</div><h3>{model.name}</h3><p>{model.description}</p><div className="model-specs"><div><span>Family</span><b>{model.family}</b></div><div><span>Version</span><b>{model.version}</b></div><div><span>Runtime</span><b>{model.runtime}</b></div></div><div className="model-card-foot"><span><i className={index===0?'dot-amber':'dot-grey'}/>{index===0?'Integration queued':'Not connected'}</span><button className="text-link" onClick={()=>flash(`${model.name}: adapter configuration is not available yet.`)}>Details <ArrowRight size={14}/></button></div></Card>)}</div>
-    <Card className="adapter-contract"><div className="card-header"><div><h3>Adapter contract</h3><p>Proposed integration boundary between FastAPI and model runtimes.</p></div><span className="contract-tag"><Code2 size={14}/> Interface draft</span></div><div className="contract-grid"><div><b>describe()</b><small>Model metadata, version, capabilities</small></div><div><b>validate_input()</b><small>Required fields and schema checks</small></div><div><b>execute()</b><small>Run processing with normalized config</small></div><div><b>get_status()</b><small>Execution state and error details</small></div><div><b>get_outputs()</b><small>Standardized output references</small></div></div><div className="code-note"><Terminal size={14}/><code>Platform API → Adapter registry → Engine service → Result contract</code><button onClick={()=>{navigator.clipboard?.writeText('Platform API → Adapter registry → Engine service → Result contract');flash('Architecture line copied.')}}><Copy size={14}/></button></div></Card>
-  </>
+  const renderModels = () => {
+    const activeVersion = modelInfo?.model_version || null
+    return <>
+      <PageHeader
+        title={meta[0]}
+        subtitle={meta[1]}
+        actions={<>
+          <Button variant="secondary" icon={RefreshCw} onClick={loadModelData}>Refresh</Button>
+          <Button variant="primary" icon={Play} disabled={retrainStatus === 'running'} onClick={async () => {
+            if (retrainStatus === 'running') return
+            setRetrainStatus('running')
+            try {
+              await dedupApi.startRetrain({ skip_blocking_benchmark: true })
+              flash('Retrain started in background.')
+            } catch (e) {
+              flash(`Retrain failed: ${e.message || e}`)
+            } finally {
+              setRetrainStatus(null)
+              loadModelData()
+            }
+          }}>{retrainStatus === 'running' ? 'Running...' : 'Retrain'}</Button>
+        </>}
+      />
+      {activeVersion && <div className="info-banner"><BrainCircuit size={18}/><div><b>Active model</b><p>Version <code>{activeVersion}</code> · match threshold <b>{modelInfo.threshold_match}</b> · review threshold <b>{modelInfo.threshold_review}</b></p></div></div>}
+      {!activeVersion && <div className="info-banner amber-banner"><CircleAlert size={17}/><div><b>No active model</b><p>Run a full pipeline first to create a model version before rolling back or retraining.</p></div></div>}
+      {modelVersions.length === 0
+        ? <Card><div className="empty-state"><SearchX size={20}/><b>No model versions yet</b><span>Run the full pipeline to train your first model.</span></div></Card>
+        : <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          {modelVersions.map((v, idx) => (
+            <Card key={v.version} className={cx(v.version===activeVersion&&'model-card','version-row')}>
+              <div style={{display:'flex',alignItems:'center',gap:16}}>
+                <span style={{fontWeight:700,minWidth:140}}>{v.version}</span>
+                <StatusPill value={v.complete ? 'Complete' : 'Incomplete'} />
+                <span style={{color:'var(--muted)'}}>{new Date(v.created_at||0).toLocaleString('id-ID')}</span>
+                <span style={{minWidth:90}}>{v.scope === 'full' ? 'Full run' : 'Sample run'}</span>
+                <span style={{minWidth:90}}>{v.pairs_scored ? v.pairs_scored.toLocaleString() + ' pairs' : '—'}</span>
+                {v.version !== activeVersion && (
+                  <button
+                    className="text-link"
+                    style={{marginLeft:'auto'}}
+                    onClick={async () => {
+                      try {
+                        await dedupApi.rollbackModel(v.version)
+                        flash(`Rolled back to ${v.version}.`)
+                        loadModelData()
+                      } catch (e) {
+                        flash(`Rollback failed: ${e.message || e}`)
+                      }
+                    }}
+                  >Roll back</button>
+                )}
+                {v.version === activeVersion && <span style={{marginLeft:'auto',fontSize:12,color:'var(--accent-violet)'}}>● Current</span>}
+              </div>
+            </Card>
+          ))}
+        </div>
+      }
+    </>
+  }
 
   const renderAnalytics = () => {
     const total = liveStats?.total_pairs || 0
@@ -1849,6 +2137,7 @@ function App() {
       case 'datasets': return renderDatasets()
       case 'processing': return renderProcessing()
       case 'review': return renderReview()
+      case 'entities': return renderEntities()
       case 'history': return renderHistory()
       case 'models': return renderModels()
       case 'analytics': return renderAnalytics()

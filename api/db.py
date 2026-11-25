@@ -1,10 +1,11 @@
-"""Database operations for API."""
+"Database operations for API"
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 from dotenv import load_dotenv
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Load .env file (force reload)
 env_path = Path(__file__).parent.parent / ".env"
@@ -17,14 +18,31 @@ POSTGRES_USER = os.environ.get("POSTGRES_USER", "crm_user")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
 if not POSTGRES_PASSWORD:
     raise RuntimeError(
-        "POSTGRES_PASSWORD belum diset. Salin .env.example ke .env dan isi kredensial database."
+        "POSTGRES_PASSWORD belum diset`. Salin .env.example ke .env dan isi kredensial database.`"
     )
 
 DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
 @contextmanager
-def get_connection():
-    conn = psycopg2.connect(DATABASE_URL)
+def get_supabase_connection():
+    url = os.getenv("SUPABASE_DATABASE_URL")
+    password = os.getenv("PASSWORD_SUPABASE")
+
+    if not url or not password:
+        raise RuntimeError("Konfigurasi Supabase belum lengkap")
+
+    parsed = urlsplit(url)
+
+    conn = psycopg2.connect(
+        host=parsed.hostname,
+        port=parsed.port,
+        dbname=parsed.path.lstrip("/"),
+        user=parsed.username,
+        password=password,
+        sslmode="require",
+        connect_timeout=10,
+    )
+
     try:
         yield conn
     finally:

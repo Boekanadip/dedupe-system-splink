@@ -26,7 +26,7 @@ outputs/.staging/
 *.log
 .env
 
-# DuckDB temp storage (bisa ratusan MB)
+# DuckDB temp storage
 .tmp/
 
 # Testing
@@ -42,12 +42,37 @@ outputs/.staging/
 
 # AI Agent implementation (local only)
 .opencode/
+.tabnine/
+.qwen/
+.claude/
+.grok/
+.continue/
+.hermes/
+.adal/
+.agents/
+.augment/
+.autohand/
+.bob/
+.codeartsdoer/
+.codebuddy/
+.codemaker/
+.codestudio/
+.commandcode/
+.inferencesh/
+.jazz/
+.junie/
+.ai/
+.openai/
+.chatgpt/
+.claude/
+**/.*/
 
 # Generated outputs (not tracked in Git)
 outputs/
 
 # Raw data CSVs (development dataset, not production client data)
 data/raw/*.csv
+data/uploads/
 
 # Processed data artifacts
 data/processed/*.parquet
@@ -112,4 +137,15 @@ dash_app.py
 
 
 # Alat lokal (repo terpisah, bukan kode aplikasi)
+.adal/
+.agents/
+.augment/
+.autohand/
+.bob/
+.codeartsdoer/
+.codebuddy/
+.codemaker/
+.codestudio/
+.commandcode/
+.inferencesh/
 anti-slop/
