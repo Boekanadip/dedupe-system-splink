@@ -16,29 +16,34 @@ POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "crm")
 POSTGRES_USER = os.environ.get("POSTGRES_USER", "crm_user")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
-if not POSTGRES_PASSWORD:
-    raise RuntimeError(
-        "POSTGRES_PASSWORD belum diset`. Salin .env.example ke .env dan isi kredensial database.`"
-    )
 
-DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+
+@contextmanager
+def get_connection():
+    if not POSTGRES_PASSWORD:
+        raise RuntimeError("POSTGRES_PASSWORD belum diset untuk koneksi PostgreSQL lokal")
+    url = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+    conn = psycopg2.connect(url)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
 
 @contextmanager
 def get_supabase_connection():
     url = os.getenv("SUPABASE_DATABASE_URL")
     password = os.getenv("PASSWORD_SUPABASE")
 
-    if not url or not password:
-        raise RuntimeError("Konfigurasi Supabase belum lengkap")
+    if not url:
+        raise RuntimeError("SUPABASE_DATABASE_URL belum diset")
 
-    parsed = urlsplit(url)
+    # Jika url tidak punya postgresql:// prefix
+    if not url.startswith("postgres"):
+        url = f"postgresql://postgres:{password}@{url}"
 
     conn = psycopg2.connect(
-        host=parsed.hostname,
-        port=parsed.port,
-        dbname=parsed.path.lstrip("/"),
-        user=parsed.username,
-        password=password,
+        url,
         sslmode="require",
         connect_timeout=10,
     )

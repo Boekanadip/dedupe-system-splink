@@ -6,6 +6,7 @@ import asyncio
 import io
 from contextlib import contextmanager
 
+import pandas as pd
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -299,13 +300,19 @@ def test_nexus_create_job_does_not_run_repository_data_for_uploaded_dataset(monk
 
 
 def test_nexus_database_ingest_registers_only_valid_read_only_dataset(monkeypatch, tmp_path):
-    import src.db
+    import api.db
 
     class FakeCursor:
         description = [("record_id",), ("first_name",), ("last_name",)]
 
         def __init__(self):
             self.commands = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
 
         def execute(self, query, params=None):
             self.commands.append((query, params))
@@ -328,7 +335,7 @@ def test_nexus_database_ingest_registers_only_valid_read_only_dataset(monkeypatc
 
     upload_dir = tmp_path / "uploads"
     registry_path = tmp_path / "dataset_registry.json"
-    monkeypatch.setattr(src.db, "get_connection", fake_connection)
+    monkeypatch.setattr(api.db, "get_supabase_connection", fake_connection)
     monkeypatch.setattr(nexus_api, "DATASET_UPLOAD_DIR", upload_dir)
     monkeypatch.setattr(nexus_api, "DATASET_REGISTRY_PATH", registry_path)
 
@@ -345,17 +352,23 @@ def test_nexus_database_ingest_registers_only_valid_read_only_dataset(monkeypatc
     assert saved["datasets"][0]["id"] == body["dataset"]["id"]
     assert len(list(upload_dir.glob("*.csv"))) == 1
     assert cursor.commands[0][0] == "SET TRANSACTION READ ONLY"
-    assert "LIMIT %s" in cursor.commands[1][0]
+    assert "LIMIT %s" in str(cursor.commands[1][0])
     assert cursor.commands[1][1] == (2,)
 
 
 def test_nexus_database_ingest_rejects_missing_or_duplicate_record_ids(monkeypatch, tmp_path):
-    import src.db
+    import api.db
 
     class FakeCursor:
         def __init__(self, columns, rows):
             self.description = [(column,) for column in columns]
             self.rows = rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
 
         def execute(self, query, params=None):
             pass
@@ -386,8 +399,8 @@ def test_nexus_database_ingest_rejects_missing_or_duplicate_record_ids(monkeypat
         yield FakeConnection(FakeCursor(columns, rows))
 
     monkeypatch.setattr(
-        src.db,
-        "get_connection",
+        api.db,
+        "get_supabase_connection",
         lambda: connection_with(
             ["record_id", "first_name", "last_name"],
             [("r1", "Ari", "Wijaya"), ("r1", "Dewi", "Putri")],
@@ -403,8 +416,8 @@ def test_nexus_database_ingest_rejects_missing_or_duplicate_record_ids(monkeypat
     assert not upload_dir.exists()
 
     monkeypatch.setattr(
-        src.db,
-        "get_connection",
+        api.db,
+        "get_supabase_connection",
         lambda: connection_with(
             ["first_name", "last_name"],
             [("Ari", "Wijaya")],
@@ -424,12 +437,12 @@ def test_nexus_database_ingest_validates_limit_without_database_access(
     monkeypatch,
     limit,
 ):
-    import src.db
+    import api.db
 
     def unexpected_connection():
         pytest.fail("database must not be accessed for invalid limits")
 
-    monkeypatch.setattr(src.db, "get_connection", unexpected_connection)
+    monkeypatch.setattr(api.db, "get_supabase_connection", unexpected_connection)
     with pytest.raises(HTTPException) as error:
         nexus_api.database_ingest(
             {"table": "customers", "limit": limit},
@@ -439,10 +452,16 @@ def test_nexus_database_ingest_validates_limit_without_database_access(
 
 
 def test_nexus_database_ingest_returns_empty_without_registering_dataset(monkeypatch, tmp_path):
-    import src.db
+    import api.db
 
     class FakeCursor:
         description = [("record_id",), ("first_name",), ("last_name",)]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
 
         def execute(self, query, params=None):
             pass
@@ -465,7 +484,7 @@ def test_nexus_database_ingest_returns_empty_without_registering_dataset(monkeyp
 
     upload_dir = tmp_path / "uploads"
     registry_path = tmp_path / "dataset_registry.json"
-    monkeypatch.setattr(src.db, "get_connection", fake_connection)
+    monkeypatch.setattr(api.db, "get_supabase_connection", fake_connection)
     monkeypatch.setattr(nexus_api, "DATASET_UPLOAD_DIR", upload_dir)
     monkeypatch.setattr(nexus_api, "DATASET_REGISTRY_PATH", registry_path)
 
@@ -484,39 +503,13 @@ def test_nexus_database_ingest_returns_empty_without_registering_dataset(monkeyp
 
 
 def test_nexus_database_tables_identifies_ingestible_allowlisted_tables(monkeypatch):
-    import src.db
+    from fastapi.responses import JSONResponse
 
-    class FakeCursor:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def execute(self, query, params=None):
-            pass
-
-        def fetchall(self):
-            return [("customers",), ("external_table",)]
-
-        def close(self):
-            pass
-
-    class FakeConnection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def cursor(self):
-            return FakeCursor()
-
-    @contextmanager
-    def fake_connection():
-        yield FakeConnection()
-
-    monkeypatch.setattr(src.db, "get_connection", fake_connection)
+    monkeypatch.setattr(
+        nexus_api,
+        "supabase_tables",
+        lambda request: JSONResponse({"tables": ["customers", "external_table"], "total": 2}),
+    )
 
     response = nexus_api.database_tables(authorized_request())
     body = json.loads(response.body)
@@ -527,11 +520,17 @@ def test_nexus_database_tables_identifies_ingestible_allowlisted_tables(monkeypa
 
 
 def test_nexus_database_column_preview_returns_metadata_only(monkeypatch):
-    import src.db
+    import api.db
 
     class FakeCursor:
         def __init__(self):
             self.commands = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
 
         def execute(self, query, params=None):
             self.commands.append((query, params))
@@ -555,7 +554,7 @@ def test_nexus_database_column_preview_returns_metadata_only(monkeypatch):
     def fake_connection():
         yield FakeConnection()
 
-    monkeypatch.setattr(src.db, "get_connection", fake_connection)
+    monkeypatch.setattr(api.db, "get_supabase_connection", fake_connection)
 
     response = nexus_api.database_table_columns("customers", authorized_request())
     body = json.loads(response.body)
@@ -567,7 +566,7 @@ def test_nexus_database_column_preview_returns_metadata_only(monkeypatch):
         {"name": "email", "type": "text", "nullable": True},
     ]
     assert cursor.commands[0][0] == "SET TRANSACTION READ ONLY"
-    assert cursor.commands[1][1] == ("splink_data", "customers")
+    assert cursor.commands[1][1] == ("customers",)
 
 
 def test_nexus_csv_upload_rejects_dataset_missing_active_model_columns(monkeypatch, tmp_path):
@@ -610,3 +609,66 @@ def test_nexus_csv_upload_rejects_duplicate_record_ids(monkeypatch, tmp_path):
     assert "duplicate record_id" in error.value.detail
     assert not list(upload_dir.glob("*.csv"))
     assert not registry_path.exists()
+
+
+def test_nexus_stats_empty_predictions_are_json_serializable(monkeypatch):
+    monkeypatch.setattr(
+        nexus_api, "_predictions_df",
+        pd.DataFrame({"decision": [], "match_probability": []}),
+    )
+    payload = json.loads(nexus_api.stats().body)
+    assert payload["total_pairs"] == 0
+    assert payload["avg_probability"] == 0.0
+
+
+def test_nexus_retrain_uses_supported_run_all_flags(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeProcess:
+        pid = 4242
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        return FakeProcess()
+
+    monkeypatch.setattr(nexus_api.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(nexus_api, "pipeline_locked", lambda: False)
+    monkeypatch.setattr(nexus_api, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(nexus_api, "_start_tailer", lambda *args, **kwargs: None)
+
+    response = nexus_api.model_retrain(
+        authorized_request(), {"skip_blocking_benchmark": True}
+    )
+    assert response.status_code == 200
+    assert "--full" not in captured["args"]
+    assert "--skip-blocking-benchmark" in captured["args"]
+
+
+def test_nexus_retrain_log_returns_bytes_since_offset(monkeypatch, tmp_path):
+    log_path = tmp_path / "retrain.log"
+    log_path.write_bytes(b"baris satu\nbaris dua\n")
+    monkeypatch.setattr(nexus_api, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(nexus_api, "pipeline_locked", lambda: True)
+
+    first = json.loads(nexus_api.retrain_log(authorized_request(), offset=0).body)
+    second = json.loads(nexus_api.retrain_log(authorized_request(), offset=11).body)
+
+    assert first["text"] == "baris satu\nbaris dua\n"
+    assert second["text"] == "baris dua\n"
+    assert first["size"] == len(b"baris satu\nbaris dua\n")
+    assert first["running"] is True
+
+
+def test_nexus_rollback_invalidates_prediction_cache(monkeypatch, tmp_path):
+    model_path = tmp_path / "latest.json"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(nexus_api, "MODEL_PATH", model_path)
+    monkeypatch.setattr(nexus_api, "_predictions_df", pd.DataFrame({"a": [1]}))
+
+    version = next(p.name for p in (nexus_api.PROJECT_ROOT / "models").iterdir()
+                   if (p / "metadata.json").exists())
+    response = nexus_api.model_rollback({"version": version}, authorized_request())
+
+    assert response.status_code == 200
+    assert nexus_api._predictions_df is None

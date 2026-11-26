@@ -1170,156 +1170,30 @@ def supabase_conflicts(request: Request):
 
 @app.get("/api/database/status")
 def database_status(request: Request):
-    """Read-only health check for the local PostgreSQL source."""
-    require_api_key(request)
-    try:
-        from src.db import get_connection
-        with get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT current_database(), current_schema()")
-                db, schema = cursor.fetchone()
-                cursor.execute(
-                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'"
-                )
-                table_count = cursor.fetchone()[0]
-        return JSONResponse({"status": "connected", "database": db, "schema": schema, "table_count": table_count})
-    except Exception as exc:
-        return JSONResponse({"status": "unavailable", "error": type(exc).__name__}, status_code=503)
+    """Read-only health check. Supabase is the configured source database."""
+    return supabase_status(request)
 
 
 @app.get("/api/database/tables")
 def database_tables(request: Request):
-    """List all ingestible tables exposed to the Nexus workspace."""
-    require_api_key(request)
-    allowed = [
-        "customers", "processed_customers", "customers_synthetic_test", "master_customers",
-    ]
-    try:
-        from src.db import get_connection
-        with get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SET TRANSACTION READ ONLY")
-                cursor.execute(
-                    "SELECT table_name FROM information_schema.tables WHERE table_schema = %s ORDER BY table_name",
-                    ("splink_data",),
-                )
-                available = {row[0] for row in cursor.fetchall()}
-        exposed = [t for t in allowed if t in available]
-        return JSONResponse({"tables": exposed, "total": len(exposed)})
-    except Exception as exc:
-        return JSONResponse({"tables": [], "total": 0, "error": type(exc).__name__}, status_code=503)
+    """Tables exposed from Supabase public schema."""
+    payload = json.loads(supabase_tables(request).body)
+    payload["tables"] = [t for t in payload["tables"] if t in SUPABASE_TABLES]
+    payload["total"] = len(payload["tables"])
+    payload["ingestible_tables"] = ["customers", "processed_customers"]
+    return JSONResponse(payload)
 
 
 @app.get("/api/database/tables/{table}/columns")
 def database_table_columns(table: str, request: Request):
-    require_api_key(request)
-    try:
-        from src.db import get_connection
-        with get_connection() as connection:
-            cursor = connection.cursor()
-            try:
-                cursor.execute("SET TRANSACTION READ ONLY")
-                cursor.execute(
-                    "SELECT column_name, data_type, is_nullable "
-                    "FROM information_schema.columns "
-                    "WHERE table_schema = %s AND table_name = %s "
-                    "ORDER BY ordinal_position",
-                    ("splink_data", table),
-                )
-                rows = cursor.fetchall()
-            finally:
-                cursor.close()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Database unavailable: {type(exc).__name__}",
-        ) from exc
-    if not rows:
-        raise HTTPException(status_code=404, detail="Table not found")
-    columns = [
-        {"name": row[0], "type": row[1], "nullable": row[2] == "YES"}
-        for row in rows
-    ]
-    return JSONResponse({
-        "schema": "splink_data",
-        "table": table,
-        "columns": columns,
-        "total": len(columns),
-    })
+    """Column metadata from the Supabase public schema."""
+    return supabase_table_columns(table, request)
 
 
 @app.post("/api/database/ingest")
 def database_ingest(data: dict, request: Request):
-    require_api_key(request)
-    table = str(data.get("table", "")).strip()
-    limit = data.get("limit", 5000)
-    if not table:
-        raise HTTPException(status_code=422, detail="table is required")
-    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 50000:
-        raise HTTPException(status_code=422, detail="limit must be between 1 and 50000")
-    allowed_tables = {
-        "customers",
-        "processed_customers",
-        "customers_synthetic_test",
-        "master_customers",
-    }
-    if table not in allowed_tables:
-        raise HTTPException(status_code=422, detail="Table is not allowlisted for ingest")
-
-    try:
-        from src.db import get_connection
-        with get_connection() as connection:
-            cursor = connection.cursor()
-            try:
-                cursor.execute("SET TRANSACTION READ ONLY")
-                cursor.execute(
-                    f'SELECT * FROM "splink_data"."{table}" LIMIT %s',
-                    (limit,),
-                )
-                columns = [
-                    description.name if hasattr(description, "name") else description[0]
-                    for description in cursor.description
-                ]
-                rows = cursor.fetchall()
-            finally:
-                cursor.close()
-        frame = pd.DataFrame(rows, columns=columns)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Database ingest failed: {type(exc).__name__}")
-
-    if frame.empty:
-        return JSONResponse({"status": "empty", "table": table, "rows": 0})
-
-    validate_dataset_frame(frame)
-
-    DATASET_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    dataset_id = f"DB-{uuid.uuid4().hex[:8].upper()}"
-    target = DATASET_UPLOAD_DIR / f"{dataset_id}.csv"
-    tmp_target = target.with_suffix(".tmp")
-    dataset = {
-        "id": dataset_id,
-        "name": f"{table} (database)",
-        "filename": target.name,
-        "rows": len(frame),
-        "columns": len(frame.columns),
-        "status": "Validated",
-        "source": "PostgreSQL",
-        "table": table,
-        "updated": datetime.now(timezone.utc).isoformat(),
-    }
-    try:
-        frame.to_csv(tmp_target, index=False)
-        os.replace(tmp_target, target)
-        register_dataset(dataset)
-    except Exception as exc:
-        tmp_target.unlink(missing_ok=True)
-        target.unlink(missing_ok=True)
-        if isinstance(exc, HTTPException):
-            raise
-        raise HTTPException(status_code=500, detail="Could not persist ingested dataset") from exc
-    return JSONResponse({"status": "ingested", "dataset": dataset})
+    """Copy rows from Supabase into the workspace dataset registry."""
+    return supabase_ingest(data, request)
 
 
 @app.post("/api/datasets/upload")
@@ -1341,8 +1215,6 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
 
         validate_dataset_frame(frame)
 
-        # Check active model columns for uploaded datasets only.
-        # DB ingest datasets bypass this endpoint entirely.
         from src.standardize import standardize
         model_file = None
         if MODEL_PATH.exists():
@@ -1423,7 +1295,18 @@ def create_job(request: Request, data: dict):
         std_df = standardize(df_raw)
 
         from splink import SettingsCreator
-        valid_cols = infer_selected_columns_from_df(std_df)
+        available_cols = infer_selected_columns_from_df(std_df)
+        requested = data.get("selected_columns")
+        if isinstance(requested, list) and requested:
+            requested = [str(c) for c in requested]
+            valid_cols = [c for c in requested if c in available_cols]
+            if not valid_cols:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"None of the selected columns are available in this dataset. Available: {available_cols}",
+                )
+        else:
+            valid_cols = available_cols
         config = build_dynamic_settings_from_columns(valid_cols)
         model_settings = SettingsCreator(
             link_type="dedupe_only",
@@ -1439,7 +1322,6 @@ def create_job(request: Request, data: dict):
         pred_df = add_decision(linker.inference.predict().as_pandas_dataframe())
         pred_df = apply_business_rules(pred_df, verbose=False)
 
-        # Results and metadata must describe the same run. Write both together.
         duration = round(time.perf_counter() - started, 2)
         run_meta = {
             "artifact": "splink_predictions",
@@ -1484,6 +1366,8 @@ def create_job(request: Request, data: dict):
 
         return JSONResponse({"status": "success", "job": job_record})
 
+    except HTTPException:
+        raise
     except Exception as exc:
         duration = round(time.perf_counter() - started, 2)
         failed_job = {
@@ -1688,12 +1572,13 @@ def stats():
             "timestamp": pd.Timestamp.now("UTC").isoformat()
         })
     
+    avg_probability = df["match_probability"].mean()
     return JSONResponse({
         "total_pairs": len(df),
         "matches": int(len(df[df["decision"] == "MATCH"])),
         "review": int(len(df[df["decision"] == "REVIEW"])),
         "non_matches": int(len(df[df["decision"] == "NON_MATCH"])),
-        "avg_probability": float(df["match_probability"].mean()),
+        "avg_probability": float(avg_probability) if pd.notna(avg_probability) else 0.0,
         "timestamp": pd.Timestamp.now("UTC").isoformat()
     })
 
@@ -1879,7 +1764,8 @@ def model_retrain(request: Request, payload: dict = None):
         }, status_code=409)
 
     try:
-        args = [sys.executable, "-u", "-m", "src.run_all", "--full"]
+        # run_all is full by default; its --full flag is internal to that module.
+        args = [sys.executable, "-u", "-m", "src.run_all"]
         if reuse_model:
             args += ["--reuse-model", str(reuse_model)]
         if skip_blocking_benchmark:
@@ -1906,6 +1792,18 @@ def model_retrain(request: Request, payload: dict = None):
         })
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to start retrain: {exc}")
+
+
+@app.get("/api/model/retrain/log")
+def retrain_log(request: Request, offset: int = 0):
+    """Sisa log retrain sejak offset byte, untuk polling UI."""
+    require_api_key(request)
+    log_path = OUTPUT_DIR / "retrain.log"
+    if not log_path.exists():
+        return JSONResponse({"text": "", "size": 0, "running": False})
+    data = log_path.read_bytes()
+    chunk = data[max(0, offset):].decode("utf-8", errors="replace")
+    return JSONResponse({"text": chunk, "size": len(data), "running": bool(pipeline_locked())})
 
 
 @app.post("/api/model/rollback")
@@ -1936,6 +1834,8 @@ def model_rollback(payload: dict, request: Request):
                 new_created_at = vmeta["created_at"]
         except Exception:
             pass
+    global _predictions_df
+    _predictions_df = None  # Invalidate predictions cache after rollback
     MODEL_PATH.write_text(json.dumps({
         "version": version,
         "path": str(target),
@@ -1951,6 +1851,8 @@ def model_rollback(payload: dict, request: Request):
 
 def _start_tailer(log_path: Path, process):
     def tail():
+        global _predictions_df
+        _predictions_df = None  # Invalidate predictions cache after retrain
         with open(log_path, "ab") as log_fh:
             while True:
                 line = process.stdout.readline()

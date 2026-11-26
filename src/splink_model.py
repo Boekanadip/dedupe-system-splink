@@ -145,11 +145,15 @@ def pin_comparison_level(comparison, output_column_name: str, level_index: int, 
 def _normalize_fixed_m(comparisons):
     for i, comp in enumerate(comparisons):
         levels = comp.create_comparison_levels()
-        total = sum((getattr(lv, "m_probability", None) or 0) for lv in levels)
+        # Null level isn't part of the observed m mass; Splink owns its m.
+        non_null = [lv for lv in levels if not getattr(lv, "is_null_level", False)]
+        total = sum((getattr(lv, "m_probability", None) or 0) for lv in non_null)
         if total > 0 and total != 1:
             comparisons[i] = cl.CustomComparison(
                 comparison_levels=[
-                    lv.configure(
+                    lv
+                    if getattr(lv, "is_null_level", False)
+                    else lv.configure(
                         m_probability=(getattr(lv, "m_probability", None) or 0) / total,
                         fix_m_probability=True,
                     )

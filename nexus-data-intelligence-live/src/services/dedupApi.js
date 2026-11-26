@@ -100,17 +100,7 @@ export const dedupApi = {
     body: JSON.stringify(settings),
   }),
 
-  getDatabaseStatus: () => apiRequest('/api/database/status'),
-
-  getDatabaseTables: () => apiRequest('/api/database/tables'),
-
-  getDatabaseTableColumns: table =>
-    apiRequest(`/api/database/tables/${encodeURIComponent(table)}/columns`),
-
-  ingestDatabaseTable: (table, limit = 5000) => apiRequest('/api/database/ingest', {
-    method: 'POST',
-    body: JSON.stringify({ table, limit }),
-  }),
+  
 
   createJob: payload => apiRequest('/api/jobs', { method: 'POST', body: JSON.stringify(payload) }),
 
@@ -150,6 +140,9 @@ export const dedupApi = {
 
   getModelVersions: () => apiRequest('/api/model/versions'),
 
+  getRetrainLog: (offset = 0) =>
+    apiRequest(`/api/model/retrain/log?offset=${offset}`),
+
   startRetrain: (payload = {}) =>
     apiRequest('/api/model/retrain', {
       method: 'POST',
@@ -173,7 +166,6 @@ export const dedupApi = {
 }
 
 /** Backend pair row -> shape used by the existing review table. */
-/** Backend pair row -> shape used by the existing review table. */
 export function toReviewRow(pair, detail = null) {
   const leftId = pair.record_id_l
   const rightId = pair.record_id_r
@@ -187,16 +179,16 @@ export function toReviewRow(pair, detail = null) {
     right: rightId,
     leftName: [recordA?.first_name, recordA?.last_name].filter(Boolean).join(' ') || leftId,
     rightName: [recordB?.first_name, recordB?.last_name].filter(Boolean).join(' ') || rightId,
-    dob: recordA?.dob || '—',
-    rightDob: recordB?.dob || '—',
-    address: [recordA?.address, recordA?.city, recordA?.state, recordA?.country].filter(Boolean).join(', ') || '—',
-    rightAddress: [recordB?.address, recordB?.city, recordB?.state, recordB?.country].filter(Boolean).join(', ') || '—',
-    email: recordA?.email || '—',
-    rightEmail: recordB?.email || '—',
-    city: recordA?.city || '—',
-    rightCity: recordB?.city || '—',
-    phone: recordA?.phone_number || '—',
-    rightPhone: recordB?.phone_number || '—',
+    dob: recordA?.dob || '-',
+    rightDob: recordB?.dob || '-',
+    address: [recordA?.address, recordA?.city, recordA?.state, recordA?.country].filter(Boolean).join(', ') || '-',
+    rightAddress: [recordB?.address, recordB?.city, recordB?.state, recordB?.country].filter(Boolean).join(', ') || '-',
+    email: recordA?.email || '-',
+    rightEmail: recordB?.email || '-',
+    city: recordA?.city || '-',
+    rightCity: recordB?.city || '-',
+    phone: recordA?.phone_number || '-',
+    rightPhone: recordB?.phone_number || '-',
     score: Number.isFinite(probability) ? probability : 0,
     decision: detail?.decision ?? pair.decision,
     reason: `Match probability: ${

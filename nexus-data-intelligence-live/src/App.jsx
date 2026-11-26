@@ -39,7 +39,7 @@ const pageMeta = {
   datasets: ['Datasets', 'Explore imported data, schemas, and validation status.'],
   processing: ['Processing workspace', 'Configure a reusable pipeline and submit a processing run.'],
   review: ['Review queue', 'Resolve uncertain record pairs with a traceable human decision.'],
-  entities: ['Entity management', 'Explore resolved customer entities, cluster memberships, and identity conflicts.'],
+  entities: ['Entity management', 'Explore resolved customer entities, cluster memberships, and identity conflicts. Supabase views are read-only.'],
   history: ['Run history', 'Track processing runs, outcomes, and output destinations.'],
   models: ['Model registry', 'Manage processing engines independently from the platform UI.'],
   analytics: ['Evaluation', 'Monitor data quality, linkage outcomes, and model evaluation.'],
@@ -76,11 +76,11 @@ const toDatasetRow = dataset => ({
   source: dataset.source || 'File upload',
   rows: dataset.rows,
   columns: dataset.columns,
-  size: '—',
+  size: '-',
   status: dataset.status,
   updated: dataset.updated
     ? new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(dataset.updated))
-    : '—',
+    : '-',
 })
 const cx = (...values) => values.filter(Boolean).join(' ')
 
@@ -101,7 +101,7 @@ function Card({ children, className = '', padding = '' }) {
 }
 
 function PageHeader({ title, subtitle, eyebrow = 'DATA INTELLIGENCE', actions }) {
-  return <div className="page-header"><div><div className="eyebrow">{eyebrow} <span>/</span> {title.toUpperCase()}</div><h1>{title}</h1><p>{subtitle}</p></div><div className="page-actions">{actions}</div></div>
+  return <div className="page-header"><div><div className="eyebrow">{eyebrow} <span>/</span> {title.toUpperCase()}</div><h1>{title}</h1><h2 className="sr-only">{title} sections</h2><p>{subtitle}</p></div><div className="page-actions">{actions}</div></div>
 }
 
 function MetricCard({ label, value, change, caption, icon: Icon, tone = 'blue', trend = 'up' }) {
@@ -171,11 +171,22 @@ function App() {
   const [modelVersions, setModelVersions] = useState([])
   const [modelInfo, setModelInfo] = useState(null)
   const [retrainStatus, setRetrainStatus] = useState(null) // 'running' | null
+  const [retrainLog, setRetrainLog] = useState('')
+  const retrainOffset = useRef(0)
   const [jobDataset, setJobDataset] = useState('')
   const [jobEngine, setJobEngine] = useState('MDL-0001')
   const [jobName, setJobName] = useState('Customer deduplication · Q4')
   const [jobRunning, setJobRunning] = useState(false)
+  const [jobElapsed, setJobElapsed] = useState(0)
+  const [lastJob, setLastJob] = useState(null)
   const [showSourceModal, setShowSourceModal] = useState(false)
+const [selectedColumns, setSelectedColumns] = useState([])
+const availableComparisonColumns = [
+  'first_name_std', 'last_name_std',
+  'email_std', 'phone_std',
+  'address_std', 'city_std', 'state_std', 'country_std',
+  'dob_std', 'dob_year_std',
+]
   const [showModelModal, setShowModelModal] = useState(false)
   const [connectionName, setConnectionName] = useState('Analytics PostgreSQL')
   const [modelName, setModelName] = useState('')
@@ -208,12 +219,11 @@ function App() {
   const [reviewHistory, setReviewHistory] = useState([])
   const [pairDetailRetry, setPairDetailRetry] = useState(0)
   const [databaseStatus, setDatabaseStatus] = useState(null)
-  const [databaseTables, setDatabaseTables] = useState([])
+  const [supabaseTables, setDatabaseTables] = useState([])
   const [databaseIngestibleTables, setDatabaseIngestibleTables] = useState([])
   const [databaseIngestingTable, setDatabaseIngestingTable] = useState('')
   const [databaseColumnPreview, setDatabaseColumnPreview] = useState(null)
   const [supabaseStatus, setSupabaseStatus] = useState(null)
-  const [supabaseTables, setSupabaseTables] = useState([])
   const [supabaseDatasets, setSupabaseDatasets] = useState([])
   const [supabaseRefreshing, setSupabaseRefreshing] = useState(false)
   const [supabaseColumnPreview, setSupabaseColumnPreview] = useState(null)
@@ -238,7 +248,52 @@ function App() {
     keep_processing_audit_trail: true,
   })
   const [settingsLoading, setSettingsLoading] = useState(true)
+  const [settingsDirty, setSettingsDirty] = useState(false)
   const [settingsSaving, setSettingsSaving] = useState(false)
+  const [refreshTick, setRefreshTick] = useState(0)
+
+  useEffect(() => {
+    const refreshData = async () => {
+      try {
+        if (activePage === 'dashboard' || activePage === 'analytics') {
+          const stats = await dedupApi.getStats()
+          setLiveStats(stats)
+          const activity = await dedupApi.getActivityFeed(15)
+          setActivityFeed(activity.activities || [])
+        }
+        if (activePage === 'processing' || activePage === 'history') {
+          loadRuns(1, false)
+        }
+        if (activePage === 'models') {
+          loadModelData()
+          const versions = await dedupApi.getModelVersions()
+          setModelVersions(versions)
+        }
+        if (activePage === 'review' && !selectedReview) {
+          loadReviewQueue(1, false)
+        }
+        if (activePage === 'settings' && !settingsDirty && !settingsSaving) {
+          const payload = await dedupApi.getWorkspaceSettings()
+          setWorkspaceSettings(payload.settings)
+        }
+        if (retrainStatus === 'running') {
+          const res = await dedupApi.getRetrainLog(retrainOffset.current)
+          if (res.text) {
+            setRetrainLog(prev => prev + res.text)
+            retrainOffset.current = res.size
+          }
+          if (!res.running) {
+            setRetrainStatus(null)
+            loadModelData()
+          }
+        }
+      } catch (e) {
+        // silently ignore errors to avoid flicker
+      }
+    }
+    const id = setInterval(refreshData, 5000)
+    return () => clearInterval(id)
+  }, [activePage, selectedReview, reviewDecisionFilter, retrainStatus, refreshTick, settingsDirty, settingsSaving])
   const [settingsError, setSettingsError] = useState('')
 
   const navItem = navigation.flatMap(group => group.items).find(item => item.id === activePage)
@@ -252,9 +307,9 @@ function App() {
     const pages = navigation.flatMap(group => group.items).filter(item => item.label.toLowerCase().includes(query)).map(item => ({ type: 'page', id: item.id, title: item.label, detail: 'Open workspace page' }))
     const data = datasets.filter(item => `${item.name} ${item.id}`.toLowerCase().includes(query)).slice(0, 4).map(item => ({ type: 'dataset', id: item.id, title: item.name, detail: `Dataset · ${item.status}` }))
     const history = runs.filter(item => `${item.id} ${item.dataset}`.toLowerCase().includes(query)).slice(0, 3).map(item => ({ type: 'run', id: item.id, title: item.id, detail: `Run · ${item.dataset}` }))
-    const tables = databaseTables.filter(table => table.toLowerCase().includes(query)).slice(0, 3).map(table => ({ type: 'table', id: table, title: table, detail: 'Database table' }))
+    const tables = supabaseTables.filter(table => table.toLowerCase().includes(query)).slice(0, 3).map(table => ({ type: 'table', id: table, title: table, detail: 'Database table' }))
     return [...pages, ...data, ...history, ...tables, ...backendSearchResults].slice(0, 7)
-  }, [globalSearch, datasets, runs, databaseTables, backendSearchResults])
+  }, [globalSearch, datasets, runs, supabaseTables, backendSearchResults])
 
   const flash = (message) => {
     setToast(message)
@@ -293,7 +348,7 @@ function App() {
         id: job.id,
         dataset: job.dataset_name || job.dataset_id || 'Dataset unavailable',
         started: job.created_at ? new Date(job.created_at).toLocaleString() : 'Timestamp unavailable',
-        duration: job.duration || '—',
+        duration: job.duration || '-',
         status: job.status || 'Unknown',
       }))
       setRuns(current => append ? [...current, ...items] : items)
@@ -377,28 +432,16 @@ function App() {
         .then(res => setActivityFeed(res.activities || []))
         .catch(() => setActivityFeed([]));
       Promise.all([
-        dedupApi.getDatabaseStatus(),
-        dedupApi.getDatabaseTables(),
-      ]).then(([status, tables]) => {
-        setDatabaseStatus(status)
-        setDatabaseTables(tables.tables || [])
-        setDatabaseIngestibleTables(tables.ingestible_tables || [])
-      }).catch(() => {
-        setDatabaseStatus({ status: 'unavailable', table_count: 0 })
-        setDatabaseTables([])
-        setDatabaseIngestibleTables([])
-      })
-      Promise.all([
         dedupApi.getSupabaseStatus().catch(() => null),
         dedupApi.getSupabaseTables().catch(() => null),
         dedupApi.getSupabaseDatasets().catch(() => null),
       ]).then(([sStatus, sTables, sDatasets]) => {
         setSupabaseStatus(sStatus || { status: 'unavailable' })
-        setSupabaseTables(sTables?.tables || [])
+        setDatabaseTables(sTables?.tables || [])
         setSupabaseDatasets(sDatasets?.datasets || [])
       }).catch(() => {
         setSupabaseStatus({ status: 'unavailable' })
-        setSupabaseTables([])
+        setDatabaseTables([])
         setSupabaseDatasets([])
       })
       setLiveError("");
@@ -677,12 +720,19 @@ function App() {
     if (jobRunning) return
     if (!window.confirm("Submit a processing request for the selected dataset?")) return
     setJobRunning(true)
+    setJobElapsed(0)
+    setLastJob(null)
+    const startedAt = Date.now()
+    // create_job is synchronous: it blocks until the run finishes, so show
+    // elapsed time while it runs instead of a fake percentage.
+    const timer = setInterval(() => setJobElapsed(Math.round((Date.now() - startedAt) / 1000)), 500)
     try {
-      const response = await dedupApi.createJob({ dataset_id: selectedBackendDatasetId })
+      const response = await dedupApi.createJob({ dataset_id: selectedBackendDatasetId, selected_columns: selectedColumns.length > 0 ? selectedColumns : undefined })
       if (!response?.job?.id) {
         throw new Error('The backend did not confirm that a processing job was created.')
       }
-      flash(`Processing run ${response.job.id} completed! Scored ${response.job.pairs_scored || 0} pairs in ${response.job.duration || '—'}.`)
+      setLastJob(response.job)
+      flash(`Processing run ${response.job.id} completed! Scored ${response.job.pairs_scored || 0} pairs in ${response.job.duration || '-'}.`)
       await loadRuns(1, false)
       await loadReviewQueue(1, false)
       try {
@@ -691,6 +741,7 @@ function App() {
     } catch (error) {
       flash(`Gagal menjalankan dedup: ${error.message || error}`)
     } finally {
+      clearInterval(timer)
       setJobRunning(false)
     }
   }
@@ -807,6 +858,7 @@ function App() {
       const payload = await dedupApi.saveWorkspaceSettings(workspaceSettings)
       setWorkspaceSettings(payload.settings)
       setDark(payload.settings.theme === 'dark')
+      setSettingsDirty(false)
       flash('Workspace settings saved on the backend.')
     } catch (error) {
       setSettingsError(error.message || 'Failed to save workspace settings')
@@ -817,6 +869,7 @@ function App() {
   }
   const setWorkspaceSetting = (key, value) => {
     setWorkspaceSettings(current => ({ ...current, [key]: value }))
+    setSettingsDirty(true)
   }
   const exportReviews = () => {
     const rows = [['pair_id', 'left_record', 'right_record', 'score', 'decision', 'evidence'], ...reviews.map(row => [row.id, row.left, row.right, row.score, row.decision, row.reason])]
@@ -829,6 +882,24 @@ function App() {
     link.click()
     URL.revokeObjectURL(url)
     flash(`Exported ${reviews.length} loaded review pairs.`)
+  }
+  const exportDatasets = () => {
+    if (!visibleDatasets.length) {
+      flash('There are no datasets to export.')
+      return
+    }
+    const rows = [
+      ['id', 'name', 'source', 'rows', 'columns', 'size', 'status', 'updated'],
+      ...visibleDatasets.map(d => [d.id, d.name, d.source, d.rows, d.columns, d.size, d.status, d.updated]),
+    ]
+    const csv = rows.map(row => row.map(value => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'nexus-dataset-inventory.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+    flash(`Exported ${visibleDatasets.length} datasets.`)
   }
   const exportRunHistory = () => {
     if (!runs.length) {
@@ -887,15 +958,15 @@ function App() {
     const distributionTotal = liveStats?.total_pairs || 0
     const percentage = value => distributionTotal
       ? `${((value / distributionTotal) * 100).toFixed(1)}%`
-      : '—'
+      : '-'
     return <>
       <PageHeader title={meta[0]} subtitle={meta[1]} actions={<><div className="date-control"><CalendarDays size={15}/>{formatDate(workspaceSettings.date_format, workspaceSettings.timezone)} <ChevronDown size={13}/></div><Button icon={Download} onClick={exportDashboardStats}>Export report</Button></>} />
       <div className="welcome-strip"><div className="welcome-symbol"><Sparkles size={20}/></div><div><b>{liveState === 'live' ? 'Live data from FastAPI' : liveState === 'offline' ? 'Backend unavailable' : 'Connecting to FastAPI…'}</b><p>{liveState === 'live' ? 'Overview KPIs come from /api/stats and /api/model/info.' : liveState === 'offline' ? `Backend connection failed: ${liveError}. Live dashboard data is unavailable.` : 'Waiting for the backend response.'}</p></div><span className="demo-badge">{liveState === 'live' ? 'LIVE' : liveState === 'offline' ? 'OFFLINE' : 'CONNECTING'}</span></div>
       <div className="metrics-grid">
-        <MetricCard label="Pairs scored" value={liveStats ? liveStats.total_pairs.toLocaleString() : '—'} change={liveState === 'live' ? 'LIVE' : 'OFFLINE'} caption="from /api/stats" icon={Layers3} tone="blue" />
-        <MetricCard label="Matches" value={liveStats ? liveStats.matches.toLocaleString() : '—'} change={liveState === 'live' ? 'LIVE' : '—'} caption="match_threshold" icon={Workflow} tone="violet" />
-        <MetricCard label="Awaiting review" value={liveStats ? liveStats.review.toLocaleString() : '—'} change={liveState === 'live' ? 'LIVE' : '—'} caption="review queue" icon={ListChecks} tone="amber" trend="down" />
-        <MetricCard label="Non-matches" value={liveStats ? liveStats.non_matches.toLocaleString() : '—'} change={liveState === 'live' ? 'LIVE' : '—'} caption="from /api/stats" icon={CheckCheck} tone="mint" />
+        <MetricCard label="Pairs scored" value={liveStats ? liveStats.total_pairs.toLocaleString() : '-'} change={liveState === 'live' ? 'LIVE' : 'OFFLINE'} caption="from /api/stats" icon={Layers3} tone="blue" />
+        <MetricCard label="Matches" value={liveStats ? liveStats.matches.toLocaleString() : '-'} change={liveState === 'live' ? 'LIVE' : '-'} caption="match_threshold" icon={Workflow} tone="violet" />
+        <MetricCard label="Awaiting review" value={liveStats ? liveStats.review.toLocaleString() : '-'} change={liveState === 'live' ? 'LIVE' : '-'} caption="review queue" icon={ListChecks} tone="amber" trend="down" />
+        <MetricCard label="Non-matches" value={liveStats ? liveStats.non_matches.toLocaleString() : '-'} change={liveState === 'live' ? 'LIVE' : '-'} caption="from /api/stats" icon={CheckCheck} tone="mint" />
       </div>
       <div className="dashboard-grid">
         <Card className="chart-card">
@@ -927,7 +998,7 @@ function App() {
           <div className="card-header"><div><h3>Workspace activity</h3><p>Audit-backed events</p></div></div>
           <div className="activity-list">{activityFeed.length ? activityFeed.map((item, index) => {
             const Icon = item.icon || (item.type === 'review' ? ListChecks : (item.type === 'dataset' ? Table2 : Workflow))
-            const formattedTime = item.time ? new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'
+            const formattedTime = item.time ? new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'
             return <div className="activity-item" key={index}><span className={`activity-symbol ${item.tone}`}><Icon size={15}/></span><div><b>{item.title}</b><p>{item.detail}</p></div><small>{formattedTime}</small></div>
           }) : <div className="empty-state small-empty"><SearchX size={20}/><b>No activity events</b><span>No audit events recorded yet.</span></div>}</div>
         </Card>
@@ -962,9 +1033,9 @@ function App() {
         />
         <MetricCard
           label="Healthy connections"
-          value={databaseStatus?.status === "connected" ? "01 / 01" : "—"}
-          change={databaseStatus?.status === "connected" ? "Connected" : "Unavailable"}
-          caption={databaseStatus?.status === "connected" ? "splink_data read-only" : "database not connected"}
+          value={supabaseStatus?.status === "connected" ? "01 / 01" : "-"}
+          change={supabaseStatus?.status === "connected" ? "Connected" : "Unavailable"}
+          caption={supabaseStatus?.status === "connected" ? "Supabase read-only" : "Supabase unavailable"}
           icon={ShieldCheck}
           tone="mint"
         />
@@ -1236,12 +1307,7 @@ function App() {
                 <option>Draft</option>
               </select>
             </div>
-            <Button
-              icon={Download}
-              onClick={() =>
-                flash("Dataset inventory export is not connected yet.")
-              }
-            >
+            <Button icon={Download} onClick={exportDatasets}>
               Export list
             </Button>
           </div>
@@ -1273,20 +1339,6 @@ function App() {
               render: (r) => <StatusPill value={r.status} />,
             },
             { key: "updated", label: "Updated" },
-            {
-              key: "action",
-              label: "",
-              render: (r) => (
-                <button
-                  className="row-action"
-                  onClick={() =>
-                    flash(`${r.name}: dataset detail panel is planned.`)
-                  }
-                >
-                  <MoreHorizontal size={17} />
-                </button>
-              ),
-            },
           ]}
           rows={visibleDatasets}
         />
@@ -1295,11 +1347,11 @@ function App() {
             Showing {visibleDatasets.length} of {datasets.length} datasets
           </span>
           <div>
-            <button disabled>
+            <button disabled aria-label="Previous page">
               <ChevronLeft size={14} />
             </button>
-            <button className="current">1</button>
-            <button disabled>
+            <button className="current" aria-label="Page 1">1</button>
+            <button disabled aria-label="Next page">
               <ChevronRight size={14} />
             </button>
           </div>
@@ -1324,10 +1376,10 @@ function App() {
     const descriptions = ['Check required fields and data types', 'Create an internal identifier for each row', 'Normalize configured attributes', 'Generate candidate record pairs', 'Calculate linkage probabilities with the selected engine', 'Assign MATCH / REVIEW / NON_MATCH decisions', 'Build entity groups and master records']
     return <>
       <PageHeader title={meta[0]} subtitle={meta[1]} actions={<div className="draft-label"><span/> Backend dataset required</div>} />
-      <div className="processing-layout"><div className="processing-main"><Card className="config-card"><div className="section-title"><div><span className="section-kicker">01 / INPUT</span><h3>Choose your data</h3><p>Select a dataset uploaded and validated by FastAPI.</p></div><span className="step-status">Required</span></div><div className="form-grid"><Field label="Backend dataset" hint="Seed datasets are not executable."><select value={selectedBackendDatasetId} onChange={event=>setSelectedBackendDatasetId(event.target.value)}><option value="">Select an uploaded dataset</option>{backendDatasets.map(item=><option key={item.id} value={item.id}>{item.name} · {item.rows} rows · {item.status}</option>)}</select></Field><Field label="Run name"><input value={jobName} onChange={event=>setJobName(event.target.value)} placeholder="Give this run a name"/></Field></div><div className="selected-source"><span className="file-type-icon"><FileSpreadsheet size={17}/></span><div><b>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.name || 'No backend dataset selected'}</b><small>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.rows || '—'} records · {backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.columns || '—'} columns · Backend dataset</small></div><StatusPill value={selectedBackendDatasetId?'Validated':'Required'}/></div></Card>
+      <div className="processing-layout"><div className="processing-main"><Card className="config-card"><div className="section-title"><div><span className="section-kicker">01 / INPUT</span><h3>Choose your data</h3><p>Select a dataset uploaded and validated by FastAPI.</p></div><span className="step-status">Required</span></div><div className="form-grid"><Field label="Backend dataset" hint="Seed datasets are not executable."><select value={selectedBackendDatasetId} onChange={event=>setSelectedBackendDatasetId(event.target.value)}><option value="">Select an uploaded dataset</option>{backendDatasets.map(item=><option key={item.id} value={item.id}>{item.name} · {item.rows} rows · {item.status}</option>)}</select></Field><Field label="Run name"><input value={jobName} onChange={event=>setJobName(event.target.value)} placeholder="Give this run a name"/></Field><Field label="Comparison columns" hint="Pilih kolom standar untuk pembanding"><div className="column-selector">{availableComparisonColumns.map(col => <label key={col} className="checkbox-label"><input type="checkbox" checked={selectedColumns.includes(col)} onChange={e=>setSelectedColumns(prev=>prev.includes(col)?prev.filter(c=>c!==col): [...prev, col])} value={col} className="checkbox-input" />{col}</label>)}</div></Field></div><div className="selected-source"><span className="file-type-icon"><FileSpreadsheet size={17}/></span><div><b>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.name || 'No backend dataset selected'}</b><small>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.rows || '-'} records · {backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.columns || '-'} columns · Backend dataset</small></div><StatusPill value={selectedBackendDatasetId?'Validated':'Required'}/></div></Card>
       <Card className="config-card"><div className="section-title"><div><span className="section-kicker">02 / ENGINE</span><h3>Select a processing engine</h3><p>Model-specific settings are isolated from the shared platform workflow.</p></div><button className="text-link" onClick={()=>navigate('models')}>Manage registry <ArrowRight size={14}/></button></div><div className="engine-select-list">{models.map(model=><button key={model.id} className={cx('engine-select',jobEngine===model.id&&'selected')} onClick={()=>setJobEngine(model.id)}><span className="engine-select-icon"><BrainCircuit size={18}/></span><span className="engine-select-text"><b>{model.name}</b><small>{model.family} · {model.runtime}</small></span><span className="engine-select-state"><StatusPill value={model.status}/>{jobEngine===model.id&&<CheckCircle2 size={17}/>}</span></button>)}</div><div className="info-banner compact"><Sparkles size={16}/><div><b>Engine Ready</b><p>Selected dataset (uploaded file or Supabase ingestion) will be standardized and linked using Splink with DuckDB engine.</p></div></div></Card>
-      <Card className="config-card"><div className="section-title"><div><span className="section-kicker">03 / PIPELINE</span><h3>Processing stages</h3><p>Stages reflect the current deduplication workflow and can be configured per engine.</p></div><button className="text-link" onClick={()=>flash('Pipeline stage configuration is not connected yet.')}>Configure stages <SlidersHorizontal size={14}/></button></div><div className="pipeline-list">{steps.map((step,index)=><div className="pipeline-row" key={step}><span className="pipeline-number">{String(index+1).padStart(2,'0')}</span><div><b>{step}</b><small>{descriptions[index]}</small></div><span className="pipeline-state">Unavailable</span></div>)}</div></Card></div>
-      <aside className="processing-side"><Card className="run-summary"><div className="card-header"><div><h3>Run summary</h3><p>Review configuration before execution</p></div><span className="summary-icon"><Workflow size={18}/></span></div><div className="summary-pair"><span>Run name</span><b>{jobName || 'Untitled run'}</b></div><div className="summary-pair"><span>Dataset</span><b>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.name || 'No backend dataset'}</b></div><div className="summary-pair"><span>Processing engine</span><b>{models.find(item=>item.id===jobEngine)?.name || '—'}</b></div><div className="summary-pair"><span>Output destination</span><b>{outputTable}</b></div><div className="summary-divider"/><div className="run-warning"><Sparkles size={16}/><span>Ready to process. Results will be saved to predictions parquet and review queue.</span></div><Button variant="primary" className="run-button" icon={jobRunning?RefreshCw:Play} disabled={jobRunning || !selectedBackendDatasetId} onClick={runPipeline}>{jobRunning?'Running Splink engine…':'Run pipeline'}</Button><Button className="run-button" icon={Save} onClick={()=>flash('Draft saved only in local browser state.')}>Save as draft</Button><small className="demo-note">{selectedBackendDatasetId?'Backend dataset ready to execute':'Upload or ingest a dataset before running'}</small></Card><Card className="progress-card"><div className="card-header"><div><h3>Execution progress</h3><p>{jobRunning?'Checking backend availability':'No processing job created'}</p></div><Gauge size={18} className="muted-icon"/></div><div className="progress-track"><span style={{width:'0%'}}/></div><div className="progress-meta"><b>0%</b><span>Unavailable</span></div><div className="terminal-box"><div><i/><i/><i/><span>RUN LOG</span></div><code>{jobRunning?'[fastapi] Checking dataset execution support…':'No job has been created; dataset execution is unavailable.'}</code></div></Card></aside></div>
+      <Card className="config-card"><div className="section-title"><div><span className="section-kicker">03 / PIPELINE</span><h3>Processing stages</h3><p>Stages reflect the fixed deduplication workflow executed by the backend.</p></div></div><div className="pipeline-list">{steps.map((step,index)=><div className="pipeline-row" key={step}><span className="pipeline-number">{String(index+1).padStart(2,'0')}</span><div><b>{step}</b><small>{descriptions[index]}</small></div><span className="pipeline-state">Unavailable</span></div>)}</div></Card></div>
+      <aside className="processing-side"><Card className="run-summary"><div className="card-header"><div><h3>Run summary</h3><p>Review configuration before execution</p></div><span className="summary-icon"><Workflow size={18}/></span></div><div className="summary-pair"><span>Run name</span><b>{jobName || 'Untitled run'}</b></div><div className="summary-pair"><span>Dataset</span><b>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.name || 'No backend dataset'}</b></div><div className="summary-pair"><span>Processing engine</span><b>{models.find(item=>item.id===jobEngine)?.name || '-'}</b></div><div className="summary-pair"><span>Output destination</span><b>{outputTable}</b></div><div className="summary-divider"/><div className="run-warning"><Sparkles size={16}/><span>Ready to process. Results will be saved to predictions parquet and review queue.</span></div><Button variant="primary" className="run-button" icon={jobRunning?RefreshCw:Play} disabled={jobRunning || !selectedBackendDatasetId} onClick={runPipeline}>{jobRunning?'Running Splink engine…':'Run pipeline'}</Button><Button className="run-button" icon={Save} onClick={()=>flash('Draft saved only in local browser state.')}>Save as draft</Button><small className="demo-note">{selectedBackendDatasetId?'Backend dataset ready to execute':'Upload or ingest a dataset before running'}</small></Card><Card className="progress-card"><div className="card-header"><div><h3>Execution progress</h3><p>{jobRunning?'Job running on backend':lastJob?'Last run completed':'No processing job created'}</p></div><Gauge size={18} className="muted-icon"/></div><div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={jobRunning?100:lastJob?100:0} aria-label="Job execution progress"><span style={{width:jobRunning?'100%':lastJob?'100%':'0%',transition:'width .4s ease'}} className={jobRunning?'is-running':''}/></div><div className="progress-meta"><b>{jobRunning?`${jobElapsed}s`:lastJob?`${lastJob.duration||'done'}`:'-'}</b><span>{jobRunning?'Elapsed':lastJob?`${lastJob.pairs_scored||0} pairs scored`:'Idle'}</span></div><div className="terminal-box"><div><i/><i/><i/><span>RUN LOG</span></div><code>{jobRunning?`[fastapi] Processing ${selectedColumns.length>0?selectedColumns.length+' selected column(s)':'all columns'}… ${jobElapsed}s elapsed` : lastJob?`[${lastJob.id}] Completed in ${lastJob.duration} · ${lastJob.pairs_scored||0} pairs · ${lastJob.records_count||0} records`:  'No job has been created yet.'}</code></div></Card></aside></div>
     </>
   }
 
@@ -1359,12 +1411,12 @@ function App() {
         }
       />
       <div className="review-kpis">
-        <div><span className="kpi-dot amber"/><div><b>{liveStats ? liveStats.review.toLocaleString() : '—'}</b><small>Awaiting review</small></div></div>
-        <div><span className="kpi-dot mint"/><div><b>{reviewSummary ? reviewSummary.reviewed_today.toLocaleString() : '—'}</b><small>Reviewed today (audit)</small></div></div>
-        <div><span className="kpi-dot blue"/><div><b>{reviewSummary?.agreement_rate !== null && reviewSummary?.agreement_rate !== undefined ? `${(reviewSummary.agreement_rate * 100).toFixed(1)}%` : '—'}</b><small>{reviewSummary?'Agreement rate (audit)':'Agreement rate unavailable'}</small></div></div>
+        <div><span className="kpi-dot amber"/><div><b>{liveStats ? liveStats.review.toLocaleString() : '-'}</b><small>Awaiting review</small></div></div>
+        <div><span className="kpi-dot mint"/><div><b>{reviewSummary ? reviewSummary.reviewed_today.toLocaleString() : '-'}</b><small>Reviewed today (audit)</small></div></div>
+        <div><span className="kpi-dot blue"/><div><b>{reviewSummary?.agreement_rate !== null && reviewSummary?.agreement_rate !== undefined ? `${(reviewSummary.agreement_rate * 100).toFixed(1)}%` : '-'}</b><small>{reviewSummary?'Agreement rate (audit)':'Agreement rate unavailable'}</small></div></div>
       </div>
       <div className="review-progress">
-        <div><span>Queue share</span><b>{liveStats ? `${Math.round(liveStats.review / Math.max(liveStats.total_pairs,1) * 100)}%` : '—'}</b></div>
+        <div><span>Queue share</span><b>{liveStats ? `${Math.round(liveStats.review / Math.max(liveStats.total_pairs,1) * 100)}%` : '-'}</b></div>
         <div className="progress-track"><span style={{width:liveStats ? `${Math.round(liveStats.review / Math.max(liveStats.total_pairs,1) * 100)}%` : '0%'}}/></div>
       </div>
       <div className="review-workspace">
@@ -1454,12 +1506,12 @@ function App() {
                   if (key === 'divider') return <div className="compare-divider" key={key}><span>VS</span></div>
                   const record = pairDetail[key] || {}
                   return <div className="record-card" key={key}>
-                    <span className="record-label">RECORD {key === 'record_a' ? 'A' : 'B'}</span><h4>{record.record_id || '—'}</h4>
-                    <div><small>Full name</small><b>{[record.first_name, record.last_name].filter(Boolean).join(' ') || '—'}</b></div>
-                    <div><small>Email</small><b>{record.email || '—'}</b></div>
-                    <div><small>Phone</small><b>{record.phone_number || '—'}</b></div>
-                    <div><small>Date of birth</small><b>{record.dob || '—'}</b></div>
-                    <div><small>Full address</small><b>{[record.address, record.city, record.state, record.country].filter(Boolean).join(', ') || '—'}</b></div>
+                    <span className="record-label">RECORD {key === 'record_a' ? 'A' : 'B'}</span><h4>{record.record_id || '-'}</h4>
+                    <div><small>Full name</small><b>{[record.first_name, record.last_name].filter(Boolean).join(' ') || '-'}</b></div>
+                    <div><small>Email</small><b>{record.email || '-'}</b></div>
+                    <div><small>Phone</small><b>{record.phone_number || '-'}</b></div>
+                    <div><small>Date of birth</small><b>{record.dob || '-'}</b></div>
+                    <div><small>Full address</small><b>{[record.address, record.city, record.state, record.country].filter(Boolean).join(', ') || '-'}</b></div>
                   </div>
                 })}
               </div>
@@ -1532,7 +1584,7 @@ function App() {
                   <p>{ent.city ? `${ent.city} · ` : ''}{ent.email || ent.phone_number || 'Master identity profile'}</p>
                   <div className="pair-item-bottom">
                     <small>{ent.member_count} member records</small>
-                    <small>{ent.updated_at ? new Date(ent.updated_at).toLocaleDateString() : '—'}</small>
+                    <small>{ent.updated_at ? new Date(ent.updated_at).toLocaleDateString() : '-'}</small>
                   </div>
                 </button>
               ))}
@@ -1560,7 +1612,7 @@ function App() {
                   <p>{conf.description}</p>
                   <div className="pair-item-bottom">
                     <small>Entity: {conf.entity_id || 'Unassigned'}</small>
-                    <small>{conf.created_at ? new Date(conf.created_at).toLocaleDateString() : '—'}</small>
+                    <small>{conf.created_at ? new Date(conf.created_at).toLocaleDateString() : '-'}</small>
                   </div>
                 </div>
               ))}
@@ -1590,10 +1642,10 @@ function App() {
               <div className="record-card" style={{ marginBottom: '14px' }}>
                 <span className="record-label">MASTER GOLDEN CUSTOMER</span>
                 <h4>{selectedEntity.master_record_id || selectedEntity.entity_id}</h4>
-                <div><small>Full name</small><b>{[selectedEntity.first_name, selectedEntity.last_name].filter(Boolean).join(' ') || '—'}</b></div>
-                <div><small>Email</small><b>{selectedEntity.email || '—'}</b></div>
-                <div><small>Phone</small><b>{selectedEntity.phone_number || '—'}</b></div>
-                <div><small>City</small><b>{selectedEntity.city || '—'}</b></div>
+                <div><small>Full name</small><b>{[selectedEntity.first_name, selectedEntity.last_name].filter(Boolean).join(' ') || '-'}</b></div>
+                <div><small>Email</small><b>{selectedEntity.email || '-'}</b></div>
+                <div><small>Phone</small><b>{selectedEntity.phone_number || '-'}</b></div>
+                <div><small>City</small><b>{selectedEntity.city || '-'}</b></div>
               </div>
 
               <div className="card-header" style={{ padding: '0 0 8px 0' }}>
@@ -1624,10 +1676,10 @@ function App() {
                       {entityMembers.map(mem => (
                         <tr key={mem.record_id}>
                           <td><b>{mem.record_id}</b></td>
-                          <td>{[mem.first_name, mem.last_name].filter(Boolean).join(' ') || '—'}</td>
-                          <td>{mem.email || '—'}</td>
-                          <td>{mem.phone_number || '—'}</td>
-                          <td>{[mem.address, mem.city].filter(Boolean).join(', ') || '—'}</td>
+                          <td>{[mem.first_name, mem.last_name].filter(Boolean).join(' ') || '-'}</td>
+                          <td>{mem.email || '-'}</td>
+                          <td>{mem.phone_number || '-'}</td>
+                          <td>{[mem.address, mem.city].filter(Boolean).join(', ') || '-'}</td>
                           <td><span className="status-pill neutral">{mem.membership_source || 'linkage'}</span></td>
                         </tr>
                       ))}
@@ -1744,31 +1796,32 @@ function App() {
           <Button variant="primary" icon={Play} disabled={retrainStatus === 'running'} onClick={async () => {
             if (retrainStatus === 'running') return
             setRetrainStatus('running')
+            setRetrainLog('')
+            retrainOffset.current = 0
             try {
               await dedupApi.startRetrain({ skip_blocking_benchmark: true })
               flash('Retrain started in background.')
             } catch (e) {
               flash(`Retrain failed: ${e.message || e}`)
-            } finally {
               setRetrainStatus(null)
-              loadModelData()
             }
           }}>{retrainStatus === 'running' ? 'Running...' : 'Retrain'}</Button>
         </>}
       />
       {activeVersion && <div className="info-banner"><BrainCircuit size={18}/><div><b>Active model</b><p>Version <code>{activeVersion}</code> · match threshold <b>{modelInfo.threshold_match}</b> · review threshold <b>{modelInfo.threshold_review}</b></p></div></div>}
       {!activeVersion && <div className="info-banner amber-banner"><CircleAlert size={17}/><div><b>No active model</b><p>Run a full pipeline first to create a model version before rolling back or retraining.</p></div></div>}
+      {retrainStatus === 'running' && <Card className="retrain-log-card"><div className="card-header"><div><h3>Retrain log</h3><p>Live output from the background pipeline</p></div><Terminal size={18} className="muted-icon"/></div><pre className="retrain-log-pre">{retrainLog || 'Waiting for output…'}</pre></Card>}
       {modelVersions.length === 0
         ? <Card><div className="empty-state"><SearchX size={20}/><b>No model versions yet</b><span>Run the full pipeline to train your first model.</span></div></Card>
         : <div style={{display:'flex',flexDirection:'column',gap:8}}>
           {modelVersions.map((v, idx) => (
             <Card key={v.version} className={cx(v.version===activeVersion&&'model-card','version-row')}>
-              <div style={{display:'flex',alignItems:'center',gap:16}}>
-                <span style={{fontWeight:700,minWidth:140}}>{v.version}</span>
+              <div className="version-row" style={{display:'flex',alignItems:'center',gap:16}}>
+                <span className="version-value">{v.version}</span>
                 <StatusPill value={v.complete ? 'Complete' : 'Incomplete'} />
-                <span style={{color:'var(--muted)'}}>{new Date(v.created_at||0).toLocaleString('id-ID')}</span>
-                <span style={{minWidth:90}}>{v.scope === 'full' ? 'Full run' : 'Sample run'}</span>
-                <span style={{minWidth:90}}>{v.pairs_scored ? v.pairs_scored.toLocaleString() + ' pairs' : '—'}</span>
+                <span className="timestamp">{new Date(v.created_at||0).toLocaleString('id-ID')}</span>
+                <span className="version-label">{v.scope === 'full' ? 'Full run' : 'Sample run'}</span>
+                <span className="version-label">{v.pairs_scored ? v.pairs_scored.toLocaleString() + ' pairs' : '-'}</span>
                 {v.version !== activeVersion && (
                   <button
                     className="text-link"
@@ -1784,7 +1837,7 @@ function App() {
                     }}
                   >Roll back</button>
                 )}
-                {v.version === activeVersion && <span style={{marginLeft:'auto',fontSize:12,color:'var(--accent-violet)'}}>● Current</span>}
+                {v.version === activeVersion && <span className="current-tag">● Current</span>}
               </div>
             </Card>
           ))}
@@ -1803,7 +1856,7 @@ function App() {
     return <>
       <PageHeader title={meta[0]} subtitle={meta[1]} actions={<div className="date-control"><CalendarDays size={15}/> All available data</div>} />
       <div className="info-banner amber-banner"><CircleAlert size={17}/><div><b>Prediction counts are not evaluation metrics</b><p>Precision, recall, and F1 require independently reviewed gold labels and documented evaluation splits. Those inputs are not available through the current API.</p></div></div>
-      <div className="metrics-grid"><MetricCard label="Precision" value="—" change="Unavailable" caption="gold evaluation required" icon={TargetIcon} tone="mint"/><MetricCard label="Recall" value="—" change="Unavailable" caption="gold evaluation required" icon={Gauge} tone="blue"/><MetricCard label="F1 score" value="—" change="Unavailable" caption="gold evaluation required" icon={Activity} tone="violet"/><MetricCard label="Review rate" value={total ? `${((liveStats.review / total) * 100).toFixed(1)}%` : '—'} change={liveState==='live'?'Live':'Unavailable'} caption="live output share" icon={ListChecks} tone="amber" trend="down"/></div>
+      <div className="metrics-grid"><MetricCard label="Precision" value="-" change="Unavailable" caption="gold evaluation required" icon={TargetIcon} tone="mint"/><MetricCard label="Recall" value="-" change="Unavailable" caption="gold evaluation required" icon={Gauge} tone="blue"/><MetricCard label="F1 score" value="-" change="Unavailable" caption="gold evaluation required" icon={Activity} tone="violet"/><MetricCard label="Review rate" value={total ? `${((liveStats.review / total) * 100).toFixed(1)}%` : '-'} change={liveState==='live'?'Live':'Unavailable'} caption="live output share" icon={ListChecks} tone="amber" trend="down"/></div>
       <div className="analytics-grid">
         <Card className="chart-card"><div className="card-header"><div><h3>Evaluation trend</h3><p>No evaluation history endpoint is available.</p></div><StatusPill value="Unavailable"/></div><div className="empty-state small-empty"><SearchX size={20}/><b>No evaluation runs</b><span>Record gold-label evaluations before displaying model performance.</span></div></Card>
         <Card className="quality-card">
@@ -1824,116 +1877,11 @@ function App() {
       />
       <div className="db-layout">
         <div className="db-main">
-          <Card className="db-connection">
-            <div className="connection-card large">
-              <div className="connection-brand"><Database size={22} /></div>
-              <div className="connection-info">
-                <div>
-                  <h3>Splink PostgreSQL</h3>
-                  <StatusPill value={databaseStatus?.status === "connected" ? "Connected" : "Unavailable"} />
-                </div>
-                <p>Schema splink_data · read-only API inspection</p>
-                <small>{databaseStatus?.status === "connected" ? `${databaseStatus.table_count} tables available` : "Database status unavailable"}</small>
-              </div>
-              <Button
-                onClick={async () => {
-                  try {
-                    const status = await dedupApi.getDatabaseStatus()
-                    const tables = await dedupApi.getDatabaseTables()
-                    setDatabaseStatus(status)
-                    setDatabaseTables(tables.tables || [])
-                    setDatabaseIngestibleTables(tables.ingestible_tables || [])
-                    setConnectionStatus(status.status === "connected" ? "Connected" : "Unavailable")
-                    flash(status.status === "connected" ? "Database connection verified." : "Database connection unavailable.")
-                  } catch (error) {
-                    setConnectionStatus("Unavailable")
-                    setDatabaseStatus({ status: 'unavailable', table_count: 0 })
-                    setDatabaseTables([])
-                    setDatabaseIngestibleTables([])
-                    flash(`Database check failed: ${error.message || error}`)
-                  }
-                }}
-                icon={RefreshCw}
-              >
-                Test connection
-              </Button>
-            </div>
-            <div className="db-properties">
-              <div><span>Engine</span><b>PostgreSQL</b></div>
-              <div><span>Host</span><b>{databaseStatus?.status === "connected" ? "Configured" : "Unavailable"}</b></div>
-              <div><span>Schema</span><b>splink_data</b></div>
-              <div><span>Access mode</span><b>Read-only</b></div>
-            </div>
-          </Card>
-          <Card className="schema-card">
-            <div className="card-header">
-              <div><h3>Schema browser</h3><p>Tables returned by the read-only FastAPI database endpoint.</p></div>
-              <Button
-                icon={RefreshCw}
-                onClick={async () => {
-                  try {
-                    const tables = await dedupApi.getDatabaseTables()
-                    setDatabaseTables(tables.tables || [])
-                    setDatabaseIngestibleTables(tables.ingestible_tables || [])
-                    flash(`Loaded ${tables.total} tables.`)
-                  } catch (error) {
-                    setDatabaseTables([])
-                    setDatabaseIngestibleTables([])
-                    flash(`Schema refresh failed: ${error.message || error}`)
-                  }
-                }}
-              >
-                Refresh
-              </Button>
-            </div>
-            <div className="schema-tree">
-              <div className="schema-root"><Database size={16} /><b>splink_data</b><span>Schema</span></div>
-              {databaseTables.map(table => (
-                <div className="schema-group" key={table}>
-                  <div><Table2 size={14} /><b>{table}</b><small>Table</small></div>
-                  <div className="schema-group-action">
-                    <span>Read-only</span>
-                    <button
-                      type="button"
-                      className="schema-preview-button"
-                      aria-expanded={databaseColumnPreview?.table === table}
-                      onClick={() => toggleDatabaseColumnPreview(table)}
-                    >
-                      {databaseColumnPreview?.table === table ? 'Hide columns' : 'Preview columns'}
-                    </button>
-                    {databaseIngestibleTables.includes(table) && (
-                      <button
-                        type="button"
-                        className="schema-ingest-button"
-                        disabled={Boolean(databaseIngestingTable)}
-                        aria-label={`Import ${table} as a dataset`}
-                        onClick={() => importDatabaseTable(table)}
-                      >
-                        <CloudUpload size={13} />
-                        {databaseIngestingTable === table ? 'Importing…' : 'Import dataset'}
-                      </button>
-                    )}
-                  </div>
-                  {databaseColumnPreview?.table === table && (
-                    <div className="schema-column-preview" role="status">
-                      {databaseColumnPreview.loading ? 'Loading columns…' : databaseColumnPreview.error
-                        ? databaseColumnPreview.error
-                        : databaseColumnPreview.columns.length
-                          ? databaseColumnPreview.columns.map(column => (
-                            <span key={column.name}>{column.name} <small>{column.type}</small></span>
-                          ))
-                          : 'No columns found.'}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card>
           <Card className="schema-card">
             <div className="card-header">
               <div>
                 <h3>Supabase</h3>
-                <p>Tabel Supabase PostgreSQL — schema: public.</p>
+                <p>Tabel Supabase PostgreSQL - schema: public.</p>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
                 <StatusPill value={supabaseStatus?.status === 'connected' ? 'Connected' : supabaseStatus ? 'Unavailable' : 'Loading…'} />
@@ -1949,7 +1897,7 @@ function App() {
                         dedupApi.getSupabaseDatasets(),
                       ])
                       setSupabaseStatus(sStatus)
-                      setSupabaseTables(sTables?.tables || [])
+                      setDatabaseTables(sTables?.tables || [])
                       setSupabaseDatasets(sDatasets?.datasets || [])
                       flash(`Supabase: ${sTables?.total ?? 0} tables loaded.`)
                     } catch (error) {
@@ -2098,8 +2046,6 @@ function App() {
           <button className="selected" type="button"><Settings size={15}/> General <ChevronRight size={14}/></button>
           <button type="button" onClick={() => document.getElementById('settings-appearance')?.scrollIntoView({ behavior: 'smooth' })}><Sun size={15}/> Appearance <ChevronRight size={14}/></button>
           <button type="button" onClick={() => document.getElementById('settings-processing')?.scrollIntoView({ behavior: 'smooth' })}><Workflow size={15}/> Processing defaults <ChevronRight size={14}/></button>
-          <button type="button" onClick={() => flash('Export preferences are not available in the current settings API.')}><Download size={15}/> Export preferences <ChevronRight size={14}/></button>
-          <button type="button" onClick={() => flash('Security preferences are managed by the deployment administrator.')}><ShieldCheck size={15}/> Security <ChevronRight size={14}/></button>
         </Card>
         <div className="settings-content">
           <Card className="settings-card">
@@ -2175,21 +2121,17 @@ function App() {
               <PanelLeftClose size={16} />
             )}
           </button>
-          <button className="mobile-close" onClick={() => setMobileMenu(false)}>
-            <X size={18} />
+          <button className="mobile-close" aria-label="Close navigation" onClick={() => setMobileMenu(false)}>
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
-        <button
-          className="workspace-switch"
-          onClick={() => flash("Workspace switcher is a visual placeholder.")}
-        >
+        <div className="workspace-switch">
           <span className="workspace-avatar">ND</span>
           <span className="workspace-copy">
             <b>Data workspace</b>
             <small>Personal environment</small>
           </span>
-          <ChevronDown size={14} />
-        </button>
+        </div>
         <nav className="main-nav">
           {navigation.map((group) => (
             <div className="nav-group" key={group.group}>
