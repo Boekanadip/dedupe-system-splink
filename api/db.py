@@ -5,7 +5,7 @@ from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 from dotenv import load_dotenv
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 # Load .env file (force reload)
 env_path = Path(__file__).parent.parent / ".env"
@@ -33,21 +33,24 @@ def get_connection():
 @contextmanager
 def get_supabase_connection():
     url = os.getenv("SUPABASE_DATABASE_URL")
-    password = os.getenv("PASSWORD_SUPABASE")
+    password = os.getenv("SUPABASE_PASSWORD") or os.getenv("PASSWORD_SUPABASE")
 
     if not url:
         raise RuntimeError("SUPABASE_DATABASE_URL belum diset")
 
-    # Jika url tidak punya postgresql:// prefix
+    if "[" in url and "]" in url:
+        if not password:
+            raise RuntimeError("Password Supabase belum diset (SUPABASE_PASSWORD)")
+        start = url.find("[")
+        end = url.find("]", start)
+        url = f"{url[:start]}{quote(password, safe='')}{url[end + 1:]}"
+
     if not url.startswith("postgres"):
-        url = f"postgresql://postgres:{password}@{url}"
+        if not password:
+            raise RuntimeError("Password Supabase belum diset (SUPABASE_PASSWORD)")
+        url = f"postgresql://postgres:{quote(password, safe='')}@{url}"
 
-    conn = psycopg2.connect(
-        url,
-        sslmode="require",
-        connect_timeout=10,
-    )
-
+    conn = psycopg2.connect(url, sslmode="require", connect_timeout=10)
     try:
         yield conn
     finally:
