@@ -18,7 +18,8 @@ import io
 import hmac
 import threading
 import uuid
-from datetime import datetime, timezone
+from typing import Annotated
+from datetime import datetime, timedelta, timezone
 
 from src.export import csv_bytes, save_to_database
 from src.splink_model import (build_dynamic_settings_from_columns,
@@ -63,7 +64,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -77,6 +78,27 @@ DATASET_REGISTRY_LOCK = threading.RLock()
 JOB_REGISTRY_PATH = PROJECT_ROOT / "data" / "job_registry.json"
 WORKSPACE_SETTINGS_PATH = PROJECT_ROOT / "data" / "workspace_settings.json"
 WORKSPACE_SETTINGS_LOCK = threading.RLock()
+OUTPUT_DESTINATIONS_PATH = PROJECT_ROOT / "data" / "output_destinations.json"
+OUTPUT_DESTINATIONS_LOCK = threading.RLock()
+DEFAULT_OUTPUT_DESTINATIONS = [
+    {
+        "id": "local_parquet",
+        "type": "local",
+        "name": "Local Parquet",
+        "config": {"path": str(OUTPUT_DIR)},
+        "enabled": True,
+        "builtin": True,
+    },
+    {
+        "id": "supabase_default",
+        "type": "supabase",
+        "name": "Supabase (default)",
+        "config": {"table": "public.dedup_outputs"},
+        "enabled": True,
+        "builtin": True,
+    },
+]
+OUTPUT_DESTINATION_TYPES = {"supabase", "s3", "webhook"}
 DEFAULT_WORKSPACE_SETTINGS = {
     "workspace_name": "HyperData Intelligence",
     "timezone": "Asia/Jakarta",
@@ -86,12 +108,15 @@ DEFAULT_WORKSPACE_SETTINGS = {
     "preserve_source_data": True,
     "require_output_confirmation": True,
     "keep_processing_audit_trail": True,
+    "default_output_destination": "local_parquet",
 }
 WORKSPACE_SETTINGS_FIELDS = set(DEFAULT_WORKSPACE_SETTINGS)
 
 # Load predictions and customer records once
 _predictions_df = None
 _customers_df = None
+_predictions_mtime = None
+_customers_mtime = None
 
 
 def read_model_version():
@@ -264,6 +289,35 @@ def write_workspace_settings(settings):
             raise HTTPException(status_code=500, detail="Workspace settings could not be saved") from exc
 
 
+def read_output_destinations():
+    with OUTPUT_DESTINATIONS_LOCK:
+        custom = []
+        if OUTPUT_DESTINATIONS_PATH.exists():
+            try:
+                data = json.loads(OUTPUT_DESTINATIONS_PATH.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                raise HTTPException(status_code=500, detail="Output destinations could not be read") from exc
+            if isinstance(data, dict) and isinstance(data.get("destinations"), list):
+                custom = data["destinations"]
+        return [*DEFAULT_OUTPUT_DESTINATIONS, *custom]
+
+
+def write_output_destinations(destinations):
+    with OUTPUT_DESTINATIONS_LOCK:
+        temporary_path = OUTPUT_DESTINATIONS_PATH.with_name(
+            f".{OUTPUT_DESTINATIONS_PATH.name}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            OUTPUT_DESTINATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path.write_text(
+                json.dumps({"destinations": destinations}, indent=2), encoding="utf-8"
+            )
+            temporary_path.replace(OUTPUT_DESTINATIONS_PATH)
+        except OSError as exc:
+            temporary_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail="Output destinations could not be saved") from exc
+
+
 def register_dataset(dataset):
     with DATASET_REGISTRY_LOCK:
         registry = read_dataset_registry()
@@ -296,21 +350,83 @@ def validate_dataset_frame(frame):
         raise HTTPException(status_code=422, detail="Dataset contains duplicate record_id values")
 
 
+def upload_targets():
+    from src.config import COLUMN_MAP, DB_COLUMN_MAP
+
+    return sorted({*COLUMN_MAP.values(), *DB_COLUMN_MAP.values(), "record_id"})
+
+
+def suggest_column_mapping(columns):
+    from src.config import COLUMN_MAP, DB_COLUMN_MAP
+
+    aliases = {**DB_COLUMN_MAP}
+    for canonical, source in COLUMN_MAP.items():
+        aliases.setdefault(canonical, canonical)
+        aliases.setdefault(source, canonical)
+    normalized = str.maketrans({" ": "_", "-": "_"})
+    mapping = {}
+    for column in columns:
+        key = str(column).strip().lower().translate(normalized)
+        target = aliases.get(key) or aliases.get(key.replace("_", ""))
+        if target and target not in mapping.values():
+            mapping[str(column)] = target
+    return mapping
+
+
+def prepare_upload_frame(frame, mapping=None):
+    rename = {}
+    if mapping:
+        for source, target in mapping.items():
+            if source in frame.columns and target:
+                rename[source] = target
+    else:
+        from src.config import COLUMN_MAP, DB_COLUMN_MAP
+
+        normalized = {str(c).strip().lower().replace(" ", "_"): c for c in frame.columns}
+        targets = set()
+        for alias, target in DB_COLUMN_MAP.items():
+            key = alias.strip().lower().replace(" ", "_")
+            if key in normalized and target not in targets:
+                rename[normalized[key]] = target
+                targets.add(target)
+        for canonical, source in COLUMN_MAP.items():
+            for candidate in (canonical, source):
+                key = candidate.strip().lower().replace(" ", "_")
+                if key in normalized and canonical not in targets:
+                    rename[normalized[key]] = canonical
+                    targets.add(canonical)
+                    break
+    out = frame.rename(columns=rename).copy()
+    if "record_id" not in out.columns:
+        out.insert(0, "record_id", [f"rec_{i:06d}" for i in range(1, len(out) + 1)])
+    return out
+
+
 def get_predictions():
-    global _predictions_df
+    global _predictions_df, _predictions_mtime
 
-    if _predictions_df is None and PREDICTIONS_PATH.exists():
+    if not PREDICTIONS_PATH.exists():
+        _predictions_df = None
+        _predictions_mtime = None
+        return None
+    mtime = PREDICTIONS_PATH.stat().st_mtime_ns
+    if _predictions_df is None or mtime != _predictions_mtime:
         _predictions_df = pd.read_parquet(PREDICTIONS_PATH)
-
+        _predictions_mtime = mtime
     return _predictions_df
 
 
 def get_customers():
-    global _customers_df
+    global _customers_df, _customers_mtime
 
-    if _customers_df is None and PROCESSED_DATA_PATH.exists():
+    if not PROCESSED_DATA_PATH.exists():
+        _customers_df = None
+        _customers_mtime = None
+        return None
+    mtime = PROCESSED_DATA_PATH.stat().st_mtime_ns
+    if _customers_df is None or mtime != _customers_mtime:
         _customers_df = pd.read_parquet(PROCESSED_DATA_PATH)
-
+        _customers_mtime = mtime
     return _customers_df
 
 
@@ -650,6 +766,9 @@ def update_workspace_settings(data: dict, request: Request):
         raise HTTPException(status_code=422, detail="date_format is invalid")
     if not isinstance(settings["theme"], str) or settings["theme"] not in {"light", "dark"}:
         raise HTTPException(status_code=422, detail="theme is invalid")
+    destination_ids = {item["id"] for item in read_output_destinations()}
+    if settings["default_output_destination"] not in destination_ids:
+        raise HTTPException(status_code=422, detail="default_output_destination is not registered")
     for field in (
         "preserve_source_data",
         "require_output_confirmation",
@@ -660,6 +779,118 @@ def update_workspace_settings(data: dict, request: Request):
 
     write_workspace_settings(settings)
     return JSONResponse({"settings": settings})
+
+
+@app.get("/api/activity/trend")
+def activity_trend(request: Request, days: int = Query(30, ge=1, le=365)):
+    """Daily processing counts from the job registry and review audit."""
+    require_api_key(request)
+    today = datetime.now(timezone.utc).date()
+    dates = [(today - timedelta(days=offset)).isoformat()
+             for offset in range(days - 1, -1, -1)]
+    by_date = {date: {"date": date, "processed": 0, "runs": 0, "reviews": 0}
+               for date in dates}
+
+    def add_count(date, field, value):
+        try:
+            by_date[date][field] += int(value or 0)
+        except (TypeError, ValueError):
+            pass
+
+    history_path = OUTPUT_DIR / "incremental_history.jsonl"
+    if history_path.exists():
+        for line in history_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            date = str(entry.get("timestamp") or "")[:10]
+            if date in by_date:
+                add_count(date, "processed", entry.get("rows", entry.get("processed_records")))
+                add_count(date, "runs", 1)
+
+    for job in read_job_registry()["jobs"]:
+        date = str(job.get("created_at") or "")[:10]
+        if date not in by_date:
+            continue
+        add_count(date, "processed", job.get("records_count"))
+        add_count(date, "runs", 1)
+
+    if REVIEW_AUDIT_PATH.exists():
+        import csv
+        with REVIEW_AUDIT_PATH.open("r", encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                date = str(row.get("created_at") or "")[:10]
+                if date in by_date:
+                    by_date[date]["reviews"] += 1
+
+    trend = [by_date[date] for date in dates]
+    return JSONResponse({
+        "trend": trend,
+        "days": days,
+        "total_processed": sum(d["processed"] for d in trend),
+    })
+
+
+@app.get("/api/output/destinations")
+def list_output_destinations(request: Request):
+    require_api_key(request)
+    destinations = read_output_destinations()
+    return JSONResponse({"destinations": destinations, "total": len(destinations)})
+
+
+@app.post("/api/output/destinations")
+def create_output_destination(data: dict, request: Request):
+    require_api_key(request)
+    name = str(data.get("name") or "").strip()
+    kind = data.get("type")
+    config = data.get("config")
+    if not name or len(name) > 100:
+        raise HTTPException(status_code=422, detail="name must be a non-empty string of at most 100 characters")
+    if kind not in OUTPUT_DESTINATION_TYPES:
+        raise HTTPException(status_code=422, detail="type must be supabase, s3, or webhook")
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=422, detail="config must be an object")
+
+    required = {
+        "supabase": ("table",),
+        "s3": ("bucket", "prefix"),
+        "webhook": ("url",),
+    }[kind]
+    missing = [field for field in required if not str(config.get(field) or "").strip()]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"config missing: {', '.join(missing)}")
+
+    destinations = read_output_destinations()
+    if any(item["id"] == name for item in destinations):
+        raise HTTPException(status_code=409, detail="Output destination already exists")
+    entry = {
+        "id": name,
+        "type": kind,
+        "name": name,
+        "config": config,
+        "enabled": data.get("enabled", True) is not False,
+        "builtin": False,
+    }
+    destinations.append(entry)
+    write_output_destinations(destinations[len(DEFAULT_OUTPUT_DESTINATIONS):])
+    return JSONResponse({"destination": entry}, status_code=201)
+
+
+@app.delete("/api/output/destinations/{destination_id}")
+def delete_output_destination(destination_id: str, request: Request):
+    require_api_key(request)
+    destinations = read_output_destinations()
+    entry = next((item for item in destinations if item["id"] == destination_id), None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Output destination not found")
+    if entry.get("builtin"):
+        raise HTTPException(status_code=409, detail="Built-in output destinations cannot be deleted")
+    destinations.remove(entry)
+    write_output_destinations(destinations[len(DEFAULT_OUTPUT_DESTINATIONS):])
+    return JSONResponse({"deleted": destination_id})
 
 
 @app.get("/api/datasets")
@@ -762,7 +993,37 @@ def supabase_datasets(request: Request):
 
         with get_supabase_connection() as conn:
             with conn.cursor() as cursor:
-                for table in SUPABASE_TABLES:
+                # Get all user-defined tables in the public schema
+                cursor.execute(
+                    """
+                    SELECT table_name FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_type = 'BASE TABLE'
+                    AND table_name NOT IN (
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'auth'
+                        UNION
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'extensions'
+                        UNION
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'realtime'
+                        UNION
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'storage'
+                        UNION
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'supabase_migrations'
+                        UNION
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'vault'
+                    )
+                    ORDER BY table_name
+                    """
+                )
+                user_tables = [row[0] for row in cursor.fetchall()]
+
+                for table in user_tables:
                     cursor.execute(
                         sql.SQL("SELECT COUNT(*) FROM {}.{}").format(
                             sql.Identifier("public"),
@@ -1196,8 +1457,20 @@ def database_ingest(data: dict, request: Request):
     return supabase_ingest(data, request)
 
 
-@app.post("/api/datasets/upload")
-async def upload_dataset(request: Request, file: UploadFile = File(...)):
+def validate_column_mapping(mapping, columns):
+    if not isinstance(mapping, dict):
+        raise HTTPException(status_code=422, detail="column_mapping must be an object")
+    targets = set(upload_targets())
+    available = set(map(str, columns))
+    for source, target in mapping.items():
+        if source not in available:
+            raise HTTPException(status_code=422, detail=f"Unknown source column: {source}")
+        if target and target not in targets:
+            raise HTTPException(status_code=422, detail=f"Unsupported target column: {target}")
+
+
+@app.post("/api/datasets/inspect")
+async def inspect_upload(request: Request, file: UploadFile = File(...)):
     require_api_key(request)
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:
@@ -1205,6 +1478,40 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
     suffix = Path(file.filename).suffix.lower()
     if suffix not in {".csv", ".parquet"}:
         raise HTTPException(status_code=400, detail="Only CSV or Parquet files are supported")
+    try:
+        import io
+        source = io.BytesIO(content)
+        frame = pd.read_parquet(source) if suffix == ".parquet" else pd.read_csv(source)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid dataset file: {exc}")
+    columns = [str(column) for column in frame.columns]
+    return JSONResponse({
+        "columns": columns,
+        "rows": len(frame),
+        "targets": upload_targets(),
+        "suggested_mapping": suggest_column_mapping(columns),
+    })
+
+
+@app.post("/api/datasets/upload")
+async def upload_dataset(
+    request: Request,
+    file: UploadFile = File(...),
+    column_mapping: Annotated[str | None, Form()] = None,
+):
+    require_api_key(request)
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB.")
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in {".csv", ".parquet"}:
+        raise HTTPException(status_code=400, detail="Only CSV or Parquet files are supported")
+    mapping = None
+    if column_mapping:
+        try:
+            mapping = json.loads(column_mapping)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="column_mapping must be valid JSON") from exc
 
     DATASET_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     dataset_id = f"DS-{uuid.uuid4().hex[:8].upper()}"
@@ -1212,27 +1519,15 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
     target.write_bytes(content)
     try:
         frame = pd.read_parquet(target) if suffix == ".parquet" else pd.read_csv(target)
+        if mapping is not None:
+            validate_column_mapping(mapping, frame.columns)
+        frame = prepare_upload_frame(frame, mapping)
+        if suffix == ".parquet":
+            frame.to_parquet(target, index=False)
+        else:
+            frame.to_csv(target, index=False)
 
         validate_dataset_frame(frame)
-
-        from src.standardize import standardize
-        model_file = None
-        if MODEL_PATH.exists():
-            try:
-                pointer = json.loads(MODEL_PATH.read_text(encoding="utf-8"))
-                model_file = Path(pointer.get("path", "")) / "model.json"
-            except (OSError, ValueError):
-                model_file = None
-        if model_file and model_file.exists():
-            model = json.loads(model_file.read_text(encoding="utf-8"))
-            model_text = json.dumps(model.get("comparisons", []) + model.get("blocking_rules_to_generate_predictions", []))
-            required = set(__import__("re").findall(r"\b[a-z_]+_std\b", model_text))
-            unavailable = required - set(standardize(frame).columns)
-            if unavailable:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Dataset cannot run active model; missing standardized columns: {', '.join(sorted(unavailable))}",
-                )
 
         dataset = {
             "id": dataset_id,
@@ -1339,12 +1634,15 @@ def create_job(request: Request, data: dict):
         pred_df.to_parquet(PREDICTIONS_PATH, index=False)
         from src.config import write_meta
         write_meta(PREDICTIONS_PATH, **run_meta)
+        global _predictions_df, _predictions_mtime, _customers_df, _customers_mtime
         _predictions_df = pred_df
+        _predictions_mtime = PREDICTIONS_PATH.stat().st_mtime_ns
 
         PROCESSED_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
         std_df.to_parquet(PROCESSED_DATA_PATH, index=False)
         write_meta(PROCESSED_DATA_PATH, **run_meta)
         _customers_df = std_df
+        _customers_mtime = PROCESSED_DATA_PATH.stat().st_mtime_ns
 
         job_record = {
             "id": job_id,
@@ -1583,6 +1881,89 @@ def stats():
     })
 
 
+@app.get("/api/evaluation")
+def evaluation_metrics(request: Request):
+    """Return model evaluation metrics computed against gold labels."""
+    require_api_key(request)
+    gold_path = PROJECT_ROOT / "data" / "labels" / "gold_labels_upgraded.csv"
+    preds_df = get_predictions()
+    
+    if not gold_path.exists() or preds_df is None:
+        return JSONResponse({
+            "status": "unavailable",
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "review_rate": 0.0,
+            "evaluation_samples": 0,
+            "history": [],
+            "timestamp": pd.Timestamp.now("UTC").isoformat()
+        })
+    
+    try:
+        gold_df = pd.read_csv(gold_path)
+        m = pd.merge(
+            gold_df[['record_id_l', 'record_id_r', 'label']],
+            preds_df[['record_id_l', 'record_id_r', 'match_probability', 'decision']],
+            on=['record_id_l', 'record_id_r'],
+            how='inner'
+        )
+        if m.empty:
+            raise ValueError("No overlapping pairs between gold labels and predictions")
+            
+        tp = int(((m['decision'] == 'MATCH') & (m['label'] == 'match')).sum())
+        fp = int(((m['decision'] == 'MATCH') & (m['label'] == 'no_match')).sum())
+        fn = int(((m['decision'] != 'MATCH') & (m['label'] == 'match')).sum())
+        tn = int(((m['decision'] != 'MATCH') & (m['label'] == 'no_match')).sum())
+        
+        prec = float(tp / (tp + fp)) if (tp + fp) else 0.0
+        rec = float(tp / (tp + fn)) if (tp + fn) else 0.0
+        f1 = float(2 * prec * rec / (prec + rec)) if (prec + rec) else 0.0
+        review_rate = float((preds_df['decision'] == 'REVIEW').sum() / len(preds_df)) if len(preds_df) else 0.0
+
+        # Threshold sweep for evaluation curve / trend across thresholds 0.50 .. 0.95
+        history = []
+        for thr in [0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]:
+            pred_pos = m['match_probability'] >= thr
+            t_tp = int((pred_pos & (m['label'] == 'match')).sum())
+            t_fp = int((pred_pos & (m['label'] == 'no_match')).sum())
+            t_fn = int((~pred_pos & (m['label'] == 'match')).sum())
+            t_p = float(t_tp / (t_tp + t_fp)) if (t_tp + t_fp) else 0.0
+            t_r = float(t_tp / (t_tp + t_fn)) if (t_tp + t_fn) else 0.0
+            t_f1 = float(2 * t_p * t_r / (t_p + t_r)) if (t_p + t_r) else 0.0
+            history.append({
+                "label": f"thr {thr:.2f}",
+                "threshold": thr,
+                "precision": round(t_p, 4),
+                "recall": round(t_r, 4),
+                "f1": round(t_f1, 4),
+            })
+
+        return JSONResponse({
+            "status": "evaluated",
+            "precision": round(prec, 4),
+            "recall": round(rec, 4),
+            "f1": round(f1, 4),
+            "review_rate": round(review_rate, 4),
+            "confusion_matrix": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
+            "evaluation_samples": len(m),
+            "gold_source": gold_path.name,
+            "history": history,
+            "timestamp": pd.Timestamp.now("UTC").isoformat()
+        })
+    except Exception as e:
+        return JSONResponse({
+            "status": "error",
+            "detail": str(e),
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "review_rate": 0.0,
+            "evaluation_samples": 0,
+            "history": []
+        })
+
+
 @app.get("/api/pairs")
 def pairs(
     request: Request,
@@ -1696,9 +2077,10 @@ async def batch_predict(request: Request, file: UploadFile = File(...)):
 def reload(request: Request, scope: str = Query("full", pattern="^(sample|full)$")):
     """Reload predictions from disk."""
     require_api_key(request)
-    global _predictions_df
+    global _predictions_df, _predictions_mtime
     prediction_path = PREDICTIONS_PATH if scope == "full" else (PROJECT_ROOT / "outputs" / "splink_predictions_sample.parquet")
     _predictions_df = pd.read_parquet(prediction_path) if prediction_path.exists() else None
+    _predictions_mtime = prediction_path.stat().st_mtime_ns if prediction_path.exists() else None
     df = _predictions_df
     return JSONResponse({
         "status": "reloaded",
@@ -1834,8 +2216,9 @@ def model_rollback(payload: dict, request: Request):
                 new_created_at = vmeta["created_at"]
         except Exception:
             pass
-    global _predictions_df
+    global _predictions_df, _predictions_mtime
     _predictions_df = None  # Invalidate predictions cache after rollback
+    _predictions_mtime = None
     MODEL_PATH.write_text(json.dumps({
         "version": version,
         "path": str(target),
@@ -1851,8 +2234,9 @@ def model_rollback(payload: dict, request: Request):
 
 def _start_tailer(log_path: Path, process):
     def tail():
-        global _predictions_df
+        global _predictions_df, _predictions_mtime
         _predictions_df = None  # Invalidate predictions cache after retrain
+        _predictions_mtime = None
         with open(log_path, "ab") as log_fh:
             while True:
                 line = process.stdout.readline()

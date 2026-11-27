@@ -39,7 +39,7 @@ const pageMeta = {
   datasets: ['Datasets', 'Explore imported data, schemas, and validation status.'],
   processing: ['Processing workspace', 'Configure a reusable pipeline and submit a processing run.'],
   review: ['Review queue', 'Resolve uncertain record pairs with a traceable human decision.'],
-  entities: ['Entity management', 'Explore resolved customer entities, cluster memberships, and identity conflicts. Supabase views are read-only.'],
+  entities: ['Entity management', 'Explore resolved customer entities, cluster memberships, and identity conflicts.'],
   history: ['Run history', 'Track processing runs, outcomes, and output destinations.'],
   models: ['Model registry', 'Manage processing engines independently from the platform UI.'],
   analytics: ['Evaluation', 'Monitor data quality, linkage outcomes, and model evaluation.'],
@@ -76,11 +76,11 @@ const toDatasetRow = dataset => ({
   source: dataset.source || 'File upload',
   rows: dataset.rows,
   columns: dataset.columns,
-  size: '-',
+  size: '—',
   status: dataset.status,
   updated: dataset.updated
     ? new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(dataset.updated))
-    : '-',
+    : '—',
 })
 const cx = (...values) => values.filter(Boolean).join(' ')
 
@@ -101,7 +101,7 @@ function Card({ children, className = '', padding = '' }) {
 }
 
 function PageHeader({ title, subtitle, eyebrow = 'DATA INTELLIGENCE', actions }) {
-  return <div className="page-header"><div><div className="eyebrow">{eyebrow} <span>/</span> {title.toUpperCase()}</div><h1>{title}</h1><h2 className="sr-only">{title} sections</h2><p>{subtitle}</p></div><div className="page-actions">{actions}</div></div>
+  return <div className="page-header"><div><div className="eyebrow">{eyebrow} <span>/</span> {title.toUpperCase()}</div><h1>{title}</h1><p>{subtitle}</p></div><div className="page-actions">{actions}</div></div>
 }
 
 function MetricCard({ label, value, change, caption, icon: Icon, tone = 'blue', trend = 'up' }) {
@@ -169,6 +169,7 @@ function App() {
   const [sourceTab, setSourceTab] = useState('files')
   const [models, setModels] = useState(modelSeed)
   const [modelVersions, setModelVersions] = useState([])
+  const [modelPage, setModelPage] = useState(1)
   const [modelInfo, setModelInfo] = useState(null)
   const [retrainStatus, setRetrainStatus] = useState(null) // 'running' | null
   const [retrainLog, setRetrainLog] = useState('')
@@ -192,7 +193,7 @@ const availableComparisonColumns = [
   const [modelName, setModelName] = useState('')
   const [connectionStatus, setConnectionStatus] = useState('Not tested')
   const [sourceType, setSourceType] = useState('PostgreSQL')
-  const [outputTable, setOutputTable] = useState('di_results.customer_linkage')
+  const [outputTable, setOutputTable] = useState('public.dedup_outputs')
   const [reviewSearch, setReviewSearch] = useState('')
   const [reviewDecisionFilter, setReviewDecisionFilter] = useState('REVIEW')
   const [showNotifications, setShowNotifications] = useState(false)
@@ -219,17 +220,20 @@ const availableComparisonColumns = [
   const [reviewHistory, setReviewHistory] = useState([])
   const [pairDetailRetry, setPairDetailRetry] = useState(0)
   const [databaseStatus, setDatabaseStatus] = useState(null)
-  const [supabaseTables, setDatabaseTables] = useState([])
+  const [databaseTables, setDatabaseTables] = useState([])
   const [databaseIngestibleTables, setDatabaseIngestibleTables] = useState([])
   const [databaseIngestingTable, setDatabaseIngestingTable] = useState('')
   const [databaseColumnPreview, setDatabaseColumnPreview] = useState(null)
   const [supabaseStatus, setSupabaseStatus] = useState(null)
+  const [supabaseTables, setSupabaseTables] = useState([])
   const [supabaseDatasets, setSupabaseDatasets] = useState([])
   const [supabaseRefreshing, setSupabaseRefreshing] = useState(false)
   const [supabaseColumnPreview, setSupabaseColumnPreview] = useState(null)
   const [supabaseDataPreview, setSupabaseDataPreview] = useState(null)
   const [supabaseIngestingTable, setSupabaseIngestingTable] = useState('')
   const [activityFeed, setActivityFeed] = useState([])
+  const [activityTrend, setActivityTrend] = useState([])
+  const [outputDestinations, setOutputDestinations] = useState([])
   const [entities, setEntities] = useState([])
   const [selectedEntity, setSelectedEntity] = useState(null)
   const [entityMembers, setEntityMembers] = useState([])
@@ -246,12 +250,18 @@ const availableComparisonColumns = [
     preserve_source_data: true,
     require_output_confirmation: true,
     keep_processing_audit_trail: true,
+    default_output_destination: 'local_parquet',
   })
+  const [mappingPreview, setMappingPreview] = useState(null)
+  const [mappingOpen, setMappingOpen] = useState(false)
+  const [mappingBusy, setMappingBusy] = useState(false)
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsDirty, setSettingsDirty] = useState(false)
   const [settingsSaving, setSettingsSaving] = useState(false)
+  const [settingsError, setSettingsError] = useState('')
   const [refreshTick, setRefreshTick] = useState(0)
 
+  // Auto-refresh data every 5 seconds when on a relevant page
   useEffect(() => {
     const refreshData = async () => {
       try {
@@ -294,7 +304,6 @@ const availableComparisonColumns = [
     const id = setInterval(refreshData, 5000)
     return () => clearInterval(id)
   }, [activePage, selectedReview, reviewDecisionFilter, retrainStatus, refreshTick, settingsDirty, settingsSaving])
-  const [settingsError, setSettingsError] = useState('')
 
   const navItem = navigation.flatMap(group => group.items).find(item => item.id === activePage)
   const meta = pageMeta[activePage]
@@ -307,9 +316,9 @@ const availableComparisonColumns = [
     const pages = navigation.flatMap(group => group.items).filter(item => item.label.toLowerCase().includes(query)).map(item => ({ type: 'page', id: item.id, title: item.label, detail: 'Open workspace page' }))
     const data = datasets.filter(item => `${item.name} ${item.id}`.toLowerCase().includes(query)).slice(0, 4).map(item => ({ type: 'dataset', id: item.id, title: item.name, detail: `Dataset · ${item.status}` }))
     const history = runs.filter(item => `${item.id} ${item.dataset}`.toLowerCase().includes(query)).slice(0, 3).map(item => ({ type: 'run', id: item.id, title: item.id, detail: `Run · ${item.dataset}` }))
-    const tables = supabaseTables.filter(table => table.toLowerCase().includes(query)).slice(0, 3).map(table => ({ type: 'table', id: table, title: table, detail: 'Database table' }))
+    const tables = databaseTables.filter(table => table.toLowerCase().includes(query)).slice(0, 3).map(table => ({ type: 'table', id: table, title: table, detail: 'Database table' }))
     return [...pages, ...data, ...history, ...tables, ...backendSearchResults].slice(0, 7)
-  }, [globalSearch, datasets, runs, supabaseTables, backendSearchResults])
+  }, [globalSearch, datasets, runs, databaseTables, backendSearchResults])
 
   const flash = (message) => {
     setToast(message)
@@ -348,7 +357,7 @@ const availableComparisonColumns = [
         id: job.id,
         dataset: job.dataset_name || job.dataset_id || 'Dataset unavailable',
         started: job.created_at ? new Date(job.created_at).toLocaleString() : 'Timestamp unavailable',
-        duration: job.duration || '-',
+        duration: job.duration || '—',
         status: job.status || 'Unknown',
       }))
       setRuns(current => append ? [...current, ...items] : items)
@@ -431,17 +440,35 @@ const availableComparisonColumns = [
       dedupApi.getActivityFeed()
         .then(res => setActivityFeed(res.activities || []))
         .catch(() => setActivityFeed([]));
+      dedupApi.getActivityTrend(30)
+        .then(res => setActivityTrend(res.trend || []))
+        .catch(() => setActivityTrend([]))
+      dedupApi.getOutputDestinations()
+        .then(res => setOutputDestinations(res.destinations || []))
+        .catch(() => setOutputDestinations([]))
+      Promise.all([
+        dedupApi.getDatabaseStatus(),
+        dedupApi.getDatabaseTables(),
+      ]).then(([status, tables]) => {
+        setDatabaseStatus(status)
+        setDatabaseTables(tables.tables || [])
+        setDatabaseIngestibleTables(tables.ingestible_tables || [])
+      }).catch(() => {
+        setDatabaseStatus({ status: 'unavailable', table_count: 0 })
+        setDatabaseTables([])
+        setDatabaseIngestibleTables([])
+      })
       Promise.all([
         dedupApi.getSupabaseStatus().catch(() => null),
         dedupApi.getSupabaseTables().catch(() => null),
         dedupApi.getSupabaseDatasets().catch(() => null),
       ]).then(([sStatus, sTables, sDatasets]) => {
         setSupabaseStatus(sStatus || { status: 'unavailable' })
-        setDatabaseTables(sTables?.tables || [])
+        setSupabaseTables(sTables?.tables || [])
         setSupabaseDatasets(sDatasets?.datasets || [])
       }).catch(() => {
         setSupabaseStatus({ status: 'unavailable' })
-        setDatabaseTables([])
+        setSupabaseTables([])
         setSupabaseDatasets([])
       })
       setLiveError("");
@@ -509,7 +536,9 @@ const availableComparisonColumns = [
         dedupApi.getModelVersions().catch(() => []),
         dedupApi.getModelInfo().catch(() => null),
       ])
-      setModelVersions(Array.isArray(versionsRes) ? versionsRes : [])
+      const versions = Array.isArray(versionsRes) ? versionsRes : []
+      const sorted = [...versions].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+      setModelVersions(sorted)
       setModelInfo(infoRes || null)
     } catch (e) {
       flash(`Failed to load model data: ${e.message || e}`)
@@ -578,16 +607,33 @@ const availableComparisonColumns = [
   }, [selectedReview?.id, pairDetailRetry])
   const selectFile = async (file) => {
     if (!file) return
+    setMappingBusy(true)
     try {
-      const uploaded = await dedupApi.uploadDataset(file)
+      const preview = await dedupApi.inspectUpload(file)
+      setMappingPreview({ file, columns: preview.columns || [], targets: preview.targets || [], mapping: preview.suggested_mapping || {}, rows: preview.rows || 0 })
+      setMappingOpen(true)
+    } catch (error) {
+      flash(`Gagal membaca kolom file: ${error.message || error}`)
+    } finally {
+      setMappingBusy(false)
+    }
+  }
+  const confirmMapping = async () => {
+    if (!mappingPreview) return
+    setMappingBusy(true)
+    try {
+      const uploaded = await dedupApi.uploadDataset(mappingPreview.file, mappingPreview.mapping)
       setBackendDatasets(current => [uploaded.dataset, ...current])
       setSelectedBackendDatasetId(uploaded.dataset.id)
       setDatasets(current => [toDatasetRow(uploaded.dataset), ...current.filter(item => item.id !== uploaded.dataset.id)])
+      setMappingOpen(false)
+      setMappingPreview(null)
+      flash(`${mappingPreview.file.name} uploaded and validated by FastAPI.`)
     } catch (error) {
       flash(`Gagal mengunggah dataset: ${error.message || error}`)
-      return
+    } finally {
+      setMappingBusy(false)
     }
-    flash(`${file.name} uploaded and validated by FastAPI.`)
   }
   const importDatabaseTable = async (table) => {
     setDatabaseIngestingTable(table)
@@ -732,7 +778,7 @@ const availableComparisonColumns = [
         throw new Error('The backend did not confirm that a processing job was created.')
       }
       setLastJob(response.job)
-      flash(`Processing run ${response.job.id} completed! Scored ${response.job.pairs_scored || 0} pairs in ${response.job.duration || '-'}.`)
+      flash(`Processing run ${response.job.id} completed! Scored ${response.job.pairs_scored || 0} pairs in ${response.job.duration || '—'}.`)
       await loadRuns(1, false)
       await loadReviewQueue(1, false)
       try {
@@ -858,7 +904,6 @@ const availableComparisonColumns = [
       const payload = await dedupApi.saveWorkspaceSettings(workspaceSettings)
       setWorkspaceSettings(payload.settings)
       setDark(payload.settings.theme === 'dark')
-      setSettingsDirty(false)
       flash('Workspace settings saved on the backend.')
     } catch (error) {
       setSettingsError(error.message || 'Failed to save workspace settings')
@@ -869,7 +914,6 @@ const availableComparisonColumns = [
   }
   const setWorkspaceSetting = (key, value) => {
     setWorkspaceSettings(current => ({ ...current, [key]: value }))
-    setSettingsDirty(true)
   }
   const exportReviews = () => {
     const rows = [['pair_id', 'left_record', 'right_record', 'score', 'decision', 'evidence'], ...reviews.map(row => [row.id, row.left, row.right, row.score, row.decision, row.reason])]
@@ -958,20 +1002,32 @@ const availableComparisonColumns = [
     const distributionTotal = liveStats?.total_pairs || 0
     const percentage = value => distributionTotal
       ? `${((value / distributionTotal) * 100).toFixed(1)}%`
-      : '-'
+      : '—'
     return <>
       <PageHeader title={meta[0]} subtitle={meta[1]} actions={<><div className="date-control"><CalendarDays size={15}/>{formatDate(workspaceSettings.date_format, workspaceSettings.timezone)} <ChevronDown size={13}/></div><Button icon={Download} onClick={exportDashboardStats}>Export report</Button></>} />
       <div className="welcome-strip"><div className="welcome-symbol"><Sparkles size={20}/></div><div><b>{liveState === 'live' ? 'Live data from FastAPI' : liveState === 'offline' ? 'Backend unavailable' : 'Connecting to FastAPI…'}</b><p>{liveState === 'live' ? 'Overview KPIs come from /api/stats and /api/model/info.' : liveState === 'offline' ? `Backend connection failed: ${liveError}. Live dashboard data is unavailable.` : 'Waiting for the backend response.'}</p></div><span className="demo-badge">{liveState === 'live' ? 'LIVE' : liveState === 'offline' ? 'OFFLINE' : 'CONNECTING'}</span></div>
       <div className="metrics-grid">
-        <MetricCard label="Pairs scored" value={liveStats ? liveStats.total_pairs.toLocaleString() : '-'} change={liveState === 'live' ? 'LIVE' : 'OFFLINE'} caption="from /api/stats" icon={Layers3} tone="blue" />
-        <MetricCard label="Matches" value={liveStats ? liveStats.matches.toLocaleString() : '-'} change={liveState === 'live' ? 'LIVE' : '-'} caption="match_threshold" icon={Workflow} tone="violet" />
-        <MetricCard label="Awaiting review" value={liveStats ? liveStats.review.toLocaleString() : '-'} change={liveState === 'live' ? 'LIVE' : '-'} caption="review queue" icon={ListChecks} tone="amber" trend="down" />
-        <MetricCard label="Non-matches" value={liveStats ? liveStats.non_matches.toLocaleString() : '-'} change={liveState === 'live' ? 'LIVE' : '-'} caption="from /api/stats" icon={CheckCheck} tone="mint" />
+        <MetricCard label="Pairs scored" value={liveStats ? liveStats.total_pairs.toLocaleString() : '—'} change={liveState === 'live' ? 'LIVE' : 'OFFLINE'} caption="from /api/stats" icon={Layers3} tone="blue" />
+        <MetricCard label="Matches" value={liveStats ? liveStats.matches.toLocaleString() : '—'} change={liveState === 'live' ? 'LIVE' : '—'} caption="match_threshold" icon={Workflow} tone="violet" />
+        <MetricCard label="Awaiting review" value={liveStats ? liveStats.review.toLocaleString() : '—'} change={liveState === 'live' ? 'LIVE' : '—'} caption="review queue" icon={ListChecks} tone="amber" trend="down" />
+        <MetricCard label="Non-matches" value={liveStats ? liveStats.non_matches.toLocaleString() : '—'} change={liveState === 'live' ? 'LIVE' : '—'} caption="from /api/stats" icon={CheckCheck} tone="mint" />
       </div>
       <div className="dashboard-grid">
         <Card className="chart-card">
-          <div className="card-header"><div><h3>Processing activity</h3><p>Historical processing activity is not provided by the current API.</p></div></div>
-          <div className="empty-state small-empty"><CircleAlert size={20}/><b>Activity trend unavailable</b><span>A time-series endpoint is required to show processed records by date.</span></div>
+          <div className="card-header"><div><h3>Processing activity</h3><p>Daily processed records from /api/activity/trend</p></div></div>
+          {(() => {
+            const active = activityTrend.filter(day => day.processed || day.runs || day.reviews)
+            const max = Math.max(...activityTrend.map(day => day.processed), 1)
+            if (!activityTrend.length || !active.length) {
+              return <div className="empty-state small-empty"><CircleAlert size={20}/><b>Activity trend unavailable</b><span>No processing activity recorded in the last 30 days.</span></div>
+            }
+            return <div className="activity-chart" role="img" aria-label="Daily processed records for the last 30 days">
+              {activityTrend.map(day => (
+                <span key={day.date} title={`${day.date}: ${day.processed} records · ${day.runs} runs · ${day.reviews} reviews`}
+                  style={{ height: `${Math.max((day.processed / max) * 100, 2)}%`, background: day.processed ? '#31a889' : '#e9edf4' }} />
+              ))}
+            </div>
+          })()}
         </Card>
         <Card className="distribution-card">
           <div className="card-header"><div><h3>Decision distribution</h3><p>{liveStats ? 'Current prediction decision counts' : 'Live prediction data required'}</p></div><button className="icon-button" aria-label="Open evaluation" onClick={() => navigate('analytics')}><ArrowRight size={16}/></button></div>
@@ -998,7 +1054,7 @@ const availableComparisonColumns = [
           <div className="card-header"><div><h3>Workspace activity</h3><p>Audit-backed events</p></div></div>
           <div className="activity-list">{activityFeed.length ? activityFeed.map((item, index) => {
             const Icon = item.icon || (item.type === 'review' ? ListChecks : (item.type === 'dataset' ? Table2 : Workflow))
-            const formattedTime = item.time ? new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'
+            const formattedTime = item.time ? new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'
             return <div className="activity-item" key={index}><span className={`activity-symbol ${item.tone}`}><Icon size={15}/></span><div><b>{item.title}</b><p>{item.detail}</p></div><small>{formattedTime}</small></div>
           }) : <div className="empty-state small-empty"><SearchX size={20}/><b>No activity events</b><span>No audit events recorded yet.</span></div>}</div>
         </Card>
@@ -1033,9 +1089,9 @@ const availableComparisonColumns = [
         />
         <MetricCard
           label="Healthy connections"
-          value={supabaseStatus?.status === "connected" ? "01 / 01" : "-"}
-          change={supabaseStatus?.status === "connected" ? "Connected" : "Unavailable"}
-          caption={supabaseStatus?.status === "connected" ? "Supabase read-only" : "Supabase unavailable"}
+          value={databaseStatus?.status === "connected" ? "01 / 01" : "—"}
+          change={databaseStatus?.status === "connected" ? "Connected" : "Unavailable"}
+          caption={databaseStatus?.status === "connected" ? "splink_data read-only" : "database not connected"}
           icon={ShieldCheck}
           tone="mint"
         />
@@ -1069,7 +1125,7 @@ const availableComparisonColumns = [
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv,.parquet,.xlsx,.json"
+                accept=".csv,.parquet"
                 hidden
                 onChange={(event) => {
                   selectFile(event.target.files?.[0]);
@@ -1092,7 +1148,7 @@ const availableComparisonColumns = [
                 Choose a file
               </Button>
               <small>
-                CSV, Parquet, XLSX, JSON · File is not sent to a server
+                CSV or Parquet · Columns mapped before the upload is registered
               </small>
             </div>
             <div className="source-guidance">
@@ -1339,6 +1395,21 @@ const availableComparisonColumns = [
               render: (r) => <StatusPill value={r.status} />,
             },
             { key: "updated", label: "Updated" },
+            {
+              key: "action",
+              label: "",
+              render: (r) => (
+                <button
+                  className="row-action"
+                  aria-label={`Detail dataset ${r.name}`}
+                  onClick={() =>
+                    flash(`${r.name}: dataset detail panel is planned.`)
+                  }
+                >
+                  <MoreHorizontal size={17} />
+                </button>
+              ),
+            },
           ]}
           rows={visibleDatasets}
         />
@@ -1374,13 +1445,352 @@ const availableComparisonColumns = [
   const renderProcessing = () => {
     const steps = ['Schema validation', 'Record ID generation', 'Standardization', 'Blocking', 'Probabilistic scoring', 'Decision & review outputs', 'Clustering & master record']
     const descriptions = ['Check required fields and data types', 'Create an internal identifier for each row', 'Normalize configured attributes', 'Generate candidate record pairs', 'Calculate linkage probabilities with the selected engine', 'Assign MATCH / REVIEW / NON_MATCH decisions', 'Build entity groups and master records']
-    return <>
-      <PageHeader title={meta[0]} subtitle={meta[1]} actions={<div className="draft-label"><span/> Backend dataset required</div>} />
-      <div className="processing-layout"><div className="processing-main"><Card className="config-card"><div className="section-title"><div><span className="section-kicker">01 / INPUT</span><h3>Choose your data</h3><p>Select a dataset uploaded and validated by FastAPI.</p></div><span className="step-status">Required</span></div><div className="form-grid"><Field label="Backend dataset" hint="Seed datasets are not executable."><select value={selectedBackendDatasetId} onChange={event=>setSelectedBackendDatasetId(event.target.value)}><option value="">Select an uploaded dataset</option>{backendDatasets.map(item=><option key={item.id} value={item.id}>{item.name} · {item.rows} rows · {item.status}</option>)}</select></Field><Field label="Run name"><input value={jobName} onChange={event=>setJobName(event.target.value)} placeholder="Give this run a name"/></Field><Field label="Comparison columns" hint="Pilih kolom standar untuk pembanding"><div className="column-selector">{availableComparisonColumns.map(col => <label key={col} className="checkbox-label"><input type="checkbox" checked={selectedColumns.includes(col)} onChange={e=>setSelectedColumns(prev=>prev.includes(col)?prev.filter(c=>c!==col): [...prev, col])} value={col} className="checkbox-input" />{col}</label>)}</div></Field></div><div className="selected-source"><span className="file-type-icon"><FileSpreadsheet size={17}/></span><div><b>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.name || 'No backend dataset selected'}</b><small>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.rows || '-'} records · {backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.columns || '-'} columns · Backend dataset</small></div><StatusPill value={selectedBackendDatasetId?'Validated':'Required'}/></div></Card>
-      <Card className="config-card"><div className="section-title"><div><span className="section-kicker">02 / ENGINE</span><h3>Select a processing engine</h3><p>Model-specific settings are isolated from the shared platform workflow.</p></div><button className="text-link" onClick={()=>navigate('models')}>Manage registry <ArrowRight size={14}/></button></div><div className="engine-select-list">{models.map(model=><button key={model.id} className={cx('engine-select',jobEngine===model.id&&'selected')} onClick={()=>setJobEngine(model.id)}><span className="engine-select-icon"><BrainCircuit size={18}/></span><span className="engine-select-text"><b>{model.name}</b><small>{model.family} · {model.runtime}</small></span><span className="engine-select-state"><StatusPill value={model.status}/>{jobEngine===model.id&&<CheckCircle2 size={17}/>}</span></button>)}</div><div className="info-banner compact"><Sparkles size={16}/><div><b>Engine Ready</b><p>Selected dataset (uploaded file or Supabase ingestion) will be standardized and linked using Splink with DuckDB engine.</p></div></div></Card>
-      <Card className="config-card"><div className="section-title"><div><span className="section-kicker">03 / PIPELINE</span><h3>Processing stages</h3><p>Stages reflect the fixed deduplication workflow executed by the backend.</p></div></div><div className="pipeline-list">{steps.map((step,index)=><div className="pipeline-row" key={step}><span className="pipeline-number">{String(index+1).padStart(2,'0')}</span><div><b>{step}</b><small>{descriptions[index]}</small></div><span className="pipeline-state">Unavailable</span></div>)}</div></Card></div>
-      <aside className="processing-side"><Card className="run-summary"><div className="card-header"><div><h3>Run summary</h3><p>Review configuration before execution</p></div><span className="summary-icon"><Workflow size={18}/></span></div><div className="summary-pair"><span>Run name</span><b>{jobName || 'Untitled run'}</b></div><div className="summary-pair"><span>Dataset</span><b>{backendDatasets.find(item=>item.id===selectedBackendDatasetId)?.name || 'No backend dataset'}</b></div><div className="summary-pair"><span>Processing engine</span><b>{models.find(item=>item.id===jobEngine)?.name || '-'}</b></div><div className="summary-pair"><span>Output destination</span><b>{outputTable}</b></div><div className="summary-divider"/><div className="run-warning"><Sparkles size={16}/><span>Ready to process. Results will be saved to predictions parquet and review queue.</span></div><Button variant="primary" className="run-button" icon={jobRunning?RefreshCw:Play} disabled={jobRunning || !selectedBackendDatasetId} onClick={runPipeline}>{jobRunning?'Running Splink engine…':'Run pipeline'}</Button><Button className="run-button" icon={Save} onClick={()=>flash('Draft saved only in local browser state.')}>Save as draft</Button><small className="demo-note">{selectedBackendDatasetId?'Backend dataset ready to execute':'Upload or ingest a dataset before running'}</small></Card><Card className="progress-card"><div className="card-header"><div><h3>Execution progress</h3><p>{jobRunning?'Job running on backend':lastJob?'Last run completed':'No processing job created'}</p></div><Gauge size={18} className="muted-icon"/></div><div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={jobRunning?100:lastJob?100:0} aria-label="Job execution progress"><span style={{width:jobRunning?'100%':lastJob?'100%':'0%',transition:'width .4s ease'}} className={jobRunning?'is-running':''}/></div><div className="progress-meta"><b>{jobRunning?`${jobElapsed}s`:lastJob?`${lastJob.duration||'done'}`:'-'}</b><span>{jobRunning?'Elapsed':lastJob?`${lastJob.pairs_scored||0} pairs scored`:'Idle'}</span></div><div className="terminal-box"><div><i/><i/><i/><span>RUN LOG</span></div><code>{jobRunning?`[fastapi] Processing ${selectedColumns.length>0?selectedColumns.length+' selected column(s)':'all columns'}… ${jobElapsed}s elapsed` : lastJob?`[${lastJob.id}] Completed in ${lastJob.duration} · ${lastJob.pairs_scored||0} pairs · ${lastJob.records_count||0} records`:  'No job has been created yet.'}</code></div></Card></aside></div>
-    </>
+    return (
+      <>
+        <PageHeader
+          title={meta[0]}
+          subtitle={meta[1]}
+          actions={
+            <div className="draft-label">
+              <span /> Backend dataset required
+            </div>
+          }
+        />
+        <div className="processing-layout">
+          <div className="processing-main">
+            <Card className="config-card">
+              <div className="section-title">
+                <div>
+                  <span className="section-kicker">01 / INPUT</span>
+                  <h3>Choose your data</h3>
+                  <p>Select a dataset uploaded and validated by FastAPI.</p>
+                </div>
+                <span className="step-status">Required</span>
+              </div>
+              <div className="form-grid">
+                <Field
+                  label="Backend dataset"
+                  hint="Seed datasets are not executable."
+                >
+                  <select
+                    value={selectedBackendDatasetId}
+                    onChange={(event) =>
+                      setSelectedBackendDatasetId(event.target.value)
+                    }
+                  >
+                    <option value="">Select an uploaded dataset</option>
+                    {backendDatasets.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} · {item.rows} rows · {item.status}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Run name">
+                  <input
+                    value={jobName}
+                    onChange={(event) => setJobName(event.target.value)}
+                    placeholder="Give this run a name"
+                  />
+                </Field>
+              </div>
+
+              <div className="column-picker">
+                <div className="column-picker-head">
+                  <div>
+                    <span className="column-picker-title">
+                      Comparison columns
+                    </span>
+                    <small>
+                      Pilih kolom standar untuk pembanding ·{" "}
+                      {selectedColumns.length}/
+                      {availableComparisonColumns.length} dipilih
+                    </small>
+                  </div>
+                  <div className="column-picker-actions">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedColumns([...availableComparisonColumns])
+                      }
+                    >
+                      Select all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedColumns([])}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div className="column-selector">
+                  {availableComparisonColumns.map((col) => {
+                    const checked = selectedColumns.includes(col);
+                    return (
+                      <label
+                        key={col}
+                        className={`column-chip ${checked ? "is-checked" : ""}`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="checkbox-input"
+                          checked={checked}
+                          value={col}
+                          onChange={() =>
+                            setSelectedColumns((prev) =>
+                              prev.includes(col)
+                                ? prev.filter((c) => c !== col)
+                                : [...prev, col],
+                            )
+                          }
+                        />
+                        <span className="checkbox-box" aria-hidden="true" />
+                        <span className="column-chip-text">{col}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="selected-source">
+                <span className="file-type-icon">
+                  <FileSpreadsheet size={17} />
+                </span>
+                <div>
+                  <b>
+                    {backendDatasets.find(
+                      (item) => item.id === selectedBackendDatasetId,
+                    )?.name || "No backend dataset selected"}
+                  </b>
+                  <small>
+                    {backendDatasets.find(
+                      (item) => item.id === selectedBackendDatasetId,
+                    )?.rows || "—"}{" "}
+                    records ·{" "}
+                    {backendDatasets.find(
+                      (item) => item.id === selectedBackendDatasetId,
+                    )?.columns || "—"}{" "}
+                    columns · Backend dataset
+                  </small>
+                </div>
+                <StatusPill
+                  value={selectedBackendDatasetId ? "Validated" : "Required"}
+                />
+              </div>
+            </Card>
+            <Card className="config-card">
+              <div className="section-title">
+                <div>
+                  <span className="section-kicker">02 / ENGINE</span>
+                  <h3>Select a processing engine</h3>
+                  <p>
+                    Model-specific settings are isolated from the shared
+                    platform workflow.
+                  </p>
+                </div>
+                <button
+                  className="text-link"
+                  onClick={() => navigate("models")}
+                >
+                  Manage registry <ArrowRight size={14} />
+                </button>
+              </div>
+              <div className="engine-select-list">
+                {models.map((model) => (
+                  <button
+                    key={model.id}
+                    className={cx(
+                      "engine-select",
+                      jobEngine === model.id && "selected",
+                    )}
+                    onClick={() => setJobEngine(model.id)}
+                  >
+                    <span className="engine-select-icon">
+                      <BrainCircuit size={18} />
+                    </span>
+                    <span className="engine-select-text">
+                      <b>{model.name}</b>
+                      <small>
+                        {model.family} · {model.runtime}
+                      </small>
+                    </span>
+                    <span className="engine-select-state">
+                      <StatusPill value={model.status} />
+                      {jobEngine === model.id && <CheckCircle2 size={17} />}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="info-banner compact">
+                <Sparkles size={16} />
+                <div>
+                  <b>Engine Ready</b>
+                  <p>
+                    Selected dataset (uploaded file or Supabase ingestion) will
+                    be standardized and linked using Splink with DuckDB engine.
+                  </p>
+                </div>
+              </div>
+            </Card>
+            <Card className="config-card">
+              <div className="section-title">
+                <div>
+                  <span className="section-kicker">03 / PIPELINE</span>
+                  <h3>Processing stages</h3>
+                  <p>
+                    Stages reflect the fixed deduplication workflow executed by
+                    the backend.
+                  </p>
+                </div>
+              </div>
+              <div className="pipeline-list">
+                {steps.map((step, index) => (
+                  <div className="pipeline-row" key={step}>
+                    <span className="pipeline-number">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <div>
+                      <b>{step}</b>
+                      <small>{descriptions[index]}</small>
+                    </div>
+                    <span className="pipeline-state">Unavailable</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+          <aside className="processing-side">
+            <Card className="run-summary">
+              <div className="card-header">
+                <div>
+                  <h3>Run summary</h3>
+                  <p>Review configuration before execution</p>
+                </div>
+                <span className="summary-icon">
+                  <Workflow size={18} />
+                </span>
+              </div>
+              <div className="summary-pair">
+                <span>Run name</span>
+                <b>{jobName || "Untitled run"}</b>
+              </div>
+              <div className="summary-pair">
+                <span>Dataset</span>
+                <b>
+                  {backendDatasets.find(
+                    (item) => item.id === selectedBackendDatasetId,
+                  )?.name || "No backend dataset"}
+                </b>
+              </div>
+              <div className="summary-pair">
+                <span>Processing engine</span>
+                <b>
+                  {models.find((item) => item.id === jobEngine)?.name || "—"}
+                </b>
+              </div>
+              <div className="summary-pair">
+                <span>Output destination</span>
+                <b>{outputTable}</b>
+              </div>
+              <div className="summary-divider" />
+              <div className="run-warning">
+                <Sparkles size={16} />
+                <span>
+                  Ready to process. Results will be saved to predictions parquet
+                  and review queue.
+                </span>
+              </div>
+              <Button
+                variant="primary"
+                className="run-button"
+                icon={jobRunning ? RefreshCw : Play}
+                disabled={jobRunning || !selectedBackendDatasetId}
+                onClick={runPipeline}
+              >
+                {jobRunning ? "Running Splink engine…" : "Run pipeline"}
+              </Button>
+              <Button
+                className="run-button"
+                icon={Save}
+                onClick={() =>
+                  flash("Draft saved only in local browser state.")
+                }
+              >
+                Save as draft
+              </Button>
+              <small className="demo-note">
+                {selectedBackendDatasetId
+                  ? "Backend dataset ready to execute"
+                  : "Upload or ingest a dataset before running"}
+              </small>
+            </Card>
+            <Card className="progress-card">
+              <div className="card-header">
+                <div>
+                  <h3>Execution progress</h3>
+                  <p>
+                    {jobRunning
+                      ? "Job running on backend"
+                      : lastJob
+                        ? "Last run completed"
+                        : "No processing job created"}
+                  </p>
+                </div>
+                <Gauge size={18} className="muted-icon" />
+              </div>
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={jobRunning ? 100 : lastJob ? 100 : 0}
+                aria-label="Job execution progress"
+              >
+                <span
+                  style={{
+                    width: jobRunning ? "100%" : lastJob ? "100%" : "0%",
+                    transition: "width .4s ease",
+                  }}
+                  className={jobRunning ? "is-running" : ""}
+                />
+              </div>
+              <div className="progress-meta">
+                <b>
+                  {jobRunning
+                    ? `${jobElapsed}s`
+                    : lastJob
+                      ? `${lastJob.duration || "done"}`
+                      : "—"}
+                </b>
+                <span>
+                  {jobRunning
+                    ? "Elapsed"
+                    : lastJob
+                      ? `${lastJob.pairs_scored || 0} pairs scored`
+                      : "Idle"}
+                </span>
+              </div>
+              <div className="terminal-box">
+                <div>
+                  <i />
+                  <i />
+                  <i />
+                  <span>RUN LOG</span>
+                </div>
+                <code>
+                  {jobRunning
+                    ? `[fastapi] Processing ${selectedColumns.length > 0 ? selectedColumns.length + " selected column(s)" : "all columns"}… ${jobElapsed}s elapsed`
+                    : lastJob
+                      ? `[${lastJob.id}] Completed in ${lastJob.duration} · ${lastJob.pairs_scored || 0} pairs · ${lastJob.records_count || 0} records`
+                      : "No job has been created yet."}
+                </code>
+              </div>
+            </Card>
+          </aside>
+        </div>
+      </>
+    );
   }
 
   const renderReview = () => (
@@ -1411,12 +1821,12 @@ const availableComparisonColumns = [
         }
       />
       <div className="review-kpis">
-        <div><span className="kpi-dot amber"/><div><b>{liveStats ? liveStats.review.toLocaleString() : '-'}</b><small>Awaiting review</small></div></div>
-        <div><span className="kpi-dot mint"/><div><b>{reviewSummary ? reviewSummary.reviewed_today.toLocaleString() : '-'}</b><small>Reviewed today (audit)</small></div></div>
-        <div><span className="kpi-dot blue"/><div><b>{reviewSummary?.agreement_rate !== null && reviewSummary?.agreement_rate !== undefined ? `${(reviewSummary.agreement_rate * 100).toFixed(1)}%` : '-'}</b><small>{reviewSummary?'Agreement rate (audit)':'Agreement rate unavailable'}</small></div></div>
+        <div><span className="kpi-dot amber"/><div><b>{liveStats ? liveStats.review.toLocaleString() : '—'}</b><small>Awaiting review</small></div></div>
+        <div><span className="kpi-dot mint"/><div><b>{reviewSummary ? reviewSummary.reviewed_today.toLocaleString() : '—'}</b><small>Reviewed today (audit)</small></div></div>
+        <div><span className="kpi-dot blue"/><div><b>{reviewSummary?.agreement_rate !== null && reviewSummary?.agreement_rate !== undefined ? `${(reviewSummary.agreement_rate * 100).toFixed(1)}%` : '—'}</b><small>{reviewSummary?'Agreement rate (audit)':'Agreement rate unavailable'}</small></div></div>
       </div>
       <div className="review-progress">
-        <div><span>Queue share</span><b>{liveStats ? `${Math.round(liveStats.review / Math.max(liveStats.total_pairs,1) * 100)}%` : '-'}</b></div>
+        <div><span>Queue share</span><b>{liveStats ? `${Math.round(liveStats.review / Math.max(liveStats.total_pairs,1) * 100)}%` : '—'}</b></div>
         <div className="progress-track"><span style={{width:liveStats ? `${Math.round(liveStats.review / Math.max(liveStats.total_pairs,1) * 100)}%` : '0%'}}/></div>
       </div>
       <div className="review-workspace">
@@ -1506,12 +1916,12 @@ const availableComparisonColumns = [
                   if (key === 'divider') return <div className="compare-divider" key={key}><span>VS</span></div>
                   const record = pairDetail[key] || {}
                   return <div className="record-card" key={key}>
-                    <span className="record-label">RECORD {key === 'record_a' ? 'A' : 'B'}</span><h4>{record.record_id || '-'}</h4>
-                    <div><small>Full name</small><b>{[record.first_name, record.last_name].filter(Boolean).join(' ') || '-'}</b></div>
-                    <div><small>Email</small><b>{record.email || '-'}</b></div>
-                    <div><small>Phone</small><b>{record.phone_number || '-'}</b></div>
-                    <div><small>Date of birth</small><b>{record.dob || '-'}</b></div>
-                    <div><small>Full address</small><b>{[record.address, record.city, record.state, record.country].filter(Boolean).join(', ') || '-'}</b></div>
+                    <span className="record-label">RECORD {key === 'record_a' ? 'A' : 'B'}</span><h4>{record.record_id || '—'}</h4>
+                    <div><small>Full name</small><b>{[record.first_name, record.last_name].filter(Boolean).join(' ') || '—'}</b></div>
+                    <div><small>Email</small><b>{record.email || '—'}</b></div>
+                    <div><small>Phone</small><b>{record.phone_number || '—'}</b></div>
+                    <div><small>Date of birth</small><b>{record.dob || '—'}</b></div>
+                    <div><small>Full address</small><b>{[record.address, record.city, record.state, record.country].filter(Boolean).join(', ') || '—'}</b></div>
                   </div>
                 })}
               </div>
@@ -1584,7 +1994,7 @@ const availableComparisonColumns = [
                   <p>{ent.city ? `${ent.city} · ` : ''}{ent.email || ent.phone_number || 'Master identity profile'}</p>
                   <div className="pair-item-bottom">
                     <small>{ent.member_count} member records</small>
-                    <small>{ent.updated_at ? new Date(ent.updated_at).toLocaleDateString() : '-'}</small>
+                    <small>{ent.updated_at ? new Date(ent.updated_at).toLocaleDateString() : '—'}</small>
                   </div>
                 </button>
               ))}
@@ -1612,7 +2022,7 @@ const availableComparisonColumns = [
                   <p>{conf.description}</p>
                   <div className="pair-item-bottom">
                     <small>Entity: {conf.entity_id || 'Unassigned'}</small>
-                    <small>{conf.created_at ? new Date(conf.created_at).toLocaleDateString() : '-'}</small>
+                    <small>{conf.created_at ? new Date(conf.created_at).toLocaleDateString() : '—'}</small>
                   </div>
                 </div>
               ))}
@@ -1642,10 +2052,10 @@ const availableComparisonColumns = [
               <div className="record-card" style={{ marginBottom: '14px' }}>
                 <span className="record-label">MASTER GOLDEN CUSTOMER</span>
                 <h4>{selectedEntity.master_record_id || selectedEntity.entity_id}</h4>
-                <div><small>Full name</small><b>{[selectedEntity.first_name, selectedEntity.last_name].filter(Boolean).join(' ') || '-'}</b></div>
-                <div><small>Email</small><b>{selectedEntity.email || '-'}</b></div>
-                <div><small>Phone</small><b>{selectedEntity.phone_number || '-'}</b></div>
-                <div><small>City</small><b>{selectedEntity.city || '-'}</b></div>
+                <div><small>Full name</small><b>{[selectedEntity.first_name, selectedEntity.last_name].filter(Boolean).join(' ') || '—'}</b></div>
+                <div><small>Email</small><b>{selectedEntity.email || '—'}</b></div>
+                <div><small>Phone</small><b>{selectedEntity.phone_number || '—'}</b></div>
+                <div><small>City</small><b>{selectedEntity.city || '—'}</b></div>
               </div>
 
               <div className="card-header" style={{ padding: '0 0 8px 0' }}>
@@ -1676,10 +2086,10 @@ const availableComparisonColumns = [
                       {entityMembers.map(mem => (
                         <tr key={mem.record_id}>
                           <td><b>{mem.record_id}</b></td>
-                          <td>{[mem.first_name, mem.last_name].filter(Boolean).join(' ') || '-'}</td>
-                          <td>{mem.email || '-'}</td>
-                          <td>{mem.phone_number || '-'}</td>
-                          <td>{[mem.address, mem.city].filter(Boolean).join(', ') || '-'}</td>
+                          <td>{[mem.first_name, mem.last_name].filter(Boolean).join(' ') || '—'}</td>
+                          <td>{mem.email || '—'}</td>
+                          <td>{mem.phone_number || '—'}</td>
+                          <td>{[mem.address, mem.city].filter(Boolean).join(', ') || '—'}</td>
                           <td><span className="status-pill neutral">{mem.membership_source || 'linkage'}</span></td>
                         </tr>
                       ))}
@@ -1773,20 +2183,41 @@ const availableComparisonColumns = [
         <div className="card-header">
           <div>
             <h3>Output destinations</h3>
-            <p>
-              Results are written only after explicit confirmation in the real
-              platform.
-            </p>
+            <p>Configured export targets</p>
           </div>
-          <Database size={18} className="muted-icon" />
         </div>
-        <div className="empty-state small-empty"><Database size={20}/><b>No output destinations</b><span>The backend does not expose registered output destinations.</span></div>
+        {(() => {
+          if (!outputDestinations || !outputDestinations.length) {
+            return <div className="empty-state small-empty"><Database size={20}/><b>No output destinations</b><span>The backend does not expose registered output destinations.</span></div>
+          }
+          return (
+            <div className="output-list">
+              {outputDestinations.map(item => (
+                <div key={item.id} className="output-row" style={{ alignItems: 'center', gap: '12px' }}>
+                  <div className="output-icon" style={{ width: 24, height: 24, display: 'grid', placeItems: 'center', borderRadius: 5 }}>
+                    {item.type === 'supabase' && <Database size={18} />}
+                    {item.type === 's3' && <CloudUpload size={18} />}
+                    {item.type === 'webhook' && <ExternalLink size={18} />}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <b>{item.name}</b>{item.builtin && <small style={{ color: '#8897a9' }}> (built-in)</small>}
+                  </div>
+                  <small style={{ color: '#8897a9' }}>{item.type}</small>
+                </div>
+              ))}
+            </div>
+          )
+        })()}
       </Card>
     </>
   );
 
   const renderModels = () => {
     const activeVersion = modelInfo?.model_version || null
+    const pageSize = 15
+    const totalPages = Math.max(1, Math.ceil(modelVersions.length / pageSize))
+    const page = Math.min(modelPage, totalPages)
+    const pagedVersions = modelVersions.slice((page - 1) * pageSize, page * pageSize)
     return <>
       <PageHeader
         title={meta[0]}
@@ -1813,19 +2244,20 @@ const availableComparisonColumns = [
       {retrainStatus === 'running' && <Card className="retrain-log-card"><div className="card-header"><div><h3>Retrain log</h3><p>Live output from the background pipeline</p></div><Terminal size={18} className="muted-icon"/></div><pre className="retrain-log-pre">{retrainLog || 'Waiting for output…'}</pre></Card>}
       {modelVersions.length === 0
         ? <Card><div className="empty-state"><SearchX size={20}/><b>No model versions yet</b><span>Run the full pipeline to train your first model.</span></div></Card>
-        : <div style={{display:'flex',flexDirection:'column',gap:8}}>
-          {modelVersions.map((v, idx) => (
+        : <>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {pagedVersions.map((v, idx) => (
             <Card key={v.version} className={cx(v.version===activeVersion&&'model-card','version-row')}>
-              <div className="version-row" style={{display:'flex',alignItems:'center',gap:16}}>
-                <span className="version-value">{v.version}</span>
-                <StatusPill value={v.complete ? 'Complete' : 'Incomplete'} />
-                <span className="timestamp">{new Date(v.created_at||0).toLocaleString('id-ID')}</span>
-                <span className="version-label">{v.scope === 'full' ? 'Full run' : 'Sample run'}</span>
-                <span className="version-label">{v.pairs_scored ? v.pairs_scored.toLocaleString() + ' pairs' : '-'}</span>
+              <div style={{display:'flex',alignItems:'center',gap:12}}>
+                <span style={{fontWeight:700,width:100}}>{v.version}</span>
+                <StatusPill value={v.complete ? 'Complete' : 'Incomplete'} style={{width:90}} />
+                <span style={{color:'var(--muted)',flex:1,fontSize:12}}>{new Date(v.created_at||0).toLocaleString('id-ID')}</span>
+                <span style={{width:80,fontSize:12,textAlign:'right'}}>{v.scope === 'full' ? 'Full' : 'Sample'}</span>
+                <span style={{width:100,fontSize:12,textAlign:'right'}}>{v.pairs_scored ? v.pairs_scored.toLocaleString() : '—'}</span>
                 {v.version !== activeVersion && (
                   <button
                     className="text-link"
-                    style={{marginLeft:'auto'}}
+                    style={{marginLeft:20,fontSize:12}}
                     onClick={async () => {
                       try {
                         await dedupApi.rollbackModel(v.version)
@@ -1837,11 +2269,20 @@ const availableComparisonColumns = [
                     }}
                   >Roll back</button>
                 )}
-                {v.version === activeVersion && <span className="current-tag">● Current</span>}
+                {v.version === activeVersion && <span style={{marginLeft:20,fontSize:12,color:'var(--violet)'}}>● Current</span>}
               </div>
             </Card>
-          ))}
-        </div>
+            ))}
+          </div>
+          {totalPages > 1 && <div className="table-footer">
+            <span>Page {page} of {totalPages} · {modelVersions.length} versions</span>
+            <div>
+              <button disabled={page <= 1} onClick={() => setModelPage(page - 1)}><ChevronLeft size={14}/></button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => <button key={p} className={p === page ? 'current' : ''} onClick={() => setModelPage(p)}>{p}</button>)}
+              <button disabled={page >= totalPages} onClick={() => setModelPage(page + 1)}><ChevronRight size={14}/></button>
+            </div>
+          </div>}
+        </>
       }
     </>
   }
@@ -1856,7 +2297,7 @@ const availableComparisonColumns = [
     return <>
       <PageHeader title={meta[0]} subtitle={meta[1]} actions={<div className="date-control"><CalendarDays size={15}/> All available data</div>} />
       <div className="info-banner amber-banner"><CircleAlert size={17}/><div><b>Prediction counts are not evaluation metrics</b><p>Precision, recall, and F1 require independently reviewed gold labels and documented evaluation splits. Those inputs are not available through the current API.</p></div></div>
-      <div className="metrics-grid"><MetricCard label="Precision" value="-" change="Unavailable" caption="gold evaluation required" icon={TargetIcon} tone="mint"/><MetricCard label="Recall" value="-" change="Unavailable" caption="gold evaluation required" icon={Gauge} tone="blue"/><MetricCard label="F1 score" value="-" change="Unavailable" caption="gold evaluation required" icon={Activity} tone="violet"/><MetricCard label="Review rate" value={total ? `${((liveStats.review / total) * 100).toFixed(1)}%` : '-'} change={liveState==='live'?'Live':'Unavailable'} caption="live output share" icon={ListChecks} tone="amber" trend="down"/></div>
+      <div className="metrics-grid"><MetricCard label="Precision" value="—" change="Unavailable" caption="gold evaluation required" icon={TargetIcon} tone="mint"/><MetricCard label="Recall" value="—" change="Unavailable" caption="gold evaluation required" icon={Gauge} tone="blue"/><MetricCard label="F1 score" value="—" change="Unavailable" caption="gold evaluation required" icon={Activity} tone="violet"/><MetricCard label="Review rate" value={total ? `${((liveStats.review / total) * 100).toFixed(1)}%` : '—'} change={liveState==='live'?'Live':'Unavailable'} caption="live output share" icon={ListChecks} tone="amber" trend="down"/></div>
       <div className="analytics-grid">
         <Card className="chart-card"><div className="card-header"><div><h3>Evaluation trend</h3><p>No evaluation history endpoint is available.</p></div><StatusPill value="Unavailable"/></div><div className="empty-state small-empty"><SearchX size={20}/><b>No evaluation runs</b><span>Record gold-label evaluations before displaying model performance.</span></div></Card>
         <Card className="quality-card">
@@ -1877,11 +2318,116 @@ const availableComparisonColumns = [
       />
       <div className="db-layout">
         <div className="db-main">
+          <Card className="db-connection">
+            <div className="connection-card large">
+              <div className="connection-brand"><Database size={22} /></div>
+              <div className="connection-info">
+                <div>
+                  <h3>Supabase PostgreSQL</h3>
+                  <StatusPill value={databaseStatus?.status === "connected" ? "Connected" : "Unavailable"} />
+                </div>
+                <p>Schema public · read-only API inspection</p>
+                <small>{databaseStatus?.status === "connected" ? `${databaseStatus.table_count} tables available` : "Database status unavailable"}</small>
+              </div>
+              <Button
+                onClick={async () => {
+                  try {
+                    const status = await dedupApi.getDatabaseStatus()
+                    const tables = await dedupApi.getDatabaseTables()
+                    setDatabaseStatus(status)
+                    setDatabaseTables(tables.tables || [])
+                    setDatabaseIngestibleTables(tables.ingestible_tables || [])
+                    setConnectionStatus(status.status === "connected" ? "Connected" : "Unavailable")
+                    flash(status.status === "connected" ? "Database connection verified." : "Database connection unavailable.")
+                  } catch (error) {
+                    setConnectionStatus("Unavailable")
+                    setDatabaseStatus({ status: 'unavailable', table_count: 0 })
+                    setDatabaseTables([])
+                    setDatabaseIngestibleTables([])
+                    flash(`Database check failed: ${error.message || error}`)
+                  }
+                }}
+                icon={RefreshCw}
+              >
+                Test connection
+              </Button>
+            </div>
+            <div className="db-properties">
+              <div><span>Engine</span><b>Supabase PostgreSQL</b></div>
+              <div><span>Host</span><b>{databaseStatus?.status === "connected" ? "Configured" : "Unavailable"}</b></div>
+              <div><span>Schema</span><b>public</b></div>
+              <div><span>Access mode</span><b>Read-only</b></div>
+            </div>
+          </Card>
+          <Card className="schema-card">
+            <div className="card-header">
+              <div><h3>Schema browser</h3><p>Tables returned by the read-only FastAPI database endpoint.</p></div>
+              <Button
+                icon={RefreshCw}
+                onClick={async () => {
+                  try {
+                    const tables = await dedupApi.getDatabaseTables()
+                    setDatabaseTables(tables.tables || [])
+                    setDatabaseIngestibleTables(tables.ingestible_tables || [])
+                    flash(`Loaded ${tables.total} tables.`)
+                  } catch (error) {
+                    setDatabaseTables([])
+                    setDatabaseIngestibleTables([])
+                    flash(`Schema refresh failed: ${error.message || error}`)
+                  }
+                }}
+              >
+                Refresh
+              </Button>
+            </div>
+            <div className="schema-tree">
+              <div className="schema-root"><Database size={16} /><b>public</b><span>Supabase schema</span></div>
+              {databaseTables.map(table => (
+                <div className="schema-group" key={table}>
+                  <div><Table2 size={14} /><b>{table}</b><small>Table</small></div>
+                  <div className="schema-group-action">
+                    <span>Read-only</span>
+                    <button
+                      type="button"
+                      className="schema-preview-button"
+                      aria-expanded={databaseColumnPreview?.table === table}
+                      onClick={() => toggleDatabaseColumnPreview(table)}
+                    >
+                      {databaseColumnPreview?.table === table ? 'Hide columns' : 'Preview columns'}
+                    </button>
+                    {databaseIngestibleTables.includes(table) && (
+                      <button
+                        type="button"
+                        className="schema-ingest-button"
+                        disabled={Boolean(databaseIngestingTable)}
+                        aria-label={`Import ${table} as a dataset`}
+                        onClick={() => importDatabaseTable(table)}
+                      >
+                        <CloudUpload size={13} />
+                        {databaseIngestingTable === table ? 'Importing…' : 'Import dataset'}
+                      </button>
+                    )}
+                  </div>
+                  {databaseColumnPreview?.table === table && (
+                    <div className="schema-column-preview" role="status">
+                      {databaseColumnPreview.loading ? 'Loading columns…' : databaseColumnPreview.error
+                        ? databaseColumnPreview.error
+                        : databaseColumnPreview.columns.length
+                          ? databaseColumnPreview.columns.map(column => (
+                            <span key={column.name}>{column.name} <small>{column.type}</small></span>
+                          ))
+                          : 'No columns found.'}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
           <Card className="schema-card">
             <div className="card-header">
               <div>
                 <h3>Supabase</h3>
-                <p>Tabel Supabase PostgreSQL - schema: public.</p>
+                <p>Tabel Supabase PostgreSQL — schema: public.</p>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
                 <StatusPill value={supabaseStatus?.status === 'connected' ? 'Connected' : supabaseStatus ? 'Unavailable' : 'Loading…'} />
@@ -1897,7 +2443,7 @@ const availableComparisonColumns = [
                         dedupApi.getSupabaseDatasets(),
                       ])
                       setSupabaseStatus(sStatus)
-                      setDatabaseTables(sTables?.tables || [])
+                      setSupabaseTables(sTables?.tables || [])
                       setSupabaseDatasets(sDatasets?.datasets || [])
                       flash(`Supabase: ${sTables?.total ?? 0} tables loaded.`)
                     } catch (error) {
@@ -2046,6 +2592,9 @@ const availableComparisonColumns = [
           <button className="selected" type="button"><Settings size={15}/> General <ChevronRight size={14}/></button>
           <button type="button" onClick={() => document.getElementById('settings-appearance')?.scrollIntoView({ behavior: 'smooth' })}><Sun size={15}/> Appearance <ChevronRight size={14}/></button>
           <button type="button" onClick={() => document.getElementById('settings-processing')?.scrollIntoView({ behavior: 'smooth' })}><Workflow size={15}/> Processing defaults <ChevronRight size={14}/></button>
+          <button type="button" onClick={() => document.getElementById('settings-output')?.scrollIntoView({ behavior: 'smooth' })}><Database size={15}/> Output defaults <ChevronRight size={14}/></button>
+          <button type="button" onClick={() => flash('Export preferences are not available in the current settings API.')}><Download size={15}/> Export preferences <ChevronRight size={14}/></button>
+          <button type="button" onClick={() => flash('Security preferences are managed by the deployment administrator.')}><ShieldCheck size={15}/> Security <ChevronRight size={14}/></button>
         </Card>
         <div className="settings-content">
           <Card className="settings-card">
@@ -2069,6 +2618,15 @@ const availableComparisonColumns = [
             <div className="setting-toggle"><div><b>Preserve source data</b><small>Never overwrite the original source dataset.</small></div><button aria-label="Preserve source data" aria-pressed={workspaceSettings.preserve_source_data} className={cx('toggle-switch', workspaceSettings.preserve_source_data && 'on')} onClick={() => setWorkspaceSetting('preserve_source_data', !workspaceSettings.preserve_source_data)}><i/></button></div>
             <div className="setting-toggle"><div><b>Require output confirmation</b><small>Ask for confirmation before writing to a destination table.</small></div><button aria-label="Require output confirmation" aria-pressed={workspaceSettings.require_output_confirmation} className={cx('toggle-switch', workspaceSettings.require_output_confirmation && 'on')} onClick={() => setWorkspaceSetting('require_output_confirmation', !workspaceSettings.require_output_confirmation)}><i/></button></div>
             <div className="setting-toggle"><div><b>Keep processing audit trail</b><small>Store run configuration, status, and output references.</small></div><button aria-label="Keep processing audit trail" aria-pressed={workspaceSettings.keep_processing_audit_trail} className={cx('toggle-switch', workspaceSettings.keep_processing_audit_trail && 'on')} onClick={() => setWorkspaceSetting('keep_processing_audit_trail', !workspaceSettings.keep_processing_audit_trail)}><i/></button></div>
+          </Card>
+          <Card className="settings-card" id="settings-output">
+            <div className="settings-card-title"><div><h3>Output defaults</h3><p>Where processed results are saved by default.</p></div><Database size={18}/></div>
+            <Field label="Default output destination" hint="Target used when saving processed results.">
+              <select value={workspaceSettings.default_output_destination} disabled={settingsLoading} onChange={event => setWorkspaceSetting('default_output_destination', event.target.value)}>
+                {outputDestinations.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </Field>
+            <p className="settings-footnote-inline">Destination management lives in Run history → Output destinations.</p>
           </Card>
           <div className="settings-footnote"><ShieldCheck size={15}/> Workspace preferences persist on the backend. Connection credentials and output profiles are not included.</div>
         </div>
@@ -2121,17 +2679,21 @@ const availableComparisonColumns = [
               <PanelLeftClose size={16} />
             )}
           </button>
-          <button className="mobile-close" aria-label="Close navigation" onClick={() => setMobileMenu(false)}>
-            <X size={18} aria-hidden="true" />
+          <button className="mobile-close" onClick={() => setMobileMenu(false)}>
+            <X size={18} />
           </button>
         </div>
-        <div className="workspace-switch">
+        <button
+          className="workspace-switch"
+          onClick={() => flash("Workspace switcher is a visual placeholder.")}
+        >
           <span className="workspace-avatar">ND</span>
           <span className="workspace-copy">
             <b>Data workspace</b>
             <small>Personal environment</small>
           </span>
-        </div>
+          <ChevronDown size={14} />
+        </button>
         <nav className="main-nav">
           {navigation.map((group) => (
             <div className="nav-group" key={group.group}>
@@ -2402,6 +2964,66 @@ const availableComparisonColumns = [
                 }}
               >
                 Save placeholder
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {mappingOpen && mappingPreview && (
+        <div
+          className="modal-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setMappingOpen(false);
+          }}
+        >
+          <div className="modal-card wide-modal">
+            <div className="modal-header">
+              <div>
+                <span className="section-kicker">COLUMN MAPPING</span>
+                <h2>Map source columns</h2>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => setMappingOpen(false)}
+                aria-label="Close column mapping"
+              >
+                <X size={17} />
+              </button>
+            </div>
+            <p className="modal-copy">
+              {mappingPreview.file.name} · {mappingPreview.rows} rows · map
+              source fields to the fields the model expects. Leave a field
+              unchanged to keep its original name.
+            </p>
+            <div className="mapping-table">
+              {mappingPreview.columns.map((column) => (
+                <div className="mapping-row" key={column}>
+                  <span className="mapping-source">{column}</span>
+                  <ArrowRight size={14} />
+                  <select
+                    aria-label={`Target for ${column}`}
+                    value={mappingPreview.mapping[column] || ''}
+                    onChange={(event) =>
+                      setMappingPreview((current) => {
+                        const mapping = { ...current.mapping }
+                        if (event.target.value) mapping[column] = event.target.value
+                        else delete mapping[column]
+                        return { ...current, mapping }
+                      })
+                    }
+                  >
+                    <option value="">Keep as-is</option>
+                    {mappingPreview.targets.map((target) => (
+                      <option key={target} value={target}>{target}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+            <div className="modal-actions">
+              <Button onClick={() => setMappingOpen(false)}>Cancel</Button>
+              <Button variant="primary" disabled={mappingBusy} onClick={confirmMapping}>
+                {mappingBusy ? 'Uploading…' : 'Upload dataset'}
               </Button>
             </div>
           </div>

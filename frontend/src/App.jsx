@@ -72,12 +72,7 @@ const modelSeed = [
   { id: 'MDL-0002', name: 'Future model slot', family: 'Classification / scoring', version: 'Not registered', runtime: 'Adapter interface', status: 'Planned', description: 'Reserved integration slot. No model is connected.' },
 ]
 
-const activityFeed = [
-  { icon: CheckCircle2, title: 'Processing run completed', detail: 'RUN-0268 · crm_customers_q4.csv', time: '08:46 AM', tone: 'mint' },
-  { icon: ListChecks, title: 'Review queue updated', detail: '1,284 record pairs await a decision', time: '08:43 AM', tone: 'amber' },
-  { icon: Database, title: 'Dataset validated', detail: 'crm_customers_q4.csv · 18 columns', time: '08:42 AM', tone: 'blue' },
-  { icon: ShieldCheck, title: 'Database connection checked', detail: 'Analytics PostgreSQL · read-only test', time: 'Yesterday', tone: 'violet' },
-]
+// activityFeed is now managed via state in App()
 
 const formatDate = () => new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date())
 const cx = (...values) => values.filter(Boolean).join(' ')
@@ -142,6 +137,33 @@ function App() {
   const [datasets, setDatasets] = useState(initialDatasets)
   const [runs, setRuns] = useState(initialRuns)
   const [reviews, setReviews] = useState(reviewSeed)
+  const [activityFeed, setActivityFeed] = useState([
+    { icon: CheckCircle2, title: 'Processing run completed', detail: 'RUN-0268 · crm_customers_q4.csv', time: '08:46 AM', tone: 'mint' },
+    { icon: ListChecks, title: 'Review queue updated', detail: '1,284 record pairs await a decision', time: '08:43 AM', tone: 'amber' },
+    { icon: Database, title: 'Dataset validated', detail: 'crm_customers_q4.csv · 18 columns', time: '08:42 AM', tone: 'blue' },
+    { icon: ShieldCheck, title: 'Database connection checked', detail: 'Analytics PostgreSQL · read-only test', time: 'Yesterday', tone: 'violet' },
+  ])
+
+  useEffect(() => {
+    fetch('/api/activity', { headers: { 'x-api-key': 'nexus-local-development-key' } })
+      .then(res => res.json())
+      .then(data => {
+        if (data.activities && Array.isArray(data.activities)) {
+          const mapped = data.activities.map(act => {
+            const iconMap = { review: ListChecks, dataset: Database, run: Workflow }
+            return {
+              icon: iconMap[act.type] || CheckCircle2,
+              title: act.title,
+              detail: act.detail,
+              time: act.time ? new Date(act.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent',
+              tone: act.tone || 'blue'
+            }
+          })
+          setActivityFeed(mapped)
+        }
+      })
+      .catch(() => {})
+  }, [])
   const [selectedReview, setSelectedReview] = useState(reviewSeed[0])
   const [reviewTab, setReviewTab] = useState('queue')
   const [datasetFilter, setDatasetFilter] = useState('All')
@@ -261,11 +283,71 @@ function App() {
     cancelled = true
   }
 }, [selectedReview?.left, selectedReview?.right])
-  const selectFile = (file) => {
+  const selectFile = async (file) => {
     if (!file) return
-    const id = `DS-${String(143 + datasets.length - initialDatasets.length).padStart(4, '0')}`
-    setDatasets(current => [{ id, name: file.name, source: 'File upload', rows: 'Pending', columns: '—', status: 'Draft', updated: 'Just now', size: `${(file.size / (1024 * 1024)).toFixed(1)} MB` }, ...current])
-    flash(`${file.name} registered in the local prototype. File contents were not uploaded.`)
+
+    // Read file bytes and normalize column names for backend validation
+    const suffix = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+    let fileBytes
+
+    try {
+      if (suffix === '.csv') {
+        fileBytes = await file.arrayBuffer()
+      } else if (suffix === '.parquet') {
+        fileBytes = await file.arrayBuffer()
+      } else {
+        flash('Only CSV and Parquet files are supported')
+        return
+      }
+    } catch (e) {
+      flash(`Error reading file: ${e.message || e}`)
+      return
+    }
+
+    // Normalize CSV column names to lowercase so backend validation passes
+    // The backend expects exactly: record_id, first_name, last_name
+    if (suffix === '.csv') {
+      const textDecoder = new TextDecoder()
+      const rawText = textDecoder.decode(fileBytes)
+      // Parse header line and normalize column names
+      const headerLine = rawText.split('\n')[0]
+      const normalizedHeaders = headerLine.split(',').map(h => h.trim().toLowerCase())
+      // Reconstruct CSV with normalized headers
+      const dataRows = rawText.split('\n').slice(1).filter(r => r.trim())
+      const normalizedCsv = [normalizedHeaders.join(','), ...dataRows].join('\n')
+      // Create a new file with normalized headers
+      const normalizedBlob = new Blob([normalizedCsv], { type: 'text/csv;charset=utf-8' })
+      // Replace file with normalized version
+      const fileEntry = file
+      file = new File([normalizedBlob], file.name, { type: 'text/csv;charset=utf-8' })
+    }
+
+    const datasetId = `DS-${String(143 + datasets.length - initialDatasets.length).padStart(4, '0')}`
+    setDatasets(current => [{ id: datasetId, name: file.name, source: 'File upload', rows: 'Pending', columns: '—', status: 'Draft', updated: 'Just now', size: `${(file.size / (1024 * 1024)).toFixed(1)} MB` }, ...current])
+
+    // Upload to backend
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const response = await fetch('/api/datasets/upload', {
+        method: 'POST',
+        headers: { 'x-api-key': 'nexus-local-development-key' },
+        body: formData
+      })
+
+      if (!response.ok) {
+        const errText = await response.text()
+        throw new Error(`Upload failed: ${response.status} ${errText}`)
+      }
+
+      const result = await response.json()
+      flash(`${file.name} uploaded and validated successfully.`)
+      // Refresh datasets list
+      await loadDatasets()
+    } catch (e) {
+      flash(`Upload error: ${e.message || e}`)
+    }
   }
   const runPipeline = async () => {
     if (!jobDataset || !jobEngine) return flash('Choose a dataset and processing engine first.')

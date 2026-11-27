@@ -56,9 +56,18 @@ export const dedupApi = {
 
   getDatasets: () => apiRequest('/api/datasets'),
 
-  uploadDataset: async (file) => {
+  inspectUpload: async (file) => {
     const form = new FormData()
     form.append('file', file)
+    return apiRequest('/api/datasets/inspect', { method: 'POST', body: form })
+  },
+
+  uploadDataset: async (file, mapping = {}) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (mapping && Object.keys(mapping).length) {
+      form.append('column_mapping', JSON.stringify(mapping))
+    }
     return apiRequest('/api/datasets/upload', { method: 'POST', body: form })
   },
 
@@ -137,6 +146,13 @@ export const dedupApi = {
 
   getActivityFeed: (limit = 15) =>
     apiRequest(`/api/activity?limit=${encodeURIComponent(limit)}`),
+
+  getEvaluation: () => apiRequest('/api/evaluation'),
+
+  getActivityTrend: (days = 30) =>
+    apiRequest(`/api/activity/trend?days=${encodeURIComponent(days)}`),
+
+  getOutputDestinations: () => apiRequest('/api/output/destinations'),
 
   getModelVersions: () => apiRequest('/api/model/versions'),
 

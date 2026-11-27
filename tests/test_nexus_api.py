@@ -145,6 +145,70 @@ def test_nexus_pairs_and_search_require_api_key_and_search_literal_ids(monkeypat
     assert search["results"][0]["record_id_l"] == "rec.1"
 
 
+def test_nexus_activity_trend_aggregates_jobs_by_day(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    today = datetime.now(timezone.utc).date()
+    monkeypatch.setattr(nexus_api, "REVIEW_AUDIT_PATH", tmp_path / "reviews.csv")
+    monkeypatch.setattr(nexus_api, "JOB_REGISTRY_PATH", tmp_path / "jobs.json")
+    monkeypatch.setattr(nexus_api, "OUTPUT_DIR", tmp_path)
+    (tmp_path / "incremental_history.jsonl").write_text(
+        json.dumps({"timestamp": today.isoformat(), "rows": 8}) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "jobs.json").write_text(json.dumps({"jobs": [
+        {"created_at": today.isoformat(), "records_count": 12, "status": "Completed"},
+        {"created_at": (today - timedelta(days=40)).isoformat(), "records_count": 999},
+    ]}), encoding="utf-8")
+
+    body = json.loads(nexus_api.activity_trend(authorized_request(), days=3).body)
+    assert [row["date"] for row in body["trend"]] == [
+        (today - timedelta(days=offset)).isoformat() for offset in (2, 1, 0)
+    ]
+    assert body["trend"][-1]["processed"] == 20
+    assert body["trend"][-1]["runs"] == 2
+    assert body["total_processed"] == 20
+
+
+def test_nexus_output_destinations_crud(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        nexus_api, "OUTPUT_DESTINATIONS_PATH", tmp_path / "destinations.json"
+    )
+    initial = json.loads(nexus_api.list_output_destinations(authorized_request()).body)
+    assert [item["id"] for item in initial["destinations"]] == [
+        "local_parquet", "supabase_default"
+    ]
+
+    created = json.loads(nexus_api.create_output_destination({
+        "name": "warehouse",
+        "type": "supabase",
+        "config": {"table": "public.results"},
+    }, authorized_request()).body)
+    assert created["destination"]["id"] == "warehouse"
+
+    listed = json.loads(nexus_api.list_output_destinations(authorized_request()).body)
+    assert listed["total"] == 3
+
+    deleted = json.loads(nexus_api.delete_output_destination(
+        "warehouse", authorized_request()
+    ).body)
+    assert deleted["deleted"] == "warehouse"
+    with pytest.raises(HTTPException) as error:
+        nexus_api.delete_output_destination("local_parquet", authorized_request())
+    assert error.value.status_code == 409
+
+
+def test_nexus_output_destination_rejects_invalid_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        nexus_api, "OUTPUT_DESTINATIONS_PATH", tmp_path / "destinations.json"
+    )
+    with pytest.raises(HTTPException) as error:
+        nexus_api.create_output_destination({
+            "name": "web", "type": "webhook", "config": {},
+        }, authorized_request())
+    assert error.value.status_code == 422
+
+
 def test_nexus_review_requires_reviewer_and_reason():
     with pytest.raises(HTTPException) as error:
         nexus_api.pair_decision(
@@ -175,6 +239,18 @@ def test_nexus_workspace_settings_are_validated_and_persisted(monkeypatch, tmp_p
     assert saved["theme"] == "dark"
     assert saved["timezone"] == "Asia/Jakarta"
     assert json.loads(settings_path.read_text(encoding="utf-8")) == saved
+
+
+def test_nexus_workspace_settings_rejects_unregistered_default_output(monkeypatch, tmp_path):
+    settings_path = tmp_path / "workspace_settings.json"
+    monkeypatch.setattr(nexus_api, "WORKSPACE_SETTINGS_PATH", settings_path)
+    with pytest.raises(HTTPException) as error:
+        nexus_api.update_workspace_settings(
+            {"default_output_destination": "nonexistent_destination"},
+            authorized_request(),
+        )
+    assert error.value.status_code == 422
+    assert "default_output_destination is not registered" in error.value.detail
 
 
 @pytest.mark.parametrize("payload", [
@@ -569,7 +645,7 @@ def test_nexus_database_column_preview_returns_metadata_only(monkeypatch):
     assert cursor.commands[1][1] == ("customers",)
 
 
-def test_nexus_csv_upload_rejects_dataset_missing_active_model_columns(monkeypatch, tmp_path):
+def test_nexus_csv_upload_accepts_dataset_without_active_model_columns(monkeypatch, tmp_path):
     upload_dir = tmp_path / "uploads"
     registry_path = tmp_path / "dataset_registry.json"
     monkeypatch.setattr(nexus_api, "DATASET_UPLOAD_DIR", upload_dir)
@@ -579,13 +655,35 @@ def test_nexus_csv_upload_rejects_dataset_missing_active_model_columns(monkeypat
         filename="customers.csv",
     )
 
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(nexus_api.upload_dataset(authorized_request(), upload))
+    response = asyncio.run(nexus_api.upload_dataset(authorized_request(), upload))
 
-    assert error.value.status_code == 422
-    assert "active model" in error.value.detail
-    assert not registry_path.exists()
-    assert not list(upload_dir.glob("*"))
+    assert response.status_code == 200
+    assert registry_path.exists()
+    assert list(upload_dir.glob("*.csv"))
+
+
+def test_nexus_csv_upload_generates_record_id_and_maps_aliases(monkeypatch, tmp_path):
+    upload_dir = tmp_path / "uploads"
+    registry_path = tmp_path / "dataset_registry.json"
+    monkeypatch.setattr(nexus_api, "DATASET_UPLOAD_DIR", upload_dir)
+    monkeypatch.setattr(nexus_api, "DATASET_REGISTRY_PATH", registry_path)
+    upload = nexus_api.UploadFile(
+        io.BytesIO(
+            b"nama_depan,nama_belakang,e_mail\n"
+            b"Ari,Wijaya,ari@example.com\n"
+            b"Dewi,Putri,dewi@example.com\n"
+        ),
+        filename="aliases.csv",
+    )
+
+    response = asyncio.run(nexus_api.upload_dataset(authorized_request(), upload))
+
+    assert response.status_code == 200
+    stored = pd.read_csv(next(upload_dir.glob("*.csv")))
+    assert list(stored["record_id"]) == ["rec_000001", "rec_000002"]
+    assert "first_name" in stored.columns
+    assert "last_name" in stored.columns
+    assert "email" in stored.columns
 
 
 def test_nexus_csv_upload_rejects_duplicate_record_ids(monkeypatch, tmp_path):
@@ -609,6 +707,63 @@ def test_nexus_csv_upload_rejects_duplicate_record_ids(monkeypatch, tmp_path):
     assert "duplicate record_id" in error.value.detail
     assert not list(upload_dir.glob("*.csv"))
     assert not registry_path.exists()
+
+
+def test_nexus_dataset_inspect_suggests_mapping(monkeypatch, tmp_path):
+    monkeypatch.setattr(nexus_api, "DATASET_UPLOAD_DIR", tmp_path / "uploads")
+    upload = nexus_api.UploadFile(
+        io.BytesIO(b"Client Name,Client Email\nAri,ari@example.com\n"),
+        filename="clients.csv",
+    )
+
+    body = json.loads(asyncio.run(nexus_api.inspect_upload(authorized_request(), upload)).body)
+
+    assert body["rows"] == 1
+    assert body["columns"] == ["Client Name", "Client Email"]
+    assert body["targets"] == sorted(body["targets"])
+    assert "record_id" in body["targets"]
+
+
+def test_nexus_csv_upload_applies_explicit_column_mapping(monkeypatch, tmp_path):
+    upload_dir = tmp_path / "uploads"
+    registry_path = tmp_path / "dataset_registry.json"
+    monkeypatch.setattr(nexus_api, "DATASET_UPLOAD_DIR", upload_dir)
+    monkeypatch.setattr(nexus_api, "DATASET_REGISTRY_PATH", registry_path)
+    upload = nexus_api.UploadFile(
+        io.BytesIO(b"Client Name,Last Name,Client Email\nAri,Ari Last,ari@example.com\n"),
+        filename="clients.csv",
+    )
+
+    response = asyncio.run(nexus_api.upload_dataset(
+        authorized_request(), upload,
+        json.dumps({"Client Name": "first_name", "Last Name": "last_name", "Client Email": "email"}),
+    ))
+
+    assert response.status_code == 200
+    stored = pd.read_csv(next(upload_dir.glob("*.csv")))
+    assert "first_name" in stored.columns
+    assert "last_name" in stored.columns
+    assert "email" in stored.columns
+    assert stored["record_id"].tolist()[0].startswith("rec_")
+
+
+def test_nexus_csv_upload_rejects_unknown_mapping_target(monkeypatch, tmp_path):
+    upload_dir = tmp_path / "uploads"
+    monkeypatch.setattr(nexus_api, "DATASET_UPLOAD_DIR", upload_dir)
+    monkeypatch.setattr(nexus_api, "DATASET_REGISTRY_PATH", tmp_path / "dataset_registry.json")
+    upload = nexus_api.UploadFile(
+        io.BytesIO(b"Client Name\nAri\n"),
+        filename="clients.csv",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(nexus_api.upload_dataset(
+            authorized_request(), upload, json.dumps({"Client Name": "password"}),
+        ))
+
+    assert error.value.status_code == 422
+    assert "Unsupported target column" in error.value.detail
+    assert not list(upload_dir.glob("*.csv"))
 
 
 def test_nexus_stats_empty_predictions_are_json_serializable(monkeypatch):
