@@ -9,6 +9,7 @@ import {
   AlertTriangle, CircleDot, Eye, ExternalLink, RefreshCw, Save, SearchX,
   CheckCheck, Terminal, PanelLeftClose, PanelLeftOpen, Sun, Moon, Copy,
 } from 'lucide-react'
+import * as dedupApi from './services/dedupApi'
 import { getHealth, getStats, getPairs, getModelInfo, runDedup, reload, toReviewRow } from './services/dedupApi'
 
 const navigation = [
@@ -648,6 +649,8 @@ function App() {
     </div>
   </>
 )}
+    </Card>
+    </div>
   </>
 
   const renderHistory = () => <>

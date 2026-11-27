@@ -181,13 +181,13 @@ function App() {
   const [jobElapsed, setJobElapsed] = useState(0)
   const [lastJob, setLastJob] = useState(null)
   const [showSourceModal, setShowSourceModal] = useState(false)
-const [selectedColumns, setSelectedColumns] = useState([])
-const availableComparisonColumns = [
-  'first_name_std', 'last_name_std',
-  'email_std', 'phone_std',
-  'address_std', 'city_std', 'state_std', 'country_std',
-  'dob_std', 'dob_year_std',
-]
+  const [selectedColumns, setSelectedColumns] = useState([])
+  const availableComparisonColumns = [
+    'first_name_std', 'last_name_std',
+    'email_std', 'phone_std',
+    'address_std', 'city_std', 'state_std', 'country_std',
+    'dob_std', 'dob_year_std',
+  ]
   const [showModelModal, setShowModelModal] = useState(false)
   const [connectionName, setConnectionName] = useState('Analytics PostgreSQL')
   const [modelName, setModelName] = useState('')
@@ -2650,6 +2650,18 @@ const availableComparisonColumns = [
       default: return renderDashboard()
     }
   }
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "Escape") {
+        setShowSourceModal(false);
+        setShowModelModal(false);
+        setMappingOpen(false);
+        setShowNotifications(false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   return (
     <div className={cx("app-shell", dark && "dark-theme")}>
@@ -2741,6 +2753,7 @@ const availableComparisonColumns = [
           </div>
         </div>
       </aside>
+
       {mobileMenu && (
         <button
           className="mobile-backdrop"
@@ -2854,7 +2867,7 @@ const availableComparisonColumns = [
                       ? `Last audit: ${new Date(reviewSummary.last_reviewed_at).toLocaleString()}`
                       : "No audit decision recorded"}
                   </p>
-                  <button onClick={() => setShowNotifications(false)}>
+                  <button onClick={() => setShowNotifications(false)} aria-label="Close notifications">
                     Close
                   </button>
                 </div>
@@ -3045,6 +3058,7 @@ const availableComparisonColumns = [
               <button
                 className="icon-button"
                 onClick={() => setShowModelModal(false)}
+                aria-label="Close model registry"
               >
                 <X size={17} />
               </button>

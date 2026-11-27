@@ -20,7 +20,9 @@ async function request(path, options = {}) {
   return res.json()
 }
 
-// GET wrappers
+export const getPairDetail = (id1, id2) => request(`/api/pair/${id1}/${id2}`)
+export const getDatabaseStatus = () => request('/api/database/status').catch(() => null)
+export const getSupabaseStatus = () => request('/api/supabase/status').catch(() => null)
 export const getHealth = () => request('/health')
 export const getStats = () => request('/api/stats')
 export const getPairs = (page = 1, perPage = 50, status = 'REVIEW') =>

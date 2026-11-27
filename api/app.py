@@ -343,11 +343,19 @@ def validate_dataset_frame(frame):
             status_code=422,
             detail=f"Dataset is missing required columns: {', '.join(missing_columns)}",
         )
-    record_ids = frame["record_id"].astype("string").str.strip()
-    if record_ids.isna().any() or record_ids.eq("").any():
+    
+    # Clean up empty strings or NaNs if possible
+    frame = frame.dropna(subset=["record_id"])
+    frame = frame[frame["record_id"].astype("string").str.strip() != ""]
+    if frame.empty:
         raise HTTPException(status_code=422, detail="Dataset contains missing record_id values")
+    
+    # Check for duplicates
+    record_ids = frame["record_id"].astype("string").str.strip()
     if record_ids.duplicated().any():
         raise HTTPException(status_code=422, detail="Dataset contains duplicate record_id values")
+    
+    return frame
 
 
 def upload_targets():
@@ -1519,15 +1527,11 @@ async def upload_dataset(
     target.write_bytes(content)
     try:
         frame = pd.read_parquet(target) if suffix == ".parquet" else pd.read_csv(target)
-        if mapping is not None:
-            validate_column_mapping(mapping, frame.columns)
+        # Apply mapping first
         frame = prepare_upload_frame(frame, mapping)
-        if suffix == ".parquet":
-            frame.to_parquet(target, index=False)
-        else:
-            frame.to_csv(target, index=False)
-
-        validate_dataset_frame(frame)
+        
+        # Then validate final frame structure
+        frame = validate_dataset_frame(frame)
 
         dataset = {
             "id": dataset_id,
